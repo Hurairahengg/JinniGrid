@@ -1,0 +1,14 @@
+server:
+  host: "0.0.0.0"
+  port: 5100
+  debug: true
+  cors_origins:
+    - "*"
+
+app:
+  name: "JINNI Grid Mother Server"
+  version: "0.2.0"
+
+fleet:
+  stale_threshold_seconds: 30
+  offline_threshold_seconds: 90
