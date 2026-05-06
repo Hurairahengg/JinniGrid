@@ -1,3 +1,5 @@
+/* toastManager.js */
+
 var ToastManager = (function () {
   'use strict';
 

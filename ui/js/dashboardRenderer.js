@@ -1,3 +1,5 @@
+/* dashboardRenderer.js */
+
 var DashboardRenderer = (function () {
   'use strict';
 

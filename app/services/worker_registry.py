@@ -2,6 +2,7 @@
 JINNI Grid - Worker Registry
 Runtime-only in-memory worker state store.
 All data is lost on server restart. No database persistence yet.
+/app/services/worker_registry.py
 """
 import threading
 from datetime import datetime, timezone

@@ -1,6 +1,7 @@
 """
 JINNI Grid - Mock Data Service
-Portfolio and equity curve only. Fleet data is real (worker_registry).
+Portfolio and equity curve only. Fleet data is real (worker_registry). 
+app/services/mock_data.py
 """
 import random
 from datetime import datetime, timedelta, timezone

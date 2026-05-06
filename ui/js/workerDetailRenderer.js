@@ -1,3 +1,5 @@
+/* workerDetailRenderer.js */
+
 var WorkerDetailRenderer = (function () {
   'use strict';
 
@@ -140,14 +142,18 @@ var WorkerDetailRenderer = (function () {
     var w = _currentWorker;
     var onlineStates = ['online', 'running', 'idle'];
     var isOnline = onlineStates.indexOf(w.state) !== -1;
+    var tlOk = _runtimeConfig.tick_lookback_value > 0;
+    var bsOk = _runtimeConfig.bar_size_points > 0;
+    var mbOk = _runtimeConfig.max_bars_memory > 0;
 
     var items = [
-      { pass: isOnline, text: 'Worker online', type: isOnline ? 'pass' : 'fail' },
+      { pass: isOnline, text: 'Worker connected', type: isOnline ? 'pass' : 'fail' },
       { pass: _fileSelected, text: 'Strategy file selected', type: _fileSelected ? 'pass' : 'fail' },
+      { pass: !!_runtimeConfig.symbol, text: 'Symbol selected', type: _runtimeConfig.symbol ? 'pass' : 'fail' },
+      { pass: tlOk, text: 'Tick lookback configured', type: tlOk ? 'pass' : 'fail' },
+      { pass: bsOk, text: 'Bar size points configured', type: bsOk ? 'pass' : 'fail' },
+      { pass: mbOk, text: 'Max bars memory configured', type: mbOk ? 'pass' : 'fail' },
       { pass: true, text: 'Parameters configured', type: 'pass' },
-      { pass: true, text: 'Symbol selected', type: 'pass' },
-      { pass: _runtimeConfig.lot_size > 0, text: 'Lot size valid', type: _runtimeConfig.lot_size > 0 ? 'pass' : 'fail' },
-      { pass: true, text: 'Runtime config complete', type: 'pass' },
       { pass: false, text: 'Backend deployment not connected in this UI phase', type: 'info', dimmed: true }
     ];
 
@@ -209,15 +215,16 @@ var WorkerDetailRenderer = (function () {
   function _renderRuntimeConfig() {
     var rc = _runtimeConfig;
     var symbols = DeploymentMockData.symbolOptions;
-    var tfs = DeploymentMockData.timeframeOptions;
+    var tlUnits = DeploymentMockData.tickLookbackUnits;
     var modes = DeploymentMockData.executionModes;
 
     var symOpts = symbols.map(function (s) {
       return '<option value="' + s + '"' + (rc.symbol === s ? ' selected' : '') + '>' + s + '</option>';
     }).join('');
 
-    var tfOpts = tfs.map(function (t) {
-      return '<option value="' + t + '"' + (rc.timeframe === t ? ' selected' : '') + '>' + t + '</option>';
+    var tlUnitOpts = tlUnits.map(function (u) {
+      var label = u.charAt(0).toUpperCase() + u.slice(1);
+      return '<option value="' + u + '"' + (rc.tick_lookback_unit === u ? ' selected' : '') + '>' + label + '</option>';
     }).join('');
 
     var modeOpts = modes.map(function (m) {
@@ -231,8 +238,14 @@ var WorkerDetailRenderer = (function () {
           '<select class="wd-form-select rc-input" data-key="symbol">' + symOpts + '</select></div>' +
         '<div class="wd-form-group"><label class="wd-form-label">Lot Size</label>' +
           '<input type="number" class="wd-form-input rc-input" data-key="lot_size" value="' + rc.lot_size + '" step="0.01" min="0.01" /></div>' +
-        '<div class="wd-form-group"><label class="wd-form-label">Timeframe</label>' +
-          '<select class="wd-form-select rc-input" data-key="timeframe">' + tfOpts + '</select></div>' +
+        '<div class="wd-form-group"><label class="wd-form-label">Tick Lookback</label>' +
+          '<input type="number" class="wd-form-input rc-input" data-key="tick_lookback_value" value="' + rc.tick_lookback_value + '" step="1" min="1" /></div>' +
+        '<div class="wd-form-group"><label class="wd-form-label">Lookback Unit</label>' +
+          '<select class="wd-form-select rc-input" data-key="tick_lookback_unit">' + tlUnitOpts + '</select></div>' +
+        '<div class="wd-form-group"><label class="wd-form-label">Bar Size Points</label>' +
+          '<input type="number" class="wd-form-input rc-input" data-key="bar_size_points" value="' + rc.bar_size_points + '" step="1" min="1" /></div>' +
+        '<div class="wd-form-group"><label class="wd-form-label">Max Bars in Memory</label>' +
+          '<input type="number" class="wd-form-input rc-input" data-key="max_bars_memory" value="' + rc.max_bars_memory + '" step="10" min="10" /></div>' +
         '<div class="wd-form-group"><label class="wd-form-label">Max Spread</label>' +
           '<input type="number" class="wd-form-input rc-input" data-key="max_spread" value="' + rc.max_spread + '" step="0.1" min="0" /></div>' +
         '<div class="wd-form-group"><label class="wd-form-label">Magic Number</label>' +
@@ -434,59 +447,10 @@ var WorkerDetailRenderer = (function () {
     });
 
     // Runtime config inputs
-    document.querySelectorAll('.rc-input').forEach(function (input) {
-      input.addEventListener('change', function () {
-        var key = input.getAttribute('data-key');
-        _runtimeConfig[key] = input.type === 'number' ? parseFloat(input.value) : input.value;
-        _updateChecklist();
-        _addActivity('Runtime config updated: ' + key);
-      });
-    });
-    document.querySelectorAll('.rc-toggle').forEach(function (toggle) {
-      toggle.addEventListener('change', function () {
-        var key = toggle.getAttribute('data-key');
-        _runtimeConfig[key] = toggle.checked;
-        _addActivity('Toggle changed: ' + key + ' = ' + toggle.checked);
-      });
-    });
+    _attachRuntimeEvents();
 
     // Parameter inputs
-    document.querySelectorAll('.wd-param-input-ctrl').forEach(function (input) {
-      var key = input.getAttribute('data-key');
-      var handler = function () {
-        var val;
-        if (input.type === 'checkbox') {
-          val = input.checked;
-        } else {
-          val = parseFloat(input.value);
-        }
-        _parameterValues[key] = val;
-        var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
-        if (row) {
-          if (val !== _parameterDefaults[key]) row.classList.add('modified');
-          else row.classList.remove('modified');
-        }
-        _addActivity('Parameter updated: ' + key + ' = ' + val);
-      };
-      input.addEventListener(input.type === 'checkbox' ? 'change' : 'input', handler);
-    });
-
-    // Parameter reset buttons
-    document.querySelectorAll('.wd-param-reset').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var key = btn.getAttribute('data-key');
-        var defVal = _parameterDefaults[key];
-        _parameterValues[key] = defVal;
-        var input = document.querySelector('.wd-param-input-ctrl[data-key="' + key + '"]');
-        if (input) {
-          if (input.type === 'checkbox') input.checked = defVal;
-          else input.value = defVal;
-        }
-        var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
-        if (row) row.classList.remove('modified');
-        _addActivity('Parameter reset: ' + key + ' \u2192 ' + defVal);
-      });
-    });
+    _attachParamEvents();
 
     // Deploy button
     document.getElementById('wd-deploy').addEventListener('click', _handleDeploy);
@@ -509,7 +473,6 @@ var WorkerDetailRenderer = (function () {
       document.getElementById('wd-runtime-body').innerHTML = _renderRuntimeConfig();
       document.getElementById('wd-params-list').innerHTML = _renderParams();
       _updateChecklist();
-      // Re-attach runtime and param events
       _attachRuntimeEvents();
       _attachParamEvents();
 
@@ -581,6 +544,7 @@ var WorkerDetailRenderer = (function () {
     var name = w.worker_name || w.worker_id;
     var stratName = _strategyLoaded ? DeploymentMockData.strategyMetadata.name : (_selectedFileName || 'Not selected');
     var modCount = _getModifiedCount();
+    var tlDisplay = _runtimeConfig.tick_lookback_value + ' ' + _runtimeConfig.tick_lookback_unit;
 
     var bodyHtml =
       '<p>You are about to prepare a mock deployment.</p>' +
@@ -588,18 +552,21 @@ var WorkerDetailRenderer = (function () {
         '<div class="modal-summary-row"><span class="modal-summary-label">Worker</span><span class="modal-summary-value">' + name + '</span></div>' +
         '<div class="modal-summary-row"><span class="modal-summary-label">Strategy</span><span class="modal-summary-value">' + stratName + '</span></div>' +
         '<div class="modal-summary-row"><span class="modal-summary-label">Symbol</span><span class="modal-summary-value">' + _runtimeConfig.symbol + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Tick Lookback</span><span class="modal-summary-value">' + tlDisplay + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Bar Size Points</span><span class="modal-summary-value">' + _runtimeConfig.bar_size_points + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Max Bars in Memory</span><span class="modal-summary-value">' + _runtimeConfig.max_bars_memory + '</span></div>' +
         '<div class="modal-summary-row"><span class="modal-summary-label">Lot Size</span><span class="modal-summary-value">' + _runtimeConfig.lot_size + '</span></div>' +
         '<div class="modal-summary-row"><span class="modal-summary-label">Modified Params</span><span class="modal-summary-value">' + modCount + '</span></div>' +
       '</div>' +
       '<div class="modal-warning"><i class="fa-solid fa-triangle-exclamation"></i>' +
-      '<span>This is a UI preview. Backend deployment is not connected in this phase.</span></div>';
+      '<span>UI preview only. Backend deployment not implemented in this phase.</span></div>';
 
     ModalManager.show({
       title: 'Deployment Preview',
       bodyHtml: bodyHtml,
       confirmText: 'Confirm Deploy',
       onConfirm: function () {
-        ToastManager.show('Mock deployment prepared. Backend deployment not implemented in this phase.', 'success');
+        ToastManager.show('Mock deployment prepared. Backend deployment will be wired in a later phase.', 'success');
         _addActivity('Mock deployment prepared for ' + name);
       }
     });

@@ -1,3 +1,5 @@
+/* modalManager.js */
+
 var ModalManager = (function () {
   'use strict';
 

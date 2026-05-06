@@ -1,4 +1,6 @@
-\
+/* worker-detail.css*/
+
+
 /* ── Clickable Fleet Enhancement ──────────────────────────── */
 .node-card.clickable { cursor: pointer; }
 .node-card.clickable:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim), var(--shadow-md); }

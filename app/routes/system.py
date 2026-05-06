@@ -1,4 +1,4 @@
-"""JINNI Grid - System Summary"""
+"""JINNI Grid - System Summary Endpoint app/routes/system.py"""
 from datetime import datetime, timezone
 from fastapi import APIRouter
 from app.services.worker_registry import get_fleet_summary

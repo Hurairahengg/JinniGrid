@@ -1,4 +1,4 @@
-"""JINNI Grid - Health Check"""
+"""JINNI Grid - Health Check Endpoint app/routes/health.py"""
 from datetime import datetime, timezone
 from fastapi import APIRouter
 from app.config import Config

@@ -1,3 +1,5 @@
+/* mockData.js */
+
 var MockData = (function () {
   'use strict';
 

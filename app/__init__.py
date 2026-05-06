@@ -1,5 +1,6 @@
 """
 JINNI Grid Mother Server - Application Factory
+app/__init__.py
 """
 import os
 from fastapi import FastAPI

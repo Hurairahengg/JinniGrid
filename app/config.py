@@ -1,6 +1,7 @@
 """
 JINNI Grid - Configuration Loader
 Reads config.yaml from project root. Falls back to safe defaults.
+app/config.py
 """
 import os, yaml
 

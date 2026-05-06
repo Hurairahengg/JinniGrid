@@ -1,3 +1,5 @@
+/* fleetRenderer.js */
+
 var FleetRenderer = (function () {
   'use strict';
 

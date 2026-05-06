@@ -1,3 +1,5 @@
+/* themeManager.js */
+
 var ThemeManager = (function () {
   'use strict';
 

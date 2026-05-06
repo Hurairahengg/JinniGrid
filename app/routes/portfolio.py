@@ -1,4 +1,4 @@
-"""JINNI Grid - Portfolio Endpoints"""
+"""JINNI Grid - Portfolio Endpoints  app/routes/portfolio.py"""
 from datetime import datetime, timezone
 from fastapi import APIRouter
 from app.services.mock_data import get_portfolio_summary, get_equity_history
