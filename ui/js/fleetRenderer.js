@@ -3,9 +3,8 @@ var FleetRenderer = (function () {
 
   var _refreshInterval = null;
   var _lastFetchTime = null;
+  var _lastWorkers = [];
   var REFRESH_MS = 5000;
-
-  /* ── Helpers ──────────────────────────────────────────────── */
 
   function _formatAge(seconds) {
     if (seconds === null || seconds === undefined) return '<span class="value-null">\u2014</span>';
@@ -16,9 +15,8 @@ var FleetRenderer = (function () {
   }
 
   function _nullVal(val, fallback) {
-    if (val === null || val === undefined || val === '') {
+    if (val === null || val === undefined || val === '')
       return '<span class="value-null">' + (fallback || '\u2014') + '</span>';
-    }
     return String(val);
   }
 
@@ -34,34 +32,29 @@ var FleetRenderer = (function () {
   }
 
   function fleetBadge(count, label, type) {
-    return '<div class="fleet-badge">' +
-      '<span class="badge-count ' + type + '">' + count + '</span>' +
-      '<span class="badge-label">' + label + '</span></div>';
+    return '<div class="fleet-badge"><span class="badge-count ' + type + '">' + count +
+      '</span><span class="badge-label">' + label + '</span></div>';
   }
 
   function _infoRow(label, value) {
-    return '<div class="node-info-row">' +
-      '<span class="node-info-label">' + label + '</span>' +
-      '<span class="node-info-value">' + value + '</span></div>';
+    return '<div class="node-info-row"><span class="node-info-label">' + label +
+      '</span><span class="node-info-value">' + value + '</span></div>';
   }
-
-  /* ── Node Card ───────────────────────────────────────────── */
 
   function renderNodeCard(w) {
     var state = w.state || 'unknown';
     var name = w.worker_name || w.worker_id;
     var strategies = (w.active_strategies && w.active_strategies.length > 0)
       ? w.active_strategies.join(', ') : null;
-    var errorsStr = (w.errors && w.errors.length > 0)
-      ? w.errors.join(', ') : null;
-    var pnlClass = '';
+    var errorsStr = (w.errors && w.errors.length > 0) ? w.errors.join(', ') : null;
     var pnlVal = _formatPnl(w.floating_pnl);
+    var pnlClass = '';
     if (w.floating_pnl !== null && w.floating_pnl !== undefined) {
       pnlClass = w.floating_pnl >= 0 ? ' style="color:var(--success)"' : ' style="color:var(--danger)"';
     }
 
     return (
-      '<div class="node-card">' +
+      '<div class="node-card clickable" onclick="FleetRenderer._openWorker(\'' + w.worker_id + '\')">' +
         '<div class="node-card-top ' + state + '"></div>' +
         '<div class="node-card-header">' +
           '<div class="node-name-group">' +
@@ -82,12 +75,11 @@ var FleetRenderer = (function () {
           _infoRow('Heartbeat', _formatAge(w.heartbeat_age_seconds)) +
           _infoRow('Agent', _nullVal(w.agent_version)) +
           _infoRow('Errors', _nullVal(errorsStr, 'None')) +
+          '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Configure</div>' +
         '</div>' +
       '</div>'
     );
   }
-
-  /* ── Render States ───────────────────────────────────────── */
 
   function _renderContent(data) {
     var headerEl = document.getElementById('fleet-page-header');
@@ -96,8 +88,8 @@ var FleetRenderer = (function () {
 
     var workers = data.workers || [];
     var s = data.summary || {};
+    _lastWorkers = workers;
 
-    // Show header
     if (headerEl) {
       _lastFetchTime = new Date();
       var timeStr = _lastFetchTime.toLocaleTimeString('en-GB', { hour12: false });
@@ -112,14 +104,12 @@ var FleetRenderer = (function () {
           '<i class="fa-solid fa-server"></i>' +
           '<h3>No Worker VMs Connected</h3>' +
           '<p>Start a worker agent and send heartbeat to this Mother Server to see workers here.</p>' +
-          '<p>Endpoint: <code>POST /api/Grid/workers/heartbeat</code></p>' +
+          '<p>Endpoint: <code>POST /api/grid/workers/heartbeat</code></p>' +
         '</div>';
       return;
     }
 
     var html = '';
-
-    // Summary badges
     html += '<div class="fleet-summary">';
     html += fleetBadge(s.total_workers || 0, 'Total', 'total');
     html += fleetBadge(s.online_workers || 0, 'Online', 'online');
@@ -127,14 +117,9 @@ var FleetRenderer = (function () {
     html += fleetBadge(s.offline_workers || 0, 'Offline', 'offline');
     html += fleetBadge(s.error_workers || 0, 'Error', 'error');
     html += '</div>';
-
-    // Fleet Grid
-    html += '<div class="fleet-Grid">';
-    workers.forEach(function (w) {
-      html += renderNodeCard(w);
-    });
+    html += '<div class="fleet-grid">';
+    workers.forEach(function (w) { html += renderNodeCard(w); });
     html += '</div>';
-
     contentEl.innerHTML = html;
   }
 
@@ -150,15 +135,18 @@ var FleetRenderer = (function () {
       '</div>';
   }
 
-  /* ── Fetch ───────────────────────────────────────────────── */
-
   function _fetchFleetData() {
-    ApiClient.getFleetWorkers()
-      .then(_renderContent)
-      .catch(_renderError);
+    ApiClient.getFleetWorkers().then(_renderContent).catch(_renderError);
   }
 
-  /* ── Public ──────────────────────────────────────────────── */
+  function _openWorker(workerId) {
+    for (var i = 0; i < _lastWorkers.length; i++) {
+      if (_lastWorkers[i].worker_id === workerId) {
+        App.navigateToWorkerDetail(_lastWorkers[i]);
+        return;
+      }
+    }
+  }
 
   function render() {
     var html =
@@ -174,7 +162,6 @@ var FleetRenderer = (function () {
           '<div class="loading-state"><div class="spinner"></div><p>Loading fleet data...</p></div>' +
         '</div>' +
       '</div>';
-
     document.getElementById('main-content').innerHTML = html;
     _fetchFleetData();
     _refreshInterval = setInterval(_fetchFleetData, REFRESH_MS);
@@ -184,5 +171,5 @@ var FleetRenderer = (function () {
     if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; }
   }
 
-  return { render: render, destroy: destroy, _retry: _fetchFleetData };
+  return { render: render, destroy: destroy, _retry: _fetchFleetData, _openWorker: _openWorker };
 })();

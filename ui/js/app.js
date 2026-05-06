@@ -2,6 +2,7 @@ var App = (function () {
   'use strict';
 
   var currentPage = 'dashboard';
+  var _selectedWorker = null;
 
   var pageIcons = {
     dashboard: 'fa-grip', fleet: 'fa-server', portfolio: 'fa-chart-line',
@@ -36,26 +37,36 @@ var App = (function () {
     // Cleanup previous page
     if (currentPage === 'dashboard') DashboardRenderer.destroy();
     if (currentPage === 'fleet') FleetRenderer.destroy();
+    if (currentPage === 'workerDetail') WorkerDetailRenderer.destroy();
 
     currentPage = page;
 
-    // Update active nav
+    // Update active nav (workerDetail highlights fleet)
+    var navPage = (page === 'workerDetail') ? 'fleet' : page;
     document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (item) {
-      item.classList.toggle('active', item.getAttribute('data-page') === page);
+      item.classList.toggle('active', item.getAttribute('data-page') === navPage);
     });
 
     // Update topbar
-    document.getElementById('topbar-title').textContent =
-      page.charAt(0).toUpperCase() + page.slice(1);
+    var titleMap = { workerDetail: 'Worker Detail' };
+    var title = titleMap[page] || (page.charAt(0).toUpperCase() + page.slice(1));
+    document.getElementById('topbar-title').textContent = title;
 
     // Render page
     if (page === 'dashboard') {
       DashboardRenderer.render();
     } else if (page === 'fleet') {
       FleetRenderer.render();
+    } else if (page === 'workerDetail' && _selectedWorker) {
+      WorkerDetailRenderer.render(_selectedWorker);
     } else {
       renderPlaceholder(page);
     }
+  }
+
+  function navigateToWorkerDetail(workerData) {
+    _selectedWorker = workerData;
+    navigateTo('workerDetail');
   }
 
   function renderPlaceholder(page) {
@@ -84,5 +95,5 @@ var App = (function () {
 
   document.addEventListener('DOMContentLoaded', init);
 
-  return { navigateTo: navigateTo };
+  return { navigateTo: navigateTo, navigateToWorkerDetail: navigateToWorkerDetail };
 })();
