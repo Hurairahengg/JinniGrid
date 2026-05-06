@@ -8,7 +8,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 from app.config import Config
 from app.routes.health import router as health_router
-from app.routes.Grid import router as Grid_router
+from app.routes.grid import router as Grid_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.system import router as system_router
 
