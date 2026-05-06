@@ -3,7 +3,7 @@ worker:
   worker_name: "Worker 01"
 
 mother_server:
-  url: "http://192.168.1.100:5100"
+  url: "http://192.168.3.232:5100"
 
 heartbeat:
   interval_seconds: 10
