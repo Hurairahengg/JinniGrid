@@ -28,8 +28,7 @@ def main():
     print("=" * 56)
     print("")
 
-    app = create_app()
-    uvicorn.run(app, host=host, port=port, reload=debug)
+    uvicorn.run("main:app", host=host, port=port, reload=debug)
 
 
 if __name__ == "__main__":
