@@ -1,11 +1,14 @@
 """
-JINNI Grid - Mother Server Entry Point
+JINNI GRID - Mother Server Entry Point
 Run: python main.py
 """
 
 import uvicorn
 from app import create_app
 from app.config import Config
+
+# App instance at module level so uvicorn reloader can find it
+app = create_app()
 
 
 def main():
@@ -15,7 +18,7 @@ def main():
     host = server_config.get("host", "0.0.0.0")
     port = server_config.get("port", 5100)
     debug = server_config.get("debug", False)
-    name = app_config.get("name", "JINNI Grid Mother Server")
+    name = app_config.get("name", "JINNI GRID Mother Server")
     version = app_config.get("version", "0.2.0")
 
     print("")
