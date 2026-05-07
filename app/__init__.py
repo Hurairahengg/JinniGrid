@@ -1,6 +1,5 @@
 """
 JINNI Grid Mother Server - Application Factory
-app/__init__.py
 """
 import os
 from fastapi import FastAPI
@@ -9,9 +8,10 @@ from starlette.staticfiles import StaticFiles
 from starlette.responses import FileResponse
 from app.config import Config
 from app.routes.health import router as health_router
-from app.routes.grid import router as Grid_router
+from app.routes.grid import router as grid_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.system import router as system_router
+from app.routes.strategies import router as strategies_router
 
 
 def create_app() -> FastAPI:
@@ -33,9 +33,10 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router)
-    app.include_router(Grid_router)
+    app.include_router(grid_router)
     app.include_router(portfolio_router)
     app.include_router(system_router)
+    app.include_router(strategies_router)
 
     ui_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui"))
     css_dir = os.path.join(ui_dir, "css")

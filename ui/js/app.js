@@ -12,8 +12,7 @@ var App = (function () {
   };
 
   var pageDescriptions = {
-    portfolio: 'Detailed portfolio analytics with position breakdown, trade history, and performance metrics.',
-    strategies: 'Strategy deployment, configuration, and live performance tracking across all worker nodes.',
+    portfolio: 'Portfolio analytics will be available when trade execution is implemented.',
     logs: 'Centralized log aggregation, real-time streaming, and advanced search across all fleet nodes.',
     settings: 'System configuration, user preferences, notification settings, and connection management.'
   };
@@ -26,8 +25,7 @@ var App = (function () {
   }
 
   function setupNavigation() {
-    var navItems = document.querySelectorAll('#sidebar-nav .nav-item');
-    navItems.forEach(function (item) {
+    document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (item) {
       item.addEventListener('click', function (e) {
         e.preventDefault();
         navigateTo(item.getAttribute('data-page'));
@@ -36,31 +34,30 @@ var App = (function () {
   }
 
   function navigateTo(page) {
-    // Cleanup previous page
-    if (currentPage === 'dashboard') DashboardRenderer.destroy();
-    if (currentPage === 'fleet') FleetRenderer.destroy();
+    if (currentPage === 'dashboard')    DashboardRenderer.destroy();
+    if (currentPage === 'fleet')        FleetRenderer.destroy();
     if (currentPage === 'workerDetail') WorkerDetailRenderer.destroy();
+    if (currentPage === 'strategies')   StrategiesRenderer.destroy();
 
     currentPage = page;
 
-    // Update active nav (workerDetail highlights fleet)
     var navPage = (page === 'workerDetail') ? 'fleet' : page;
     document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (item) {
       item.classList.toggle('active', item.getAttribute('data-page') === navPage);
     });
 
-    // Update topbar
     var titleMap = { workerDetail: 'Worker Detail' };
     var title = titleMap[page] || (page.charAt(0).toUpperCase() + page.slice(1));
     document.getElementById('topbar-title').textContent = title;
 
-    // Render page
     if (page === 'dashboard') {
       DashboardRenderer.render();
     } else if (page === 'fleet') {
       FleetRenderer.render();
     } else if (page === 'workerDetail' && _selectedWorker) {
       WorkerDetailRenderer.render(_selectedWorker);
+    } else if (page === 'strategies') {
+      StrategiesRenderer.render();
     } else {
       renderPlaceholder(page);
     }
@@ -76,20 +73,17 @@ var App = (function () {
     var title = page.charAt(0).toUpperCase() + page.slice(1);
     var desc = pageDescriptions[page] || 'This section is under development.';
     document.getElementById('main-content').innerHTML =
-      '<div class="placeholder-page">' +
-        '<i class="fa-solid ' + icon + '"></i>' +
-        '<h2>' + title + '</h2>' +
-        '<p>' + desc + '</p>' +
-      '</div>';
+      '<div class="placeholder-page"><i class="fa-solid ' + icon + '"></i>' +
+      '<h2>' + title + '</h2><p>' + desc + '</p></div>';
   }
 
   function startClock() {
     function update() {
       var now = new Date();
-      var h = String(now.getHours()).padStart(2, '0');
-      var m = String(now.getMinutes()).padStart(2, '0');
-      var s = String(now.getSeconds()).padStart(2, '0');
-      document.getElementById('topbar-clock').textContent = h + ':' + m + ':' + s;
+      document.getElementById('topbar-clock').textContent =
+        String(now.getHours()).padStart(2, '0') + ':' +
+        String(now.getMinutes()).padStart(2, '0') + ':' +
+        String(now.getSeconds()).padStart(2, '0');
     }
     update();
     setInterval(update, 1000);

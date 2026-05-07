@@ -71,13 +71,13 @@ var FleetRenderer = (function () {
           _infoRow('MT5', _nullVal(w.mt5_state, 'Unknown')) +
           _infoRow('Broker', _nullVal(w.broker)) +
           _infoRow('Account', _nullVal(w.account_id)) +
-          _infoRow('Strategies', _nullVal(strategies)) +
+          _infoRow('Strategies', _nullVal(strategies, 'No active strategy')) +
           _infoRow('Positions', String(w.open_positions_count || 0)) +
           _infoRow('Float PnL', '<span' + pnlClass + '>' + pnlVal + '</span>') +
           _infoRow('Heartbeat', _formatAge(w.heartbeat_age_seconds)) +
           _infoRow('Agent', _nullVal(w.agent_version)) +
           _infoRow('Errors', _nullVal(errorsStr, 'None')) +
-          '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Configure</div>' +
+          '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Deploy Strategy</div>' +
         '</div>' +
       '</div>'
     );
@@ -161,7 +161,7 @@ var FleetRenderer = (function () {
           '</div>' +
         '</div>' +
         '<div id="fleet-content">' +
-          '<div class="loading-state"><div class="spinner"></div><p>Loading fleet data...</p></div>' +
+          '<div class="loading-state"><div class="spinner"></div><p>Loading fleet data\u2026</p></div>' +
         '</div>' +
       '</div>';
     document.getElementById('main-content').innerHTML = html;
