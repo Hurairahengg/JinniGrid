@@ -1,7 +1,6 @@
 """
 JINNI Grid - Combined Runtime Services
-
-
+app/services/mainServices.py
 """
 
 import random
@@ -16,12 +15,11 @@ from app.config import Config
 # Command Queue
 # =============================================================================
 
-_command_queues: dict = {}  # worker_id -> list of commands
+_command_queues: dict = {}
 _command_lock = threading.Lock()
 
 
 def enqueue_command(worker_id: str, command_type: str, payload: dict) -> dict:
-    """Push a command for a specific worker."""
     cmd_id = str(uuid.uuid4())[:12]
     now = datetime.now(timezone.utc)
 
@@ -45,7 +43,6 @@ def enqueue_command(worker_id: str, command_type: str, payload: dict) -> dict:
 
 
 def poll_commands(worker_id: str) -> list:
-    """Return all pending commands for a worker."""
     with _command_lock:
         queue = _command_queues.get(worker_id, [])
         pending = [c for c in queue if c["state"] == "pending"]
@@ -54,7 +51,6 @@ def poll_commands(worker_id: str) -> list:
 
 
 def ack_command(worker_id: str, command_id: str) -> dict:
-    """Mark a command as acknowledged."""
     now = datetime.now(timezone.utc)
 
     with _command_lock:
@@ -92,22 +88,6 @@ VALID_STATES = {
 
 
 def create_deployment(config: dict) -> dict:
-    """
-    Create a new deployment record.
-
-    config must include:
-    - strategy_id
-    - worker_id
-    - symbol
-    - bar_size_points
-
-    Optional:
-    - max_bars_in_memory
-    - tick_lookback_value
-    - tick_lookback_unit
-    - lot_size
-    - strategy_parameters
-    """
     deployment_id = str(uuid.uuid4())[:12]
     now = datetime.now(timezone.utc)
 
@@ -121,7 +101,7 @@ def create_deployment(config: dict) -> dict:
         "bar_size_points": config["bar_size_points"],
         "max_bars_in_memory": config.get("max_bars_in_memory", 500),
         "lot_size": config.get("lot_size", 0.01),
-        "strategy_parameters": config.get("strategy_parameters", {}),
+        "strategy_parameters": config.get("strategy_parameters") or {},
         "state": "queued",
         "created_at": now.isoformat(),
         "updated_at": now.isoformat(),
@@ -133,7 +113,7 @@ def create_deployment(config: dict) -> dict:
 
     print(
         f"[DEPLOYMENT] Created {deployment_id} | "
-        f"strategy={config['strategy_id']} → worker={config['worker_id']}"
+        f"strategy={config['strategy_id']} -> worker={config['worker_id']}"
     )
 
     return {
@@ -158,7 +138,6 @@ def update_deployment_state(
     state: str,
     error: str = None,
 ) -> dict:
-    """Update deployment state. Returns updated record or error."""
     if state not in VALID_STATES:
         return {"ok": False, "error": f"Invalid state: {state}"}
 
@@ -179,7 +158,7 @@ def update_deployment_state(
             rec["last_error"] = None
 
     print(
-        f"[DEPLOYMENT] {deployment_id} → {state}"
+        f"[DEPLOYMENT] {deployment_id} -> {state}"
         + (f" (error: {error})" if error else "")
     )
 
@@ -259,7 +238,11 @@ def process_heartbeat(payload: dict) -> dict:
         else:
             print(
                 f"[HEARTBEAT] Worker '{worker_id}' updated | "
-                f"state={payload.get('state', 'unknown')}"
+                f"state={payload.get('state', 'unknown')} "
+                f"mt5={payload.get('mt5_state', '-')} "
+                f"ticks={payload.get('total_ticks', 0)} "
+                f"bars={payload.get('total_bars', 0)} "
+                f"signals={payload.get('signal_count', 0)}"
             )
 
         _workers[worker_id] = {
@@ -270,13 +253,22 @@ def process_heartbeat(payload: dict) -> dict:
             "last_heartbeat_at": now.isoformat(),
             "_last_heartbeat_dt": now,
             "agent_version": payload.get("agent_version"),
+            # MT5 info
             "mt5_state": payload.get("mt5_state"),
             "account_id": payload.get("account_id"),
             "broker": payload.get("broker"),
-            "active_strategies": payload.get("active_strategies", []) or [],
+            # Strategies + positions
+            "active_strategies": payload.get("active_strategies") or [],
             "open_positions_count": payload.get("open_positions_count", 0) or 0,
             "floating_pnl": payload.get("floating_pnl"),
-            "errors": payload.get("errors", []) or [],
+            "errors": payload.get("errors") or [],
+            # Pipeline diagnostics
+            "total_ticks": payload.get("total_ticks", 0) or 0,
+            "total_bars": payload.get("total_bars", 0) or 0,
+            "on_bar_calls": payload.get("on_bar_calls", 0) or 0,
+            "signal_count": payload.get("signal_count", 0) or 0,
+            "last_bar_time": payload.get("last_bar_time"),
+            "current_price": payload.get("current_price"),
         }
 
     return {
@@ -316,13 +308,22 @@ def get_all_workers() -> list:
                 "last_heartbeat_at": rec["last_heartbeat_at"],
                 "heartbeat_age_seconds": age,
                 "agent_version": rec["agent_version"],
+                # MT5 info
                 "mt5_state": rec["mt5_state"],
                 "account_id": rec["account_id"],
                 "broker": rec["broker"],
+                # Strategies + positions
                 "active_strategies": rec["active_strategies"],
                 "open_positions_count": rec["open_positions_count"],
                 "floating_pnl": rec["floating_pnl"],
                 "errors": rec["errors"],
+                # Pipeline diagnostics
+                "total_ticks": rec["total_ticks"],
+                "total_bars": rec["total_bars"],
+                "on_bar_calls": rec["on_bar_calls"],
+                "signal_count": rec["signal_count"],
+                "last_bar_time": rec["last_bar_time"],
+                "current_price": rec["current_price"],
             })
 
     return result

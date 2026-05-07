@@ -93,7 +93,7 @@ class PositionState:
     """Read-only position snapshot passed to strategies."""
 
     has_position: bool = False
-    direction: Optional[str] = None   # "long" / "short" / None
+    direction: Optional[str] = None
     entry_price: Optional[float] = None
     sl: Optional[float] = None
     tp: Optional[float] = None
@@ -206,18 +206,6 @@ def _make_bar(
 
 
 class RangeBarEngine:
-    """
-    Tick-by-tick range bar builder.
-
-    Usage:
-        engine = RangeBarEngine(
-            bar_size_points=6.0,
-            max_bars=500,
-            on_bar=my_callback,
-        )
-        engine.process_tick(timestamp, price, volume)
-    """
-
     def __init__(
         self,
         bar_size_points: float,
@@ -228,7 +216,7 @@ class RangeBarEngine:
         self.max_bars: int = max_bars
         self._on_bar: Optional[Callable[[dict], None]] = on_bar
 
-        self.trend: int = 0   # 0 = startup, 1 = bull, -1 = bear
+        self.trend: int = 0
         self.bar: Optional[dict] = None
 
         self.bars: deque = deque(maxlen=max_bars)
@@ -242,7 +230,6 @@ class RangeBarEngine:
         return len(self.bars)
 
     def _emit(self, bar_dict: dict) -> None:
-        """Emit a completed bar: dedup timestamp, store in buffer, fire callback."""
         ts = int(bar_dict["time"])
 
         if self._last_emitted_ts is not None and ts <= self._last_emitted_ts:
@@ -268,9 +255,6 @@ class RangeBarEngine:
         }
 
     def process_tick(self, ts: int, price: float, volume: float = 0.0) -> None:
-        """
-        Feed a single tick. May emit zero, one, or multiple completed bars.
-        """
         self.total_ticks += 1
 
         if self.bar is None:
@@ -285,7 +269,6 @@ class RangeBarEngine:
         while True:
             o = self.bar["open"]
 
-            # STARTUP / NO TREND
             if self.trend == 0:
                 up_target = o + rs
                 down_target = o - rs
@@ -294,56 +277,30 @@ class RangeBarEngine:
                     self.bar["high"] = max(self.bar["high"], up_target)
                     self.bar["low"] = min(self.bar["low"], o)
                     self.bar["close"] = up_target
-
-                    self._emit(
-                        _make_bar(
-                            self.bar["time"],
-                            self.bar["open"],
-                            self.bar["high"],
-                            self.bar["low"],
-                            self.bar["close"],
-                            self.bar["volume"],
-                        )
-                    )
-
+                    self._emit(_make_bar(
+                        self.bar["time"], self.bar["open"],
+                        self.bar["high"], self.bar["low"],
+                        self.bar["close"], self.bar["volume"],
+                    ))
                     self.trend = 1
                     new_open = up_target
-                    self.bar = {
-                        "time": ts,
-                        "open": new_open,
-                        "high": new_open,
-                        "low": new_open,
-                        "close": new_open,
-                        "volume": 0.0,
-                    }
+                    self.bar = {"time": ts, "open": new_open, "high": new_open,
+                                "low": new_open, "close": new_open, "volume": 0.0}
                     continue
 
                 if p <= down_target:
                     self.bar["high"] = max(self.bar["high"], o)
                     self.bar["low"] = min(self.bar["low"], down_target)
                     self.bar["close"] = down_target
-
-                    self._emit(
-                        _make_bar(
-                            self.bar["time"],
-                            self.bar["open"],
-                            self.bar["high"],
-                            self.bar["low"],
-                            self.bar["close"],
-                            self.bar["volume"],
-                        )
-                    )
-
+                    self._emit(_make_bar(
+                        self.bar["time"], self.bar["open"],
+                        self.bar["high"], self.bar["low"],
+                        self.bar["close"], self.bar["volume"],
+                    ))
                     self.trend = -1
                     new_open = down_target
-                    self.bar = {
-                        "time": ts,
-                        "open": new_open,
-                        "high": new_open,
-                        "low": new_open,
-                        "close": new_open,
-                        "volume": 0.0,
-                    }
+                    self.bar = {"time": ts, "open": new_open, "high": new_open,
+                                "low": new_open, "close": new_open, "volume": 0.0}
                     continue
 
                 self.bar["high"] = max(self.bar["high"], p)
@@ -351,7 +308,6 @@ class RangeBarEngine:
                 self.bar["close"] = p
                 break
 
-            # BULL TREND
             if self.trend == 1:
                 cont_target = o + rs
                 rev_target = o - (2 * rs)
@@ -360,27 +316,14 @@ class RangeBarEngine:
                     self.bar["high"] = max(self.bar["high"], cont_target)
                     self.bar["low"] = min(self.bar["low"], o)
                     self.bar["close"] = cont_target
-
-                    self._emit(
-                        _make_bar(
-                            self.bar["time"],
-                            self.bar["open"],
-                            self.bar["high"],
-                            self.bar["low"],
-                            self.bar["close"],
-                            self.bar["volume"],
-                        )
-                    )
-
+                    self._emit(_make_bar(
+                        self.bar["time"], self.bar["open"],
+                        self.bar["high"], self.bar["low"],
+                        self.bar["close"], self.bar["volume"],
+                    ))
                     new_open = cont_target
-                    self.bar = {
-                        "time": ts,
-                        "open": new_open,
-                        "high": new_open,
-                        "low": new_open,
-                        "close": new_open,
-                        "volume": 0.0,
-                    }
+                    self.bar = {"time": ts, "open": new_open, "high": new_open,
+                                "low": new_open, "close": new_open, "volume": 0.0}
                     continue
 
                 if p <= rev_target:
@@ -388,28 +331,14 @@ class RangeBarEngine:
                     rev_close = o - (2 * rs)
                     high_ = max(self.bar["high"], o)
                     low_ = min(self.bar["low"], rev_close)
-
-                    self._emit(
-                        _make_bar(
-                            self.bar["time"],
-                            rev_open,
-                            high_,
-                            low_,
-                            rev_close,
-                            self.bar["volume"],
-                        )
-                    )
-
+                    self._emit(_make_bar(
+                        self.bar["time"], rev_open, high_,
+                        low_, rev_close, self.bar["volume"],
+                    ))
                     self.trend = -1
                     new_open = rev_close
-                    self.bar = {
-                        "time": ts,
-                        "open": new_open,
-                        "high": new_open,
-                        "low": new_open,
-                        "close": new_open,
-                        "volume": 0.0,
-                    }
+                    self.bar = {"time": ts, "open": new_open, "high": new_open,
+                                "low": new_open, "close": new_open, "volume": 0.0}
                     continue
 
                 self.bar["high"] = max(self.bar["high"], p)
@@ -417,7 +346,6 @@ class RangeBarEngine:
                 self.bar["close"] = p
                 break
 
-            # BEAR TREND
             if self.trend == -1:
                 cont_target = o - rs
                 rev_target = o + (2 * rs)
@@ -426,27 +354,14 @@ class RangeBarEngine:
                     self.bar["high"] = max(self.bar["high"], o)
                     self.bar["low"] = min(self.bar["low"], cont_target)
                     self.bar["close"] = cont_target
-
-                    self._emit(
-                        _make_bar(
-                            self.bar["time"],
-                            self.bar["open"],
-                            self.bar["high"],
-                            self.bar["low"],
-                            self.bar["close"],
-                            self.bar["volume"],
-                        )
-                    )
-
+                    self._emit(_make_bar(
+                        self.bar["time"], self.bar["open"],
+                        self.bar["high"], self.bar["low"],
+                        self.bar["close"], self.bar["volume"],
+                    ))
                     new_open = cont_target
-                    self.bar = {
-                        "time": ts,
-                        "open": new_open,
-                        "high": new_open,
-                        "low": new_open,
-                        "close": new_open,
-                        "volume": 0.0,
-                    }
+                    self.bar = {"time": ts, "open": new_open, "high": new_open,
+                                "low": new_open, "close": new_open, "volume": 0.0}
                     continue
 
                 if p >= rev_target:
@@ -454,28 +369,14 @@ class RangeBarEngine:
                     rev_close = o + (2 * rs)
                     high_ = max(self.bar["high"], rev_close)
                     low_ = min(self.bar["low"], o)
-
-                    self._emit(
-                        _make_bar(
-                            self.bar["time"],
-                            rev_open,
-                            high_,
-                            low_,
-                            rev_close,
-                            self.bar["volume"],
-                        )
-                    )
-
+                    self._emit(_make_bar(
+                        self.bar["time"], rev_open, high_,
+                        low_, rev_close, self.bar["volume"],
+                    ))
                     self.trend = 1
                     new_open = rev_close
-                    self.bar = {
-                        "time": ts,
-                        "open": new_open,
-                        "high": new_open,
-                        "low": new_open,
-                        "close": new_open,
-                        "volume": 0.0,
-                    }
+                    self.bar = {"time": ts, "open": new_open, "high": new_open,
+                                "low": new_open, "close": new_open, "volume": 0.0}
                     continue
 
                 self.bar["high"] = max(self.bar["high"], p)
@@ -484,7 +385,6 @@ class RangeBarEngine:
                 break
 
     def reset(self) -> None:
-        """Full reset — clears all bars and state."""
         self.trend = 0
         self.bar = None
         self.bars.clear()
@@ -494,11 +394,75 @@ class RangeBarEngine:
 
 
 # =============================================================================
+# MT5 Tick Normalizer
+# =============================================================================
+
+def _tick_field(raw, field: str, default: float = 0.0) -> float:
+    """
+    Safely read a numeric field from an MT5 tick.
+
+    MT5's copy_ticks_range / copy_ticks_from return numpy structured arrays.
+    Each row is a numpy.void — fields must be accessed via raw['field'],
+    NOT raw.field (which raises AttributeError on numpy.void).
+    """
+    try:
+        val = float(raw[field])
+        return val
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
+
+    try:
+        val = float(getattr(raw, field))
+        return val
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    return default
+
+
+def normalize_tick(raw) -> Optional[dict]:
+    """
+    Convert a raw MT5 tick (numpy.void or object) into a clean dict.
+
+    Returns:
+        {"ts": int, "time_msc": int, "price": float, "bid": float,
+         "ask": float, "last": float, "volume": float}
+        or None if the tick has no usable price.
+    """
+    ts_val = _tick_field(raw, "time", -1.0)
+    if ts_val < 0:
+        return None
+    ts = int(ts_val)
+
+    time_msc_val = _tick_field(raw, "time_msc", -1.0)
+    time_msc = int(time_msc_val) if time_msc_val >= 0 else ts * 1000
+
+    bid = _tick_field(raw, "bid", 0.0)
+    ask = _tick_field(raw, "ask", 0.0)
+    last = _tick_field(raw, "last", 0.0)
+    volume = _tick_field(raw, "volume", 0.0)
+
+    price = bid if bid > 0 else (last if last > 0 else ask)
+
+    if price <= 0:
+        return None
+
+    return {
+        "ts": ts,
+        "time_msc": time_msc,
+        "price": price,
+        "bid": bid,
+        "ask": ask,
+        "last": last,
+        "volume": volume,
+    }
+
+
+# =============================================================================
 # MT5 Connector
 # =============================================================================
 
 def _import_mt5():
-    """Lazy import — fails clearly if MetaTrader5 is not installed."""
     try:
         import MetaTrader5 as mt5
         return mt5
@@ -507,12 +471,6 @@ def _import_mt5():
 
 
 def init_mt5() -> Tuple[bool, str]:
-    """
-    Initialize MT5 terminal connection.
-
-    Uses whatever MT5 terminal is installed/running on this machine.
-    Does NOT specify path, login, server, or password.
-    """
     mt5 = _import_mt5()
 
     if mt5 is None:
@@ -544,21 +502,37 @@ def shutdown_mt5() -> None:
         mt5.shutdown()
 
 
+def get_mt5_account_info() -> Optional[dict]:
+    """
+    Query MT5 for current account info.
+    Returns dict with login, broker, server, balance, equity
+    or None if MT5 is not connected.
+    """
+    mt5 = _import_mt5()
+    if mt5 is None:
+        return None
+
+    account = mt5.account_info()
+    if account is None:
+        return None
+
+    terminal = mt5.terminal_info()
+
+    return {
+        "login": str(account.login),
+        "broker": str(account.company) if account.company else None,
+        "server": str(account.server) if account.server else None,
+        "balance": float(account.balance),
+        "equity": float(account.equity),
+        "terminal": str(terminal.name) if terminal else None,
+    }
+
+
 def fetch_historical_ticks(
     symbol: str,
     lookback_value: int,
     lookback_unit: str,
 ) -> Tuple[Optional[list], str]:
-    """
-    Fetch historical ticks from MT5.
-
-    Returns:
-        (list_of_tick_dicts, "ok") on success
-        (None, error_message) on failure
-
-    Each tick dict:
-        {"ts": int, "price": float, "volume": float}
-    """
     mt5 = _import_mt5()
 
     if mt5 is None:
@@ -596,84 +570,84 @@ def fetch_historical_ticks(
         return None, f"No ticks returned for {symbol}. MT5 error: {err}"
 
     result = []
+    skipped = 0
 
-    for tick in ticks:
-        price = tick.bid if tick.bid > 0 else (tick.last if tick.last > 0 else tick.ask)
-
-        if price <= 0:
-            continue
-
-        result.append(
-            {
-                "ts": int(tick.time),
-                "price": float(price),
-                "volume": float(tick.volume) if tick.volume else 0.0,
-            }
+    try:
+        for raw_tick in ticks:
+            normalized = normalize_tick(raw_tick)
+            if normalized is None:
+                skipped += 1
+                continue
+            result.append({
+                "ts": normalized["ts"],
+                "price": normalized["price"],
+                "volume": normalized["volume"],
+            })
+    except Exception as exc:
+        tb = traceback.format_exc()
+        return None, (
+            f"Tick processing error for {symbol}: "
+            f"{type(exc).__name__}: {exc}\n{tb}"
         )
 
-    print(f"[MT5] Got {len(result)} ticks for {symbol}")
+    if skipped > 0:
+        print(f"[MT5] Skipped {skipped} ticks with no valid price for {symbol}")
+
+    if len(result) == 0:
+        return None, (
+            f"All {len(ticks)} ticks for {symbol} had no valid price "
+            f"(bid/ask/last all <= 0). Skipped: {skipped}"
+        )
+
+    print(f"[MT5] Got {len(result)} usable ticks for {symbol} (skipped {skipped})")
     return result, "ok"
 
 
 def stream_live_ticks(symbol: str, poll_interval: float = 0.05):
-    """
-    Generator that yields new ticks by polling MT5.
-
-    Yields:
-        {"ts": int, "price": float, "volume": float}
-    """
     mt5 = _import_mt5()
 
     if mt5 is None:
         raise RuntimeError("MetaTrader5 package not installed.")
 
     cursor_time = datetime.now(timezone.utc)
-    last_tick_time = 0
+    last_tick_msc = 0
 
     while True:
         ticks = mt5.copy_ticks_from(symbol, cursor_time, 1000, mt5.COPY_TICKS_ALL)
 
         if ticks is not None and len(ticks) > 0:
-            for tick in ticks:
-                if tick.time_msc <= last_tick_time:
+            for raw_tick in ticks:
+                normalized = normalize_tick(raw_tick)
+
+                if normalized is None:
                     continue
 
-                last_tick_time = tick.time_msc
-
-                price = tick.bid if tick.bid > 0 else (
-                    tick.last if tick.last > 0 else tick.ask
-                )
-
-                if price <= 0:
+                if normalized["time_msc"] <= last_tick_msc:
                     continue
+
+                last_tick_msc = normalized["time_msc"]
 
                 yield {
-                    "ts": int(tick.time),
-                    "price": float(price),
-                    "volume": float(tick.volume) if tick.volume else 0.0,
+                    "ts": normalized["ts"],
+                    "price": normalized["price"],
+                    "volume": normalized["volume"],
                 }
 
-            last_tick = ticks[-1]
-            cursor_time = datetime.fromtimestamp(last_tick.time, tz=timezone.utc)
+            last_ts = _tick_field(ticks[-1], "time", 0.0)
+            if last_ts > 0:
+                cursor_time = datetime.fromtimestamp(
+                    int(last_ts), tz=timezone.utc
+                )
 
         time.sleep(poll_interval)
 
 
 class _MT5ConnectorFacade:
-    """
-    Compatibility facade.
-
-    Keeps StrategyRunner logic close to the old version where it called:
-        mt5_connector.init_mt5()
-        mt5_connector.fetch_historical_ticks()
-        mt5_connector.stream_live_ticks()
-        mt5_connector.shutdown_mt5()
-    """
-
     init_mt5 = staticmethod(init_mt5)
     shutdown_mt5 = staticmethod(shutdown_mt5)
     fetch_historical_ticks = staticmethod(fetch_historical_ticks)
     stream_live_ticks = staticmethod(stream_live_ticks)
+    get_mt5_account_info = staticmethod(get_mt5_account_info)
 
 
 mt5_connector = _MT5ConnectorFacade()
@@ -688,13 +662,6 @@ def load_strategy_from_source(
     class_name: str,
     strategy_id: str,
 ) -> Tuple[Optional[object], Optional[str]]:
-    """
-    Load a strategy class from raw Python source.
-
-    Returns:
-        (strategy_instance, None) on success
-        (None, error_message) on failure
-    """
     try:
         _ensure_base_importable()
     except Exception as exc:
@@ -739,26 +706,11 @@ def load_strategy_from_source(
 
 
 def _ensure_base_importable():
-    """
-    Make BaseStrategy importable under common import paths.
-
-    Supported strategy imports:
-        from base_strategy import BaseStrategy
-        from worker.base_strategy import BaseStrategy
-        from backend.strategies.base import BaseStrategy
-
-    Since this is now combined into worker/mainWorker.py, all paths point
-    to this current module.
-    """
     current_module = sys.modules[__name__]
 
-    # Direct old local import path
     sys.modules["base_strategy"] = current_module
-
-    # Worker package old import path
     sys.modules["worker.base_strategy"] = current_module
 
-    # Backend-style import path used by uploaded strategies
     if "backend" not in sys.modules:
         backend_module = types.ModuleType("backend")
         backend_module.__path__ = []
@@ -821,12 +773,78 @@ class StrategyRunner:
         self._thread: Optional[threading.Thread] = None
         self._bar_index: int = 0
 
+        # ── MT5 account info (populated after init) ─────────
+        self._mt5_state: Optional[str] = None
+        self._mt5_broker: Optional[str] = None
+        self._mt5_account_id: Optional[str] = None
+        self._mt5_server: Optional[str] = None
+        self._mt5_balance: Optional[float] = None
+        self._mt5_equity: Optional[float] = None
+
+        # ── Pipeline counters ───────────────────────────────
+        self._total_ticks_ingested: int = 0
+        self._total_bars_produced: int = 0
+        self._on_bar_call_count: int = 0
+        self._signal_count: int = 0
+        self._warmup_signal_count: int = 0
+        self._last_bar_time: Optional[int] = None
+        self._current_price: Optional[float] = None
+        self._pipeline_log_interval: int = 5000  # log every N ticks
+
+    # -------------------------------------------------------------------------
+    # Diagnostics — read by worker_agent for heartbeat
+    # -------------------------------------------------------------------------
+
+    def get_diagnostics(self) -> dict:
+        """Return a snapshot of all runner state for the heartbeat payload."""
+        return {
+            "runner_state": self._runner_state,
+            "strategy_id": self.strategy_id,
+            "symbol": self.symbol,
+            "mt5_state": self._mt5_state,
+            "broker": self._mt5_broker,
+            "account_id": self._mt5_account_id,
+            "mt5_server": self._mt5_server,
+            "mt5_balance": self._mt5_balance,
+            "mt5_equity": self._mt5_equity,
+            "total_ticks": self._total_ticks_ingested,
+            "total_bars": self._total_bars_produced,
+            "current_bars_in_memory": (
+                self._bar_engine.current_bars_count
+                if self._bar_engine else 0
+            ),
+            "on_bar_calls": self._on_bar_call_count,
+            "signal_count": self._signal_count,
+            "warmup_signals": self._warmup_signal_count,
+            "last_bar_time": self._last_bar_time,
+            "current_price": self._current_price,
+            "last_signal": self._last_signal,
+            "last_error": self._last_error,
+            "started_at": self._started_at,
+        }
+
+    # -------------------------------------------------------------------------
+    # Pipeline Logging
+    # -------------------------------------------------------------------------
+
+    def _log_pipeline(self, context: str = ""):
+        """Print pipeline status to console."""
+        ctx_str = f" [{context}]" if context else ""
+        print(
+            f"[PIPELINE]{ctx_str} deployment={self.deployment_id} | "
+            f"ticks={self._total_ticks_ingested} "
+            f"bars={self._total_bars_produced} "
+            f"on_bar_calls={self._on_bar_call_count} "
+            f"signals={self._signal_count} "
+            f"price={self._current_price} "
+            f"state={self._runner_state}"
+        )
+
     # -------------------------------------------------------------------------
     # Status Reporting
     # -------------------------------------------------------------------------
 
     def _report_status(self):
-        """Push current runner status via callback."""
         if not self._status_callback:
             return
 
@@ -849,10 +867,21 @@ class StrategyRunner:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        try:
-            self._status_callback(status)
-        except Exception as exc:
-            print(f"[RUNNER] Status report failed: {exc}")
+        for attempt in range(3):
+            try:
+                self._status_callback(status)
+                return
+            except Exception as exc:
+                print(
+                    f"[RUNNER] Status report attempt {attempt + 1}/3 failed: {exc}"
+                )
+                if attempt < 2:
+                    time.sleep(1.0)
+
+        print(
+            f"[RUNNER] WARNING: Status report FAILED after 3 attempts | "
+            f"deployment={self.deployment_id} state={self._runner_state}"
+        )
 
     def _set_state(self, state: str, error: str = None):
         self._runner_state = state
@@ -868,11 +897,37 @@ class StrategyRunner:
         self._report_status()
 
     # -------------------------------------------------------------------------
+    # MT5 Info Capture
+    # -------------------------------------------------------------------------
+
+    def _capture_mt5_info(self):
+        """Query MT5 for account info and store it locally."""
+        info = mt5_connector.get_mt5_account_info()
+        if info:
+            self._mt5_state = "connected"
+            self._mt5_broker = info.get("broker")
+            self._mt5_account_id = info.get("login")
+            self._mt5_server = info.get("server")
+            self._mt5_balance = info.get("balance")
+            self._mt5_equity = info.get("equity")
+            print(
+                f"[RUNNER] MT5 info captured: broker={self._mt5_broker} "
+                f"account={self._mt5_account_id} server={self._mt5_server} "
+                f"balance={self._mt5_balance}"
+            )
+        else:
+            self._mt5_state = "connected_no_account"
+            print("[RUNNER] MT5 connected but account_info() returned None")
+
+    # -------------------------------------------------------------------------
     # Bar Callback
     # -------------------------------------------------------------------------
 
     def _on_new_bar(self, bar: dict):
         """Called by RangeBarEngine when a bar completes."""
+        self._total_bars_produced += 1
+        self._last_bar_time = bar.get("time")
+
         if self._stop_event.is_set():
             return
 
@@ -889,19 +944,24 @@ class StrategyRunner:
         if self._ctx.index < min_lb:
             return
 
+        self._on_bar_call_count += 1
+
         try:
             signal = self._strategy.on_bar(self._ctx)
         except Exception as exc:
             tb = traceback.format_exc()
             print(f"[RUNNER] on_bar() error: {exc}\n{tb}")
-            self._set_state("failed", f"on_bar error: {exc}")
+            self._set_state("failed", f"on_bar error: {type(exc).__name__}: {exc}")
             self._stop_event.set()
             return
 
         self._handle_signal(signal)
 
+        # Log every 50 bars during live
+        if self._on_bar_call_count % 50 == 0:
+            self._log_pipeline("LIVE_BAR")
+
     def _handle_signal(self, signal: Optional[dict]):
-        """Process signal returned by strategy."""
         if signal is None:
             return
 
@@ -918,20 +978,25 @@ class StrategyRunner:
             return
 
         self._last_signal = signal
+
+        if action in (SIGNAL_BUY, SIGNAL_SELL, SIGNAL_CLOSE):
+            self._signal_count += 1
+
         print(
-            f"[RUNNER] Signal: {action} | "
-            f"symbol={self.symbol} | details={signal}"
+            f"[RUNNER] Signal #{self._signal_count}: {action} | "
+            f"symbol={self.symbol} | bar_index={self._bar_index} | "
+            f"details={signal}"
         )
 
         if action in (SIGNAL_BUY, SIGNAL_SELL):
             print(
-                f"[RUNNER] {action} signal detected. "
-                "Execution layer not implemented — signal logged only."
+                f"[RUNNER] *** {action} signal detected. "
+                "Execution layer not implemented — signal logged only. ***"
             )
         elif action == SIGNAL_CLOSE:
             print(
-                "[RUNNER] CLOSE signal detected. "
-                "Execution layer not implemented — signal logged only."
+                "[RUNNER] *** CLOSE signal detected. "
+                "Execution layer not implemented — signal logged only. ***"
             )
 
         self._report_status()
@@ -941,7 +1006,6 @@ class StrategyRunner:
     # -------------------------------------------------------------------------
 
     def start(self):
-        """Start runner in a background thread."""
         if self._thread and self._thread.is_alive():
             return
 
@@ -950,7 +1014,6 @@ class StrategyRunner:
         self._thread.start()
 
     def stop(self):
-        """Signal the runner to stop."""
         self._stop_event.set()
         self._set_state("stopped")
 
@@ -958,7 +1021,23 @@ class StrategyRunner:
             self._thread.join(timeout=10)
 
     def _run(self):
-        """Full lifecycle: load → ticks → bars → live loop."""
+        try:
+            self._run_lifecycle()
+        except Exception as exc:
+            tb = traceback.format_exc()
+            error_msg = f"{type(exc).__name__}: {exc}"
+            print(
+                f"[RUNNER] FATAL unhandled exception in deployment "
+                f"{self.deployment_id}:\n{tb}"
+            )
+            self._set_state("failed", error_msg)
+
+            try:
+                mt5_connector.shutdown_mt5()
+            except Exception:
+                pass
+
+    def _run_lifecycle(self):
         self._started_at = datetime.now(timezone.utc).isoformat()
 
         # Phase 1: Load Strategy
@@ -983,8 +1062,17 @@ class StrategyRunner:
         try:
             self._strategy.on_init(self._ctx)
         except Exception as exc:
-            self._set_state("failed", f"on_init() failed: {exc}")
+            self._set_state(
+                "failed",
+                f"on_init() failed: {type(exc).__name__}: {exc}",
+            )
             return
+
+        print(
+            f"[RUNNER] Strategy loaded: {self.class_name} | "
+            f"min_lookback={getattr(self._strategy, 'min_lookback', 0)} | "
+            f"params={params}"
+        )
 
         # Phase 2: Init MT5
         ok, msg = mt5_connector.init_mt5()
@@ -992,6 +1080,9 @@ class StrategyRunner:
         if not ok:
             self._set_state("failed", f"MT5 init failed: {msg}")
             return
+
+        # Capture MT5 account info immediately after init
+        self._capture_mt5_info()
 
         # Phase 3: Fetch Historical Ticks
         self._set_state("fetching_ticks")
@@ -1012,6 +1103,8 @@ class StrategyRunner:
             mt5_connector.shutdown_mt5()
             return
 
+        self._total_ticks_ingested = len(ticks)
+        self._current_price = ticks[-1]["price"]
         print(f"[RUNNER] Fetched {len(ticks)} historical ticks for {self.symbol}")
 
         # Phase 4: Generate Initial Bars
@@ -1020,7 +1113,7 @@ class StrategyRunner:
         self._bar_engine = RangeBarEngine(
             bar_size_points=self.bar_size_points,
             max_bars=self.max_bars,
-            on_bar=None,
+            on_bar=None,  # no callback during initial generation
         )
 
         for tick in ticks:
@@ -1031,19 +1124,28 @@ class StrategyRunner:
             )
 
         initial_count = self._bar_engine.current_bars_count
+        self._total_bars_produced = self._bar_engine.total_bars_emitted
+
+        if self._bar_engine.bars:
+            self._last_bar_time = self._bar_engine.bars[-1].get("time")
 
         print(
             f"[RUNNER] Initial bars generated: {initial_count} "
-            f"(from {len(ticks)} ticks)"
+            f"(total emitted: {self._total_bars_produced}) "
+            f"(from {len(ticks)} ticks, bar_size={self.bar_size_points}pt)"
         )
 
         if initial_count == 0:
             self._set_state(
                 "failed",
-                "No bars generated from historical ticks. Check bar_size_points.",
+                f"No bars generated from {len(ticks)} historical ticks. "
+                f"bar_size_points={self.bar_size_points} may be too large "
+                f"for the price range of {self.symbol}.",
             )
             mt5_connector.shutdown_mt5()
             return
+
+        self._log_pipeline("INITIAL_BARS")
 
         # Phase 5: Warm Up Strategy
         self._set_state("warming_up")
@@ -1063,6 +1165,8 @@ class StrategyRunner:
             if i < min_lb:
                 continue
 
+            self._on_bar_call_count += 1
+
             try:
                 signal = self._strategy.on_bar(self._ctx)
 
@@ -1071,24 +1175,35 @@ class StrategyRunner:
                     SIGNAL_SELL,
                     SIGNAL_CLOSE,
                 ):
+                    self._warmup_signal_count += 1
                     print(
-                        f"[RUNNER] Warmup signal at bar {i}: "
-                        f"{signal.get('signal')} (not acted upon)"
+                        f"[RUNNER] Warmup signal #{self._warmup_signal_count} "
+                        f"at bar {i}: {signal.get('signal')} (not acted upon)"
                     )
             except Exception as exc:
                 print(f"[RUNNER] Warmup on_bar error at bar {i}: {exc}")
 
-        print("[RUNNER] Warmup complete. Strategy ready.")
+        print(
+            f"[RUNNER] Warmup complete. "
+            f"on_bar calls: {self._on_bar_call_count} | "
+            f"warmup signals: {self._warmup_signal_count}"
+        )
+        self._log_pipeline("WARMUP_DONE")
 
         # Phase 6: Live Tick Loop
         self._set_state("running")
 
         self._bar_engine._on_bar = self._on_new_bar
+        live_tick_count = 0
 
         try:
             for tick in mt5_connector.stream_live_ticks(self.symbol):
                 if self._stop_event.is_set():
                     break
+
+                self._total_ticks_ingested += 1
+                self._current_price = tick["price"]
+                live_tick_count += 1
 
                 self._bar_engine.process_tick(
                     tick["ts"],
@@ -1096,14 +1211,23 @@ class StrategyRunner:
                     tick["volume"],
                 )
 
+                # Periodic pipeline log
+                if live_tick_count % self._pipeline_log_interval == 0:
+                    self._log_pipeline("LIVE_TICK")
+
         except Exception as exc:
             if not self._stop_event.is_set():
                 tb = traceback.format_exc()
                 print(f"[RUNNER] Live loop error: {exc}\n{tb}")
-                self._set_state("failed", f"Live loop error: {exc}")
+                self._set_state(
+                    "failed",
+                    f"Live loop error: {type(exc).__name__}: {exc}",
+                )
 
         finally:
+            self._log_pipeline("SHUTDOWN")
             mt5_connector.shutdown_mt5()
+            self._mt5_state = "disconnected"
 
             if not self._stop_event.is_set():
                 self._set_state("stopped")

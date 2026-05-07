@@ -122,6 +122,40 @@ var WorkerDetailRenderer = (function () {
     var state = w.state || 'unknown';
     var strats = (w.active_strategies && w.active_strategies.length > 0)
       ? w.active_strategies.join(', ') : 'None';
+
+    /* ── MT5 info ────────────────────────────────────── */
+    var mt5Val = _nullVal(w.mt5_state, 'Not Connected');
+    var mt5Color = '';
+    if (w.mt5_state === 'connected') {
+      mt5Val = '<span style="color:var(--success);">Connected</span>';
+    } else if (w.mt5_state === 'disconnected') {
+      mt5Val = '<span style="color:var(--danger);">Disconnected</span>';
+    }
+
+    var brokerAcct = '';
+    if (w.broker || w.account_id) {
+      brokerAcct = (w.broker || '?') + ' / ' + (w.account_id || '?');
+    } else {
+      brokerAcct = '<span class="value-null">\u2014</span>';
+    }
+
+    /* ── Pipeline stats ──────────────────────────────── */
+    var ticks = w.total_ticks || 0;
+    var bars = w.total_bars || 0;
+    var signals = w.signal_count || 0;
+    var onBarCalls = w.on_bar_calls || 0;
+
+    var pipelineVal =
+      '<span style="color:var(--accent);">' + _fmtNum(ticks) + '</span> ticks \u2192 ' +
+      '<span style="color:var(--warning);">' + _fmtNum(bars) + '</span> bars \u2192 ' +
+      '<span style="color:var(--success);">' + signals + '</span> signals';
+
+    /* ── Current price ───────────────────────────────── */
+    var priceVal = (w.current_price !== null && w.current_price !== undefined)
+      ? '<span class="mono">' + w.current_price.toFixed(2) + '</span>'
+      : '<span class="value-null">\u2014</span>';
+
+    /* ── PnL ─────────────────────────────────────────── */
     var pnl = _formatPnl(w.floating_pnl);
     var pnlStyle = '';
     if (w.floating_pnl !== null && w.floating_pnl !== undefined) {
@@ -129,12 +163,14 @@ var WorkerDetailRenderer = (function () {
     }
 
     var cards = [
-      { label: 'Connection', value: '<div class="status-indicator"><span class="wd-status-dot-sm ' + _stateColor(state) + '"></span>' + _stateLabel(state) + '</div>' },
-      { label: 'Active Strategy', value: strats },
-      { label: 'Open Positions', value: String(w.open_positions_count || 0) },
-      { label: 'Floating PnL', value: '<span style="' + pnlStyle + '">' + pnl + '</span>' },
-      { label: 'Last Heartbeat', value: _formatAge(w.heartbeat_age_seconds) },
-      { label: 'Agent Version', value: _nullVal(w.agent_version) },
+      { label: 'Connection',       value: '<div class="status-indicator"><span class="wd-status-dot-sm ' + _stateColor(state) + '"></span>' + _stateLabel(state) + '</div>' },
+      { label: 'MT5',              value: mt5Val },
+      { label: 'Broker / Account', value: brokerAcct },
+      { label: 'Active Strategy',  value: strats },
+      { label: 'Pipeline',         value: pipelineVal },
+      { label: 'Current Price',    value: priceVal },
+      { label: 'Equity',           value: '<span style="' + pnlStyle + '">' + pnl + '</span>' },
+      { label: 'Last Heartbeat',   value: _formatAge(w.heartbeat_age_seconds) },
     ];
 
     var html = '';
@@ -142,6 +178,12 @@ var WorkerDetailRenderer = (function () {
       html += '<div class="wd-status-card"><span class="status-label">' + c.label + '</span><span class="status-value">' + c.value + '</span></div>';
     });
     return html;
+  }
+
+  function _fmtNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
   }
 
   /* ── Checklist ───────────────────────────────────────────── */

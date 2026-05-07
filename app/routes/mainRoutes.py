@@ -1,21 +1,6 @@
 """
 JINNI Grid - Combined API Routes
-
-Combined from:
-- app/routes/grid.py
-- app/routes/health.py
-- app/routes/portfolio.py
-- strategy/deployment/command routes
-- app/routes/system.py
-
-Service imports updated to:
-- app.services.mainServices
-
-Important:
-- Route casing is preserved.
-- /api/Grid is kept for worker heartbeat/list.
-- /api/grid is kept for strategy/deployment/command routes.
-- Added lowercase /api/grid/workers alias to prevent frontend 404.
+app/routes/mainRoutes.py
 """
 
 from datetime import datetime, timezone
@@ -56,8 +41,6 @@ router = APIRouter()
 
 # =============================================================================
 # Health Endpoints
-# Original file: app/routes/health.py
-# Prefix preserved: /api
 # =============================================================================
 
 @router.get("/api/health", tags=["Health"])
@@ -73,8 +56,6 @@ async def health_check():
 
 # =============================================================================
 # Grid Fleet Endpoints
-# Original file: app/routes/grid.py
-# Prefix preserved: /api/Grid
 # =============================================================================
 
 class HeartbeatPayload(BaseModel):
@@ -86,10 +67,17 @@ class HeartbeatPayload(BaseModel):
     mt5_state: Optional[str] = None
     account_id: Optional[str] = None
     broker: Optional[str] = None
-    active_strategies: Optional[List[str]] = []
+    active_strategies: Optional[List[str]] = None
     open_positions_count: Optional[int] = 0
     floating_pnl: Optional[float] = None
-    errors: Optional[List[str]] = []
+    errors: Optional[List[str]] = None
+    # Pipeline diagnostics
+    total_ticks: Optional[int] = 0
+    total_bars: Optional[int] = 0
+    on_bar_calls: Optional[int] = 0
+    signal_count: Optional[int] = 0
+    last_bar_time: Optional[str] = None
+    current_price: Optional[float] = None
 
 
 @router.post("/api/Grid/workers/heartbeat", tags=["Grid"])
@@ -109,13 +97,6 @@ async def worker_heartbeat(payload: HeartbeatPayload):
 @router.get("/api/Grid/workers", tags=["Grid"])
 @router.get("/api/grid/workers", tags=["Grid"])
 async def list_workers():
-    """
-    List all workers.
-
-    Both routes are intentionally supported:
-    - /api/Grid/workers  original backend casing
-    - /api/grid/workers  frontend compatibility alias
-    """
     return {
         "ok": True,
         "workers": get_all_workers(),
@@ -126,8 +107,6 @@ async def list_workers():
 
 # =============================================================================
 # Portfolio Endpoints
-# Original file: app/routes/portfolio.py
-# Prefix preserved: /api/portfolio
 # =============================================================================
 
 @router.get("/api/portfolio/summary", tags=["Portfolio"])
@@ -150,7 +129,6 @@ async def equity_history():
 
 # =============================================================================
 # Strategy Endpoints
-# Original prefix preserved: /api/grid
 # =============================================================================
 
 @router.post("/api/grid/strategies/upload", tags=["Strategies"])
@@ -200,10 +178,6 @@ async def get_strategy_detail(strategy_id: str):
 
 @router.get("/api/grid/strategies/{strategy_id}/file", tags=["Strategies"])
 async def get_strategy_file(strategy_id: str):
-    """
-    Return raw .py content.
-    Used by workers to fetch strategy code.
-    """
     content = get_strategy_file_content(strategy_id)
 
     if content is None:
@@ -228,7 +202,6 @@ async def validate_strategy_endpoint(strategy_id: str):
 
 # =============================================================================
 # Deployment Endpoints
-# Original prefix preserved: /api/grid
 # =============================================================================
 
 class DeploymentCreate(BaseModel):
@@ -240,12 +213,11 @@ class DeploymentCreate(BaseModel):
     bar_size_points: float
     max_bars_in_memory: Optional[int] = 500
     lot_size: Optional[float] = 0.01
-    strategy_parameters: Optional[Dict[str, Any]] = {}
+    strategy_parameters: Optional[Dict[str, Any]] = None
 
 
 @router.post("/api/grid/deployments", tags=["Deployments"])
 async def create_deployment_endpoint(payload: DeploymentCreate):
-    # Verify strategy exists
     strat = get_strategy(payload.strategy_id)
 
     if not strat:
@@ -254,7 +226,6 @@ async def create_deployment_endpoint(payload: DeploymentCreate):
             detail="Strategy not found. Upload it first.",
         )
 
-    # Create deployment record
     result = create_deployment(payload.model_dump())
 
     if not result["ok"]:
@@ -262,10 +233,8 @@ async def create_deployment_endpoint(payload: DeploymentCreate):
 
     deployment = result["deployment"]
 
-    # Fetch strategy file content for the worker
     file_content = get_strategy_file_content(payload.strategy_id)
 
-    # Enqueue deploy command for the worker
     cmd_payload = {
         "deployment_id": deployment["deployment_id"],
         "strategy_id": deployment["strategy_id"],
@@ -277,12 +246,11 @@ async def create_deployment_endpoint(payload: DeploymentCreate):
         "bar_size_points": deployment["bar_size_points"],
         "max_bars_in_memory": deployment["max_bars_in_memory"],
         "lot_size": deployment["lot_size"],
-        "strategy_parameters": deployment["strategy_parameters"],
+        "strategy_parameters": deployment["strategy_parameters"] or {},
     }
 
     enqueue_command(payload.worker_id, "deploy_strategy", cmd_payload)
 
-    # Update deployment state
     update_deployment_state(deployment["deployment_id"], "sent_to_worker")
 
     return {
@@ -325,7 +293,6 @@ async def stop_deployment_endpoint(deployment_id: str):
     if not dep:
         raise HTTPException(status_code=404, detail="Deployment not found.")
 
-    # Enqueue stop command for the worker
     enqueue_command(
         dep["worker_id"],
         "stop_strategy",
@@ -340,7 +307,6 @@ async def stop_deployment_endpoint(deployment_id: str):
 
 # =============================================================================
 # Worker Command Endpoints
-# Original prefix preserved: /api/grid
 # =============================================================================
 
 @router.get("/api/grid/workers/{worker_id}/commands/poll", tags=["Worker Commands"])
@@ -386,10 +352,6 @@ class RunnerStatusReport(BaseModel):
 
 @router.post("/api/grid/workers/{worker_id}/runner-status", tags=["Worker Commands"])
 async def report_runner_status(worker_id: str, payload: RunnerStatusReport):
-    """
-    Worker reports its runner state.
-    Mother updates deployment accordingly.
-    """
     state_map = {
         "loading_strategy": "loading_strategy",
         "fetching_ticks": "fetching_ticks",
@@ -418,8 +380,6 @@ async def report_runner_status(worker_id: str, payload: RunnerStatusReport):
 
 # =============================================================================
 # System Summary Endpoint
-# Original file: app/routes/system.py
-# Prefix preserved: /api/system
 # =============================================================================
 
 @router.get("/api/system/summary", tags=["System"])
