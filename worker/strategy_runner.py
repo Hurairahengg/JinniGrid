@@ -2,6 +2,7 @@
 JINNI GRID — Strategy Runner
 Orchestrates: strategy load → tick fetch → bar generation → strategy execution loop.
 Reports status back to Mother Server.
+worker/strategy_runner.py
 """
 from __future__ import annotations
 import threading

@@ -3,6 +3,7 @@ JINNI GRID — MT5 Connector
 Thin wrapper around MetaTrader5 Python package.
 Handles init, tick fetch, and live tick streaming.
 Does NOT invent broker/account/path details.
+worker/mt5_connector.py
 """
 from __future__ import annotations
 import time

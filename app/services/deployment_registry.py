@@ -2,6 +2,7 @@
 JINNI Grid - Deployment Registry
 In-memory deployment store. Create, list, update state.
 No database — all lost on restart.
+deployment_registry.py
 """
 import threading
 import uuid

@@ -52,7 +52,7 @@ var ApiClient = (function () {
 
   return {
     /* Fleet */
-    getFleetWorkers:   function ()   { return _request('GET',  '/api/Grid/workers'); },
+    getFleetWorkers:   function ()   { return _request('GET',  '/api/grid/workers'); },
     getSystemSummary:  function ()   { return _request('GET',  '/api/system/summary'); },
     getHealth:         function ()   { return _request('GET',  '/api/health'); },
 

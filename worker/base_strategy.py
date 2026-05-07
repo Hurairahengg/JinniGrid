@@ -3,6 +3,7 @@ JINNI GRID — Strategy Base Class (Signal-Only Interface)
 ========================================================
 Exact port from JINNI ZERO backtester.
 Strategies are SIGNAL PROVIDERS ONLY.
+worker/base_strategy.py
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod

@@ -2,6 +2,7 @@
 JINNI GRID — Strategy Context
 Provides the ctx object passed to strategy.on_bar(ctx).
 Mirrors JINNI ZERO's context interface.
+worker/strategy_context.py
 """
 from __future__ import annotations
 from dataclasses import dataclass, field

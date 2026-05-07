@@ -3,7 +3,7 @@ JINNI GRID — Range Bar Engine
 Ported directly from JINNI ZERO range_bars.py RangeBarStreamer.
 Same exact 3-state machine logic (startup / bull / bear),
 same continuation (1x range) and reversal (2x range) rules.
-
+worker/range_bar_engine.py
 Adapted for live streaming: no file I/O, callback-based emission.
 """
 from __future__ import annotations

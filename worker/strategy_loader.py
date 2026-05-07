@@ -2,6 +2,7 @@
 JINNI GRID — Strategy Loader
 Dynamically loads a BaseStrategy subclass from raw .py source code.
 Does NOT write to disk in production — loads from string via importlib.
+worker/strategy_loader.py
 """
 import importlib
 import importlib.util

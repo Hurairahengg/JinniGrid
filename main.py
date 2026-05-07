@@ -6,6 +6,9 @@ Run: python main.py
 import uvicorn
 from app import create_app
 from app.config import Config
+import os
+import uvicorn
+
 
 # App instance at module level so uvicorn reloader can find it
 app = create_app()
@@ -31,7 +34,14 @@ def main():
     print("=" * 56)
     print("")
 
-    uvicorn.run("main:app", host=host, port=port, reload=debug)
+    run_kwargs = {"host": host, "port": port, "reload": debug}
+    if debug:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        run_kwargs["reload_excludes"] = [
+            os.path.join(project_root, "data"),
+            os.path.join(project_root, "strategies"),
+        ]
+    uvicorn.run("main:app", **run_kwargs)
 
 
 if __name__ == "__main__":

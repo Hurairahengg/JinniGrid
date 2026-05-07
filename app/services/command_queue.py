@@ -2,6 +2,7 @@
 JINNI Grid - Command Queue
 Simple in-memory per-worker command queue.
 Workers poll for pending commands, ack when received.
+command_queue.py 
 """
 import threading
 import uuid

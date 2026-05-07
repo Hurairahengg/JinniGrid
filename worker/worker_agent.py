@@ -6,6 +6,7 @@ Usage:
     1. Edit config.yaml
     2. python -m worker.worker_agent   (from project root)
        OR: cd worker && python worker_agent.py
+       worker/worker_agent.py
 """
 import os
 import sys
