@@ -151,7 +151,7 @@ var WorkerDetailRenderer = (function () {
     var onlineStates = ['online', 'running', 'idle'];
     var isOnline = onlineStates.indexOf(w.state) !== -1;
     var hasSid = !!_selectedStrategyId;
-    var hasSym = !!_runtimeConfig.symbol;
+    var hasSym = !!_runtimeConfig.symbol && /^[A-Z0-9._]{1,30}$/.test((_runtimeConfig.symbol || '').trim().toUpperCase());
     var tlOk = _runtimeConfig.tick_lookback_value > 0;
     var bsOk = _runtimeConfig.bar_size_points > 0;
     var mbOk = _runtimeConfig.max_bars_memory > 0;
@@ -281,12 +281,7 @@ var WorkerDetailRenderer = (function () {
 
   function _renderRuntimeConfig() {
     var rc = _runtimeConfig;
-    var symbols = DeploymentConfig.symbolOptions;
     var tlUnits = DeploymentConfig.tickLookbackUnits;
-
-    var symOpts = symbols.map(function (s) {
-      return '<option value="' + s + '"' + (rc.symbol === s ? ' selected' : '') + '>' + s + '</option>';
-    }).join('');
 
     var tlUnitOpts = tlUnits.map(function (u) {
       var label = u.charAt(0).toUpperCase() + u.slice(1);
@@ -294,18 +289,44 @@ var WorkerDetailRenderer = (function () {
     }).join('');
 
     return '<div class="wd-form-grid">' +
-      '<div class="wd-form-group"><label class="wd-form-label">Symbol</label>' +
-        '<select class="wd-form-select rc-input" data-key="symbol">' + symOpts + '</select></div>' +
-      '<div class="wd-form-group"><label class="wd-form-label">Lot Size</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="lot_size" value="' + rc.lot_size + '" step="0.01" min="0.01" /></div>' +
-      '<div class="wd-form-group"><label class="wd-form-label">Tick Lookback</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="tick_lookback_value" value="' + rc.tick_lookback_value + '" step="1" min="1" /></div>' +
-      '<div class="wd-form-group"><label class="wd-form-label">Lookback Unit</label>' +
-        '<select class="wd-form-select rc-input" data-key="tick_lookback_unit">' + tlUnitOpts + '</select></div>' +
-      '<div class="wd-form-group"><label class="wd-form-label">Bar Size Points</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="bar_size_points" value="' + rc.bar_size_points + '" step="1" min="1" /></div>' +
-      '<div class="wd-form-group"><label class="wd-form-label">Max Bars in Memory</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="max_bars_memory" value="' + rc.max_bars_memory + '" step="10" min="10" /></div>' +
+
+      /* ── Symbol (free-text input) ─────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Symbol</label>' +
+        '<input type="text" class="wd-form-input rc-input" id="wd-symbol-input" data-key="symbol"' +
+          ' value="' + (rc.symbol || '') + '" placeholder="e.g. EURUSD, XAUUSD, BTCUSD"' +
+          ' autocomplete="off" spellcheck="false" />' +
+        '<div class="wd-symbol-hint">Letters, numbers, dots, underscores only — auto-uppercased</div>' +
+        '<div class="wd-field-error" id="wd-symbol-error"><i class="fa-solid fa-circle-xmark"></i><span></span></div>' +
+      '</div>' +
+
+      /* ── Lot Size ─────────────────────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Lot Size</label>' +
+        '<input type="number" class="wd-form-input rc-input" data-key="lot_size" value="' + rc.lot_size + '" step="0.01" min="0.01" />' +
+      '</div>' +
+
+      /* ── History Lookback (merged value + unit) ───────── */
+      '<div class="wd-form-group" style="grid-column:1/-1;">' +
+        '<label class="wd-form-label">History Lookback</label>' +
+        '<div class="wd-inline-row">' +
+          '<input type="number" class="wd-form-input rc-input" data-key="tick_lookback_value" value="' + rc.tick_lookback_value + '" step="1" min="1" placeholder="Amount" />' +
+          '<select class="wd-form-select rc-input" data-key="tick_lookback_unit">' + tlUnitOpts + '</select>' +
+        '</div>' +
+      '</div>' +
+
+      /* ── Bar Size Points ──────────────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Bar Size Points</label>' +
+        '<input type="number" class="wd-form-input rc-input" data-key="bar_size_points" value="' + rc.bar_size_points + '" step="1" min="1" />' +
+      '</div>' +
+
+      /* ── Max Bars in Memory ───────────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Max Bars in Memory</label>' +
+        '<input type="number" class="wd-form-input rc-input" data-key="max_bars_memory" value="' + rc.max_bars_memory + '" step="10" min="10" />' +
+      '</div>' +
+
     '</div>';
   }
 
@@ -501,13 +522,58 @@ var WorkerDetailRenderer = (function () {
 
   function _attachRuntimeEvents() {
     document.querySelectorAll('.rc-input').forEach(function (input) {
+      var key = input.getAttribute('data-key');
+
+      /* ── Symbol gets special handling ──────────────── */
+      if (key === 'symbol') {
+        input.addEventListener('input', function () {
+          input.value = input.value.toUpperCase().replace(/\s/g, '');
+          _runtimeConfig.symbol = input.value;
+          _validateSymbolInput();
+          _updateChecklist();
+        });
+        input.addEventListener('blur', function () {
+          input.value = input.value.trim().toUpperCase();
+          _runtimeConfig.symbol = input.value;
+          _validateSymbolInput();
+          _updateChecklist();
+        });
+        return;
+      }
+
+      /* ── All other inputs ──────────────────────────── */
       input.addEventListener('change', function () {
-        var key = input.getAttribute('data-key');
         _runtimeConfig[key] = input.type === 'number' ? parseFloat(input.value) : input.value;
         _updateChecklist();
         _addActivity('Config: ' + key + ' updated');
       });
     });
+  }
+
+  function _validateSymbolInput() {
+    var input = document.getElementById('wd-symbol-input');
+    var errEl = document.getElementById('wd-symbol-error');
+    if (!input || !errEl) return true;
+
+    var val = (input.value || '').trim();
+    var errSpan = errEl.querySelector('span');
+
+    if (!val) {
+      input.classList.remove('input-error');
+      errEl.classList.remove('visible');
+      return false;
+    }
+
+    if (!/^[A-Z0-9._]{1,30}$/.test(val)) {
+      input.classList.add('input-error');
+      errSpan.textContent = 'Only letters, numbers, dots, underscores allowed';
+      errEl.classList.add('visible');
+      return false;
+    }
+
+    input.classList.remove('input-error');
+    errEl.classList.remove('visible');
+    return true;
   }
 
   function _attachParamEvents() {
@@ -657,10 +723,25 @@ var WorkerDetailRenderer = (function () {
       ToastManager.show('Select a strategy first.', 'warning');
       return;
     }
-    if (!_runtimeConfig.symbol) {
-      ToastManager.show('Select a symbol.', 'warning');
+
+    /* ── Symbol validation ───────────────────────────── */
+    var symbolVal = (_runtimeConfig.symbol || '').trim().toUpperCase();
+    _runtimeConfig.symbol = symbolVal;
+    var symInput = document.getElementById('wd-symbol-input');
+    if (symInput) symInput.value = symbolVal;
+
+    if (!symbolVal) {
+      ToastManager.show('Enter a symbol.', 'warning');
+      if (symInput) symInput.focus();
       return;
     }
+    if (!/^[A-Z0-9._]{1,30}$/.test(symbolVal)) {
+      ToastManager.show('Invalid symbol — letters, numbers, dots, underscores only.', 'warning');
+      _validateSymbolInput();
+      if (symInput) symInput.focus();
+      return;
+    }
+
     if (!_runtimeConfig.bar_size_points || _runtimeConfig.bar_size_points <= 0) {
       ToastManager.show('Bar Size Points must be > 0.', 'warning');
       return;

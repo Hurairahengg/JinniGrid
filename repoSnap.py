@@ -10,7 +10,7 @@ import os
 # Not where this script file is located.
 ROOT = Path.cwd().resolve()
 
-CHUNK_COUNT = 3
+CHUNK_COUNT = 2
 OUTPUT_PREFIX = "repo_snapshot_part_"
 OUTPUT_SUFFIX = ".md"
 
@@ -18,6 +18,7 @@ MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 EXCLUDED_DIRS = {
     ".git",
+    ".md",
     ".hg",
     ".svn",
     "__pycache__",
@@ -41,6 +42,8 @@ EXCLUDED_DIRS = {
     "target",
     "bin",
     "obj",
+    ".txt",
+    ".pyc"
 }
 
 EXCLUDED_FILES = {

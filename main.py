@@ -3,11 +3,11 @@ JINNI GRID - Mother Server Entry Point
 Run: python main.py
 """
 
-import uvicorn
-from app import create_app
-from app.config import Config
 import os
 import uvicorn
+
+from app import create_app
+from app.config import Config
 
 
 # App instance at module level so uvicorn reloader can find it
@@ -35,12 +35,26 @@ def main():
     print("")
 
     run_kwargs = {"host": host, "port": port, "reload": debug}
+
     if debug:
+        # ── RELOAD FIX ───────────────────────────────────────
+        # The old approach used reload_excludes with glob patterns
+        # like "data/*" — but PurePath.match() does NOT recursively
+        # match "data/strategies/foo.py", so every strategy upload
+        # still triggered a full server reload.
+        #
+        # Fix: whitelist ONLY source directories via reload_dirs.
+        # Writes to data/strategies/ (uploads), data/ (future DB),
+        # or strategies/ (legacy) can never trigger the watcher.
+        #
+        # Trade-off: changes to main.py or config.yaml require a
+        # manual restart. That's fine — config is cached anyway.
         project_root = os.path.dirname(os.path.abspath(__file__))
-        run_kwargs["reload_excludes"] = [
-            os.path.join(project_root, "data"),
-            os.path.join(project_root, "strategies"),
+        run_kwargs["reload_dirs"] = [
+            os.path.join(project_root, "app"),
+            os.path.join(project_root, "ui"),
         ]
+
     uvicorn.run("main:app", **run_kwargs)
 
 

@@ -24,7 +24,7 @@ if _worker_dir not in sys.path:
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from worker.strategy_runner import StrategyRunner
+from worker.old.strategy_runner import StrategyRunner
 
 
 def load_config():

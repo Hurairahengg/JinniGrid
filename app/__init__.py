@@ -2,17 +2,16 @@
 JINNI Grid Mother Server - Application Factory
 app/__init__.py
 """
+
 import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.responses import FileResponse
+
 from app.config import Config
-from app.routes.health import router as health_router
-from app.routes.grid import router as grid_router
-from app.routes.portfolio import router as portfolio_router
-from app.routes.system import router as system_router
-from app.routes.strategies import router as strategies_router
+from app.routes.mainRoutes import router as main_routes_router
 
 
 def create_app() -> FastAPI:
@@ -33,25 +32,31 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(health_router)
-    app.include_router(grid_router)
-    app.include_router(portfolio_router)
-    app.include_router(system_router)
-    app.include_router(strategies_router)
+    app.include_router(main_routes_router)
 
-    ui_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ui"))
+    ui_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "ui")
+    )
+
     css_dir = os.path.join(ui_dir, "css")
     js_dir = os.path.join(ui_dir, "js")
+    index_path = os.path.join(ui_dir, "index.html")
 
     if os.path.isdir(css_dir):
         app.mount("/css", StaticFiles(directory=css_dir), name="css")
+
     if os.path.isdir(js_dir):
         app.mount("/js", StaticFiles(directory=js_dir), name="js")
-
-    index_path = os.path.join(ui_dir, "index.html")
 
     @app.get("/", include_in_schema=False)
     async def serve_dashboard():
         return FileResponse(index_path)
+
+    # ── Restore persisted strategies on startup ──────────────
+    # This is the critical fix: without this call, the in-memory
+    # _strategies dict is empty after every server start/reload,
+    # even though .py + .meta.json files exist on disk.
+    from app.services.strategy_registry import load_strategies_from_disk
+    load_strategies_from_disk()
 
     return app

@@ -1,21 +1,5 @@
-/* jinni-grid-combined.js
-   Combined from:
-   - apiClient.js
-   - deploymentMockData.js
-   - modalManager.js
-   - toastManager.js
-   - themeManager.js
-   - dashboardRenderer.js
-   - fleetRenderer.js
-   - strategiesRenderer.js
-   - app.js
-
-   Note:
-   - WorkerDetailRenderer is referenced by App but was not included in the files provided.
-   - Keep WorkerDetailRenderer loaded separately or send it and I will merge it too.
+/* main.js
 */
-
-/* apiClient.js */
 
 var ApiClient = (function () {
   'use strict';
@@ -72,9 +56,9 @@ var ApiClient = (function () {
   }
 
   return {
-    /* Fleet */
+
     getFleetWorkers: function () {
-      return _request('GET', '/api/grid/workers');
+      return _request('GET', '/api/Grid/workers');
     },
     getSystemSummary: function () {
       return _request('GET', '/api/system/summary');
@@ -83,7 +67,7 @@ var ApiClient = (function () {
       return _request('GET', '/api/health');
     },
 
-    /* Strategies */
+
     getStrategies: function () {
       return _request('GET', '/api/grid/strategies');
     },
@@ -97,7 +81,7 @@ var ApiClient = (function () {
       return _request('POST', '/api/grid/strategies/' + encodeURIComponent(id) + '/validate');
     },
 
-    /* Deployments */
+
     createDeployment: function (cfg) {
       return _request('POST', '/api/grid/deployments', cfg);
     },
@@ -113,7 +97,6 @@ var ApiClient = (function () {
   };
 })();
 
-/* deploymentMockData.js — Runtime config defaults & dropdown options */
 
 var DeploymentConfig = (function () {
   'use strict';
@@ -142,7 +125,6 @@ var DeploymentConfig = (function () {
   };
 })();
 
-/* modalManager.js */
 
 var ModalManager = (function () {
   'use strict';
@@ -212,7 +194,6 @@ var ModalManager = (function () {
   };
 })();
 
-/* toastManager.js */
 
 var ToastManager = (function () {
   'use strict';
@@ -275,7 +256,6 @@ var ToastManager = (function () {
   };
 })();
 
-/* themeManager.js */
 
 var ThemeManager = (function () {
   'use strict';
@@ -335,7 +315,6 @@ var ThemeManager = (function () {
   };
 })();
 
-/* dashboardRenderer.js */
 
 var DashboardRenderer = (function () {
   'use strict';
@@ -621,7 +600,6 @@ var DashboardRenderer = (function () {
   };
 })();
 
-/* fleetRenderer.js */
 
 var FleetRenderer = (function () {
   'use strict';
@@ -832,7 +810,6 @@ var FleetRenderer = (function () {
   };
 })();
 
-/* strategiesRenderer.js */
 
 var StrategiesRenderer = (function () {
   'use strict';
@@ -1011,7 +988,6 @@ var StrategiesRenderer = (function () {
   };
 })();
 
-/* app.js */
 
 var App = (function () {
   'use strict';

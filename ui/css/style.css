@@ -110,7 +110,7 @@ button { font-family: inherit; border: none; cursor: pointer; background: none; 
 
 /* ── Fleet Summary Badges ───────────────────────────────────────── */
 
-.fleet-summary { display: flex; gap: 14px; flex-wrap: wrap; width: 100%; }
+.fleet-summary { display: flex; gap: 14px; flex-wrap: wrap; width: 100%; margin-bottom: 18px; }
 .fleet-badge {
   display: flex; align-items: center; gap: 10px;
   background: var(--bg-card); border: 1px solid var(--border-primary);
@@ -871,4 +871,22 @@ body,.topbar,.content,.portfolio-card,.node-card,.section-header,.fleet-summary,
 }
 @media (max-width: 768px) {
   .wd-status-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Symbol Input + Inline Lookback ───────────────────────── */
+.wd-inline-row {
+  display: flex; gap: 8px; align-items: center;
+}
+.wd-inline-row .wd-form-input { flex: 1; min-width: 0; }
+.wd-inline-row .wd-form-select { flex: 0 0 130px; }
+.wd-field-error {
+  font-size: 10.5px; color: var(--danger); margin-top: 4px;
+  display: none; align-items: center; gap: 4px;
+}
+.wd-field-error.visible { display: flex; }
+.wd-field-error i { font-size: 10px; }
+.wd-form-input.input-error { border-color: var(--danger); }
+.wd-symbol-hint {
+  font-size: 10px; color: var(--text-muted); margin-top: 3px;
+  font-style: italic;
 }
