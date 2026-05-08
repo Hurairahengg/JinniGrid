@@ -1,18 +1,31 @@
 """
 JINNI Grid - Combined Runtime Services
 app/services/mainServices.py
+
+Now backed by SQLite persistence (app/persistence.py).
+In-memory caches kept for performance, synced to DB on writes.
 """
 
+import logging
 import random
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.config import Config
+from app.persistence import (
+    save_worker, get_all_workers_db, get_worker_db,
+    save_deployment, update_deployment_state_db,
+    get_all_deployments_db, get_deployment_db,
+    log_event_db,
+)
+
+log = logging.getLogger("jinni.worker")
+sys_log = logging.getLogger("jinni.system")
 
 
 # =============================================================================
-# Command Queue
+# Command Queue (in-memory — commands are transient by nature)
 # =============================================================================
 
 _command_queues: dict = {}
@@ -38,7 +51,11 @@ def enqueue_command(worker_id: str, command_type: str, payload: dict) -> dict:
             _command_queues[worker_id] = []
         _command_queues[worker_id].append(cmd)
 
-    print(f"[COMMAND] Enqueued {command_type} ({cmd_id}) for worker {worker_id}")
+    log.info(f"Enqueued {command_type} ({cmd_id}) for worker {worker_id}")
+
+    log_event_db("command", "enqueued", f"{command_type} for {worker_id}",
+                 worker_id=worker_id, data={"command_id": cmd_id})
+
     return cmd
 
 
@@ -46,7 +63,6 @@ def poll_commands(worker_id: str) -> list:
     with _command_lock:
         queue = _command_queues.get(worker_id, [])
         pending = [c for c in queue if c["state"] == "pending"]
-
     return pending
 
 
@@ -55,35 +71,24 @@ def ack_command(worker_id: str, command_id: str) -> dict:
 
     with _command_lock:
         queue = _command_queues.get(worker_id, [])
-
         for cmd in queue:
             if cmd["command_id"] == command_id:
                 cmd["state"] = "acknowledged"
                 cmd["acked_at"] = now.isoformat()
-                print(f"[COMMAND] Ack {command_id} from worker {worker_id}")
+                log.info(f"Ack {command_id} from worker {worker_id}")
                 return {"ok": True, "command": cmd}
 
     return {"ok": False, "error": "Command not found."}
 
 
 # =============================================================================
-# Deployment Registry
+# Deployment Registry (DB-backed)
 # =============================================================================
 
-_deployments: dict = {}
-_deployment_lock = threading.Lock()
-
 VALID_STATES = {
-    "queued",
-    "sent_to_worker",
-    "acknowledged_by_worker",
-    "loading_strategy",
-    "fetching_ticks",
-    "generating_initial_bars",
-    "warming_up",
-    "running",
-    "stopped",
-    "failed",
+    "queued", "sent_to_worker", "acknowledged_by_worker",
+    "loading_strategy", "fetching_ticks", "generating_initial_bars",
+    "warming_up", "running", "stopped", "failed",
 }
 
 
@@ -108,60 +113,45 @@ def create_deployment(config: dict) -> dict:
         "last_error": None,
     }
 
-    with _deployment_lock:
-        _deployments[deployment_id] = record
+    save_deployment(deployment_id, record)
 
-    print(
-        f"[DEPLOYMENT] Created {deployment_id} | "
-        f"strategy={config['strategy_id']} -> worker={config['worker_id']}"
-    )
+    log.info(f"Created deployment {deployment_id} | "
+             f"strategy={config['strategy_id']} -> worker={config['worker_id']}")
 
-    return {
-        "ok": True,
-        "deployment_id": deployment_id,
-        "deployment": record,
-    }
+    log_event_db("deployment", "created",
+                 f"Deployment {deployment_id} created",
+                 worker_id=config["worker_id"],
+                 strategy_id=config["strategy_id"],
+                 deployment_id=deployment_id,
+                 symbol=config["symbol"])
+
+    return {"ok": True, "deployment_id": deployment_id, "deployment": record}
 
 
 def get_all_deployments() -> list:
-    with _deployment_lock:
-        return list(_deployments.values())
+    return get_all_deployments_db()
 
 
-def get_deployment(deployment_id: str) -> dict | None:
-    with _deployment_lock:
-        return _deployments.get(deployment_id)
+def get_deployment(deployment_id: str):
+    return get_deployment_db(deployment_id)
 
 
-def update_deployment_state(
-    deployment_id: str,
-    state: str,
-    error: str = None,
-) -> dict:
+def update_deployment_state(deployment_id: str, state: str, error: str = None) -> dict:
     if state not in VALID_STATES:
         return {"ok": False, "error": f"Invalid state: {state}"}
 
-    now = datetime.now(timezone.utc)
+    update_deployment_state_db(deployment_id, state, error)
 
-    with _deployment_lock:
-        rec = _deployments.get(deployment_id)
+    log.info(f"Deployment {deployment_id} -> {state}"
+             + (f" (error: {error})" if error else ""))
 
-        if not rec:
-            return {"ok": False, "error": "Deployment not found."}
+    log_event_db("deployment", "state_change",
+                 f"{deployment_id} -> {state}",
+                 deployment_id=deployment_id,
+                 data={"state": state, "error": error},
+                 level="ERROR" if state == "failed" else "INFO")
 
-        rec["state"] = state
-        rec["updated_at"] = now.isoformat()
-
-        if error is not None:
-            rec["last_error"] = error
-        elif state == "running":
-            rec["last_error"] = None
-
-    print(
-        f"[DEPLOYMENT] {deployment_id} -> {state}"
-        + (f" (error: {error})" if error else "")
-    )
-
+    rec = get_deployment_db(deployment_id)
     return {"ok": True, "deployment": rec}
 
 
@@ -170,15 +160,12 @@ def stop_deployment(deployment_id: str) -> dict:
 
 
 def get_deployments_for_worker(worker_id: str) -> list:
-    with _deployment_lock:
-        return [
-            d for d in _deployments.values()
-            if d["worker_id"] == worker_id
-        ]
+    all_deps = get_all_deployments_db()
+    return [d for d in all_deps if d["worker_id"] == worker_id]
 
 
 # =============================================================================
-# Mock Data Service
+# Mock Portfolio Data (will be replaced by real portfolio module)
 # =============================================================================
 
 def get_portfolio_summary() -> dict:
@@ -199,28 +186,43 @@ def get_equity_history() -> list:
     points = []
     start = datetime(2026, 2, 5, tzinfo=timezone.utc)
     val = 200000.0
-
     for i in range(90):
         d = start + timedelta(days=i)
         val += (rng.random() - 0.42) * 2000
-
         if val < 180000:
             val = 180000.0
-
-        points.append({
-            "timestamp": d.strftime("%Y-%m-%d"),
-            "equity": round(val, 2),
-        })
-
+        points.append({"timestamp": d.strftime("%Y-%m-%d"), "equity": round(val, 2)})
     return points
 
 
 # =============================================================================
-# Worker Registry
+# Worker Registry (DB-backed + in-memory cache for heartbeat age calc)
 # =============================================================================
 
-_workers: dict = {}
+_workers_cache: dict = {}
 _worker_lock = threading.Lock()
+
+
+def _load_workers_from_db():
+    """Load workers from DB into memory cache on startup."""
+    global _workers_cache
+    db_workers = get_all_workers_db()
+    with _worker_lock:
+        for w in db_workers:
+            wid = w["worker_id"]
+            hb_at = w.get("last_heartbeat_at")
+            if hb_at:
+                try:
+                    dt = datetime.fromisoformat(hb_at)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    dt = datetime.now(timezone.utc)
+            else:
+                dt = datetime.now(timezone.utc)
+            w["_last_heartbeat_dt"] = dt
+            _workers_cache[wid] = w
+    sys_log.info(f"Loaded {len(_workers_cache)} workers from DB")
 
 
 def process_heartbeat(payload: dict) -> dict:
@@ -229,47 +231,27 @@ def process_heartbeat(payload: dict) -> dict:
     is_new = False
 
     with _worker_lock:
-        if worker_id not in _workers:
+        if worker_id not in _workers_cache:
             is_new = True
-            print(
-                f"[HEARTBEAT] Worker '{worker_id}' registered | "
-                f"state={payload.get('state', 'unknown')}"
-            )
-        else:
-            print(
-                f"[HEARTBEAT] Worker '{worker_id}' updated | "
-                f"state={payload.get('state', 'unknown')} "
-                f"mt5={payload.get('mt5_state', '-')} "
-                f"ticks={payload.get('total_ticks', 0)} "
-                f"bars={payload.get('total_bars', 0)} "
-                f"signals={payload.get('signal_count', 0)}"
-            )
 
-        _workers[worker_id] = {
+        _workers_cache[worker_id] = {
+            **payload,
             "worker_id": worker_id,
-            "worker_name": payload.get("worker_name"),
-            "host": payload.get("host"),
-            "reported_state": payload.get("state", "online"),
             "last_heartbeat_at": now.isoformat(),
             "_last_heartbeat_dt": now,
-            "agent_version": payload.get("agent_version"),
-            # MT5 info
-            "mt5_state": payload.get("mt5_state"),
-            "account_id": payload.get("account_id"),
-            "broker": payload.get("broker"),
-            # Strategies + positions
-            "active_strategies": payload.get("active_strategies") or [],
-            "open_positions_count": payload.get("open_positions_count", 0) or 0,
-            "floating_pnl": payload.get("floating_pnl"),
-            "errors": payload.get("errors") or [],
-            # Pipeline diagnostics
-            "total_ticks": payload.get("total_ticks", 0) or 0,
-            "total_bars": payload.get("total_bars", 0) or 0,
-            "on_bar_calls": payload.get("on_bar_calls", 0) or 0,
-            "signal_count": payload.get("signal_count", 0) or 0,
-            "last_bar_time": payload.get("last_bar_time"),
-            "current_price": payload.get("current_price"),
         }
+
+    # Persist to DB
+    save_worker(worker_id, {
+        **payload,
+        "last_heartbeat_at": now.isoformat(),
+    })
+
+    if is_new:
+        log.info(f"Worker '{worker_id}' registered | state={payload.get('state')}")
+        log_event_db("worker", "registered",
+                     f"Worker {worker_id} first heartbeat",
+                     worker_id=worker_id)
 
     return {
         "ok": True,
@@ -283,14 +265,14 @@ def get_all_workers() -> list:
     fleet_config = Config.get_fleet_config()
     stale_threshold = fleet_config.get("stale_threshold_seconds", 30)
     offline_threshold = fleet_config.get("offline_threshold_seconds", 90)
-
     now = datetime.now(timezone.utc)
     result = []
 
     with _worker_lock:
-        for wid, rec in _workers.items():
-            age = round((now - rec["_last_heartbeat_dt"]).total_seconds(), 1)
-            reported = rec["reported_state"]
+        for wid, rec in _workers_cache.items():
+            hb_dt = rec.get("_last_heartbeat_dt", now)
+            age = round((now - hb_dt).total_seconds(), 1)
+            reported = rec.get("reported_state", rec.get("state", "online"))
 
             if age >= offline_threshold:
                 effective = "offline"
@@ -300,30 +282,27 @@ def get_all_workers() -> list:
                 effective = reported
 
             result.append({
-                "worker_id": rec["worker_id"],
-                "worker_name": rec["worker_name"],
-                "host": rec["host"],
+                "worker_id": rec.get("worker_id", wid),
+                "worker_name": rec.get("worker_name"),
+                "host": rec.get("host"),
                 "state": effective,
                 "reported_state": reported,
-                "last_heartbeat_at": rec["last_heartbeat_at"],
+                "last_heartbeat_at": rec.get("last_heartbeat_at"),
                 "heartbeat_age_seconds": age,
-                "agent_version": rec["agent_version"],
-                # MT5 info
-                "mt5_state": rec["mt5_state"],
-                "account_id": rec["account_id"],
-                "broker": rec["broker"],
-                # Strategies + positions
-                "active_strategies": rec["active_strategies"],
-                "open_positions_count": rec["open_positions_count"],
-                "floating_pnl": rec["floating_pnl"],
-                "errors": rec["errors"],
-                # Pipeline diagnostics
-                "total_ticks": rec["total_ticks"],
-                "total_bars": rec["total_bars"],
-                "on_bar_calls": rec["on_bar_calls"],
-                "signal_count": rec["signal_count"],
-                "last_bar_time": rec["last_bar_time"],
-                "current_price": rec["current_price"],
+                "agent_version": rec.get("agent_version"),
+                "mt5_state": rec.get("mt5_state"),
+                "account_id": rec.get("account_id"),
+                "broker": rec.get("broker"),
+                "active_strategies": rec.get("active_strategies") or [],
+                "open_positions_count": rec.get("open_positions_count", 0),
+                "floating_pnl": rec.get("floating_pnl"),
+                "errors": rec.get("errors") or [],
+                "total_ticks": rec.get("total_ticks", 0),
+                "total_bars": rec.get("total_bars", 0),
+                "on_bar_calls": rec.get("on_bar_calls", 0),
+                "signal_count": rec.get("signal_count", 0),
+                "last_bar_time": rec.get("last_bar_time"),
+                "current_price": rec.get("current_price"),
             })
 
     return result
@@ -331,20 +310,13 @@ def get_all_workers() -> list:
 
 def get_fleet_summary() -> dict:
     workers = get_all_workers()
-
     counts = {
-        "online_workers": 0,
-        "stale_workers": 0,
-        "offline_workers": 0,
-        "error_workers": 0,
-        "warning_workers": 0,
+        "online_workers": 0, "stale_workers": 0, "offline_workers": 0,
+        "error_workers": 0, "warning_workers": 0,
     }
-
     online_states = {"online", "running", "idle"}
-
     for w in workers:
         state = w["state"]
-
         if state in online_states:
             counts["online_workers"] += 1
         elif state == "stale":
@@ -355,7 +327,5 @@ def get_fleet_summary() -> dict:
             counts["error_workers"] += 1
         elif state == "warning":
             counts["warning_workers"] += 1
-
     counts["total_workers"] = len(workers)
-
     return counts

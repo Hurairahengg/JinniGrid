@@ -1,378 +1,259 @@
 """
-JINNI Grid – Strategy Registry
-Persistent strategy store using filesystem (JSON sidecar + .py code).
-Survives server restarts. No database required.
+JINNI Grid — Strategy Registry (DB-backed)
 app/services/strategy_registry.py
+
+Strategies are stored:
+  - Source code: data/strategies/{strategy_id}.py (filesystem)
+  - Metadata: SQLite via app/persistence.py
 """
+
 import ast
-import json
+import hashlib
+import logging
 import os
-import re
-import shutil
-import tempfile
 import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-_strategies: dict = {}
+from app.persistence import (
+    save_strategy, get_all_strategies_db, get_strategy_db,
+    delete_strategy_db, log_event_db,
+)
+
+log = logging.getLogger("jinni.strategy")
+
+STRATEGY_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "strategies"
+)
+
 _lock = threading.Lock()
 
-# ── Storage Path ────────────────────────────────────────────────
-# Lives under <project_root>/data/strategies/ — intentionally OUTSIDE
-# the app/ and ui/ source trees so uvicorn's file-watcher never sees
-# writes here, even when reload=True.
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_APP_DIR = os.path.dirname(_THIS_DIR)
-_PROJECT_ROOT = os.path.dirname(_APP_DIR)
-STRATEGIES_DIR = os.path.join(_PROJECT_ROOT, "data", "strategies")
-os.makedirs(STRATEGIES_DIR, exist_ok=True)
-
-# Legacy dir (Phase 1C wrote here — inside the reload zone)
-_LEGACY_DIR = os.path.join(_PROJECT_ROOT, "strategies")
+def _ensure_dir():
+    os.makedirs(STRATEGY_DIR, exist_ok=True)
 
 
-# ── Filename Sanitization ───────────────────────────────────────
-
-_SAFE_RE = re.compile(r"[^a-zA-Z0-9_\-]")
-
-
-def _sanitize_id(raw: str) -> str:
-    """Strip unsafe chars, cap length, guarantee non-empty."""
-    clean = _SAFE_RE.sub("_", raw.strip()).strip("_")[:64]
-    return clean or "unnamed_strategy"
+def _sanitize_filename(name: str) -> str:
+    safe = "".join(c for c in name if c.isalnum() or c in ("_", "-", "."))
+    return safe or "unnamed_strategy"
 
 
-def _safe_path(filename: str) -> str:
-    """Resolve inside STRATEGIES_DIR with traversal protection."""
-    safe = os.path.basename(filename)
-    full = os.path.realpath(os.path.join(STRATEGIES_DIR, safe))
-    if not full.startswith(os.path.realpath(STRATEGIES_DIR)):
-        raise ValueError(f"Path traversal blocked: {filename}")
-    return full
+def _file_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
-def _code_path(sid: str) -> str:
-    return _safe_path(f"{_sanitize_id(sid)}.py")
-
-
-def _meta_path(sid: str) -> str:
-    return _safe_path(f"{_sanitize_id(sid)}.meta.json")
-
-
-# ── Atomic Write ────────────────────────────────────────────────
-
-def _write_atomic(target: str, content: str) -> None:
-    """Write to temp file in the same dir, then atomic rename."""
-    parent = os.path.dirname(target)
-    fd, tmp = tempfile.mkstemp(dir=parent, suffix=".tmp")
+def _extract_strategy_class(source: str) -> Optional[dict]:
+    """Parse source to find a class extending BaseStrategy."""
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        shutil.move(tmp, target)          # same-fs → os.rename (atomic)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-# ── Metadata Persistence ───────────────────────────────────────
-
-def _save_meta(sid: str, record: dict) -> None:
-    serialisable = {k: v for k, v in record.items() if k != "file_path"}
-    _write_atomic(_meta_path(sid), json.dumps(serialisable, indent=2))
-
-
-def _load_meta(path: str) -> Optional[dict]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as exc:
-        print(f"[STRATEGY] Bad metadata {path}: {exc}")
-        return None
-
-
-# ── AST Validation (unchanged logic) ───────────────────────────
-
-def _ast_literal(node):
-    try:
-        return ast.literal_eval(node)
-    except (ValueError, TypeError):
-        return None
-
-
-def _validate_strategy_file(file_content: str) -> dict:
-    result = {
-        "valid": False, "error": None, "class_name": None,
-        "strategy_id": None, "name": None, "description": None,
-        "version": None, "min_lookback": None, "parameters": {},
-    }
-    try:
-        tree = ast.parse(file_content)
+        tree = ast.parse(source)
     except SyntaxError as e:
-        result["error"] = f"SyntaxError: {e}"
-        return result
+        return None
 
-    for node in ast.iter_child_nodes(tree):
+    for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
-        bases = []
-        for b in node.bases:
-            if isinstance(b, ast.Name):
-                bases.append(b.id)
-            elif isinstance(b, ast.Attribute):
-                bases.append(b.attr)
-        if "BaseStrategy" not in bases:
-            continue
-
-        result["class_name"] = node.name
-        for item in node.body:
-            if not isinstance(item, ast.Assign):
-                continue
-            for target in item.targets:
-                if not isinstance(target, ast.Name):
-                    continue
-                val = _ast_literal(item.value)
-                name = target.id
-                if name == "strategy_id" and val is not None:
-                    result["strategy_id"] = str(val)
-                elif name == "name" and val is not None:
-                    result["name"] = str(val)
-                elif name == "description" and val is not None:
-                    result["description"] = str(val)
-                elif name == "version" and val is not None:
-                    result["version"] = str(val)
-                elif name == "min_lookback" and val is not None:
-                    result["min_lookback"] = val
-                elif name == "parameters" and isinstance(item.value, ast.Dict):
-                    try:
-                        result["parameters"] = ast.literal_eval(item.value)
-                    except (ValueError, TypeError):
-                        result["parameters"] = {}
-
-        if result["strategy_id"]:
-            result["valid"] = True
-        else:
-            result["strategy_id"] = node.name.lower()
-            result["valid"] = True
-        break
-
-    if result["class_name"] is None:
-        result["error"] = "No class extending BaseStrategy found in file."
-    return result
+        for base in node.bases:
+            base_name = None
+            if isinstance(base, ast.Name):
+                base_name = base.id
+            elif isinstance(base, ast.Attribute):
+                base_name = base.attr
+            if base_name == "BaseStrategy":
+                info = {"class_name": node.name}
+                for item in node.body:
+                    if isinstance(item, ast.Assign):
+                        for target in item.targets:
+                            if isinstance(target, ast.Name) and isinstance(item.value, ast.Constant):
+                                info[target.id] = item.value.value
+                return info
+    return None
 
 
-# ── Startup Restore ─────────────────────────────────────────────
+# =============================================================================
+# Public API
+# =============================================================================
 
-def load_strategies_from_disk() -> int:
-    """
-    Scan STRATEGIES_DIR for *.meta.json, restore into memory.
-    Also migrates any orphan .py files from the legacy strategies/ dir.
-    Called ONCE at server startup.
-    """
-    _migrate_legacy_dir()
+def upload_strategy(filename: str, source_code: str) -> dict:
+    """Upload and persist a strategy file."""
+    _ensure_dir()
 
-    count = 0
-    if not os.path.isdir(STRATEGIES_DIR):
-        print("[STRATEGY] Startup: storage dir missing — nothing to load.")
-        return 0
-
-    for fname in sorted(os.listdir(STRATEGIES_DIR)):
-        if not fname.endswith(".meta.json"):
-            continue
-        meta = _load_meta(os.path.join(STRATEGIES_DIR, fname))
-        if not meta:
-            continue
-        sid = meta.get("strategy_id")
-        if not sid:
-            print(f"[STRATEGY] Skipping {fname}: no strategy_id")
-            continue
-        code = _code_path(sid)
-        if not os.path.exists(code):
-            print(f"[STRATEGY] Skipping {sid}: .py missing at {code}")
-            continue
-        meta["file_path"] = code
-        with _lock:
-            _strategies[sid] = meta
-        count += 1
-        print(f"[STRATEGY] Restored: {sid} ({meta.get('strategy_name', '?')})")
-
-    print(f"[STRATEGY] Startup complete — {count} strategies loaded from {STRATEGIES_DIR}")
-    return count
-
-
-def _migrate_legacy_dir() -> None:
-    """
-    One-time migration: if the old <root>/strategies/ dir has .py files
-    without corresponding entries in data/strategies/, re-validate and move.
-    """
-    if not os.path.isdir(_LEGACY_DIR):
-        return
-    migrated = 0
-    for fname in os.listdir(_LEGACY_DIR):
-        if not fname.endswith(".py"):
-            continue
-        src = os.path.join(_LEGACY_DIR, fname)
-        try:
-            with open(src, "r", encoding="utf-8") as f:
-                content = f.read()
-        except OSError:
-            continue
-        validation = _validate_strategy_file(content)
-        if not validation["valid"]:
-            print(f"[STRATEGY] Legacy skip (invalid): {fname}")
-            continue
-        sid = _sanitize_id(validation["strategy_id"])
-        if os.path.exists(_code_path(sid)):
-            continue  # already in new location
-        # Migrate
-        try:
-            _write_atomic(_code_path(sid), content)
-            now = datetime.now(timezone.utc)
-            record = _build_record(sid, validation, now)
-            _save_meta(sid, record)
-            os.unlink(src)
-            migrated += 1
-            print(f"[STRATEGY] Migrated legacy: {fname} → {sid}")
-        except Exception as e:
-            print(f"[STRATEGY] Migration failed for {fname}: {e}")
-    if migrated:
-        print(f"[STRATEGY] Migrated {migrated} strategies from legacy dir.")
-
-
-# ── Record Builder ──────────────────────────────────────────────
-
-def _build_record(sid: str, validation: dict, now: datetime) -> dict:
-    return {
-        "strategy_id": sid,
-        "strategy_name": validation["name"] or sid,
-        "class_name": validation["class_name"],
-        "version": validation["version"] or "unknown",
-        "description": validation["description"] or "",
-        "min_lookback": validation["min_lookback"],
-        "parameters": validation["parameters"],
-        "parameter_count": len(validation["parameters"]),
-        "filename": f"{sid}.py",
-        "file_path": _code_path(sid),
-        "uploaded_at": now.isoformat(),
-        "validation_status": "validated",
-        "load_status": "registered",
-        "error": None,
-    }
-
-
-# ── Public API ──────────────────────────────────────────────────
-
-def upload_strategy(filename: str, file_content: str) -> dict:
-    """Validate → atomic-write .py + .meta.json → register in memory."""
-
-    if not filename.endswith(".py"):
-        return {"ok": False, "error": "Only .py files accepted."}
-    if not file_content or not file_content.strip():
-        return {"ok": False, "error": "Empty file content."}
-
-    validation = _validate_strategy_file(file_content)
-    if not validation["valid"]:
+    info = _extract_strategy_class(source_code)
+    if info is None:
         return {
             "ok": False,
-            "error": validation["error"] or "Validation failed.",
-            "validation": validation,
+            "error": "No class extending BaseStrategy found. Check your code.",
         }
 
-    sid = _sanitize_id(validation["strategy_id"])
-    now = datetime.now(timezone.utc)
+    strategy_id = info.get("strategy_id", "")
+    if not strategy_id:
+        strategy_id = info["class_name"].lower()
 
-    # ---- persist code ----
-    code_file = _code_path(sid)
-    try:
-        _write_atomic(code_file, file_content)
-    except Exception as e:
-        print(f"[STRATEGY] Code write failed: {e}")
-        return {"ok": False, "error": f"Failed to save strategy file: {e}"}
+    class_name = info["class_name"]
+    name = info.get("name", class_name)
+    description = info.get("description", "")
+    version = info.get("version", "1.0")
+    min_lookback = info.get("min_lookback", 0)
 
-    # ---- persist metadata ----
-    record = _build_record(sid, validation, now)
-    try:
-        _save_meta(sid, record)
-    except Exception as e:
-        print(f"[STRATEGY] Meta write failed: {e}")
-        try:
-            os.unlink(code_file)
-        except OSError:
-            pass
-        return {"ok": False, "error": f"Failed to save metadata: {e}"}
+    safe_name = _sanitize_filename(strategy_id)
+    file_path = os.path.join(STRATEGY_DIR, f"{safe_name}.py")
+    fhash = _file_hash(source_code)
 
-    # ---- register in memory ----
+    # Atomic write
+    tmp_path = file_path + ".tmp"
     with _lock:
-        _strategies[sid] = record
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(source_code)
+            os.replace(tmp_path, file_path)
+        except Exception as e:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return {"ok": False, "error": f"File write failed: {e}"}
 
-    print(f"[STRATEGY] Registered '{sid}' from {filename} (class={validation['class_name']})")
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Persist metadata to DB
+    save_strategy(strategy_id, {
+        "filename": filename,
+        "class_name": class_name,
+        "name": name,
+        "description": description,
+        "version": version,
+        "min_lookback": min_lookback,
+        "file_hash": fhash,
+        "file_path": file_path,
+        "parameters": {},
+        "uploaded_at": now,
+        "is_valid": True,
+    })
+
+    log.info(f"Strategy uploaded: {strategy_id} ({class_name}) hash={fhash}")
+
+    log_event_db("strategy", "uploaded",
+                 f"Strategy {strategy_id} uploaded from {filename}",
+                 strategy_id=strategy_id,
+                 data={"class_name": class_name, "version": version, "hash": fhash})
+
     return {
         "ok": True,
-        "strategy_id": sid,
-        "strategy_name": record["strategy_name"],
-        "validation": validation,
+        "strategy_id": strategy_id,
+        "class_name": class_name,
+        "name": name,
+        "version": version,
+        "file_hash": fhash,
     }
 
 
 def get_all_strategies() -> list:
-    with _lock:
-        return list(_strategies.values())
+    """Return all valid strategies from DB."""
+    db_strategies = get_all_strategies_db()
+    result = []
+    for s in db_strategies:
+        result.append({
+            "strategy_id": s["strategy_id"],
+            "filename": s.get("filename", ""),
+            "class_name": s.get("class_name", ""),
+            "name": s.get("name", s["strategy_id"]),
+            "description": s.get("description", ""),
+            "version": s.get("version", ""),
+            "min_lookback": s.get("min_lookback", 0),
+            "file_hash": s.get("file_hash", ""),
+            "uploaded_at": s.get("uploaded_at", ""),
+        })
+    return result
 
 
-def get_strategy(strategy_id: str) -> dict | None:
-    with _lock:
-        return _strategies.get(strategy_id)
+def get_strategy(strategy_id: str) -> Optional[dict]:
+    return get_strategy_db(strategy_id)
 
 
-def get_strategy_file_content(strategy_id: str) -> str | None:
-    rec = get_strategy(strategy_id)
+def get_strategy_file_content(strategy_id: str) -> Optional[str]:
+    """Read strategy source code from disk."""
+    rec = get_strategy_db(strategy_id)
     if not rec:
         return None
-    path = rec.get("file_path")
-    if not path or not os.path.exists(path):
+
+    file_path = rec.get("file_path", "")
+    if not file_path or not os.path.exists(file_path):
+        # Try default path
+        safe_name = _sanitize_filename(strategy_id)
+        file_path = os.path.join(STRATEGY_DIR, f"{safe_name}.py")
+
+    if not os.path.exists(file_path):
         return None
-    with open(path, "r", encoding="utf-8") as f:
+
+    with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def validate_strategy(strategy_id: str) -> dict:
-    rec = get_strategy(strategy_id)
-    if not rec:
-        return {"ok": False, "error": "Strategy not found."}
     content = get_strategy_file_content(strategy_id)
-    if not content:
-        return {"ok": False, "error": "Strategy file missing from disk."}
-    validation = _validate_strategy_file(content)
-    with _lock:
-        if strategy_id in _strategies:
-            _strategies[strategy_id]["validation_status"] = (
-                "validated" if validation["valid"] else "failed"
-            )
-            _strategies[strategy_id]["error"] = validation.get("error")
+    if content is None:
+        return {"ok": False, "error": "Strategy file not found."}
+
+    info = _extract_strategy_class(content)
+    if info is None:
+        return {"ok": False, "error": "No BaseStrategy class found in file."}
+
     try:
-        _save_meta(strategy_id, _strategies[strategy_id])
-    except Exception as e:
-        print(f"[STRATEGY] Meta update after re-validate failed: {e}")
-    return {"ok": validation["valid"], "validation": validation}
+        compile(content, f"{strategy_id}.py", "exec")
+    except SyntaxError as e:
+        return {"ok": False, "error": f"Syntax error: {e}"}
+
+    log_event_db("strategy", "validated",
+                 f"Strategy {strategy_id} passed validation",
+                 strategy_id=strategy_id)
+
+    return {
+        "ok": True,
+        "strategy_id": strategy_id,
+        "class_name": info["class_name"],
+        "valid": True,
+    }
 
 
-def delete_strategy(strategy_id: str) -> dict:
-    """Remove strategy from memory + disk."""
-    with _lock:
-        rec = _strategies.pop(strategy_id, None)
-    if not rec:
-        return {"ok": False, "error": "Strategy not found."}
+def load_strategies_from_disk():
+    """Scan data/strategies/ for .py files and register any not already in DB."""
+    _ensure_dir()
+    count = 0
 
-    for path in (_code_path(strategy_id), _meta_path(strategy_id)):
+    for fname in os.listdir(STRATEGY_DIR):
+        if not fname.endswith(".py"):
+            continue
+        fpath = os.path.join(STRATEGY_DIR, fname)
         try:
-            if os.path.exists(path):
-                os.unlink(path)
-                print(f"[STRATEGY] Deleted file: {path}")
-        except OSError as e:
-            print(f"[STRATEGY] Delete failed {path}: {e}")
+            with open(fpath, "r", encoding="utf-8") as f:
+                source = f.read()
+        except Exception:
+            continue
 
-    print(f"[STRATEGY] Removed '{strategy_id}'")
-    return {"ok": True, "strategy_id": strategy_id}
+        info = _extract_strategy_class(source)
+        if info is None:
+            continue
+
+        strategy_id = info.get("strategy_id", "")
+        if not strategy_id:
+            strategy_id = info["class_name"].lower()
+
+        # Check if already in DB
+        existing = get_strategy_db(strategy_id)
+        if existing:
+            continue
+
+        save_strategy(strategy_id, {
+            "filename": fname,
+            "class_name": info["class_name"],
+            "name": info.get("name", info["class_name"]),
+            "description": info.get("description", ""),
+            "version": info.get("version", "1.0"),
+            "min_lookback": info.get("min_lookback", 0),
+            "file_hash": _file_hash(source),
+            "file_path": fpath,
+            "parameters": {},
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "is_valid": True,
+        })
+        count += 1
+
+    if count > 0:
+        log.info(f"Loaded {count} strategies from disk into DB")

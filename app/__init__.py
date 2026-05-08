@@ -44,7 +44,6 @@ def create_app() -> FastAPI:
 
     if os.path.isdir(css_dir):
         app.mount("/css", StaticFiles(directory=css_dir), name="css")
-
     if os.path.isdir(js_dir):
         app.mount("/js", StaticFiles(directory=js_dir), name="js")
 
@@ -52,11 +51,16 @@ def create_app() -> FastAPI:
     async def serve_dashboard():
         return FileResponse(index_path)
 
-    # ── Restore persisted strategies on startup ──────────────
-    # This is the critical fix: without this call, the in-memory
-    # _strategies dict is empty after every server start/reload,
-    # even though .py + .meta.json files exist on disk.
+    # ── Initialize persistence ───────────────────────────────
+    from app.persistence import init_db
+    init_db()
+
+    # ── Restore strategies from disk ─────────────────────────
     from app.services.strategy_registry import load_strategies_from_disk
     load_strategies_from_disk()
+
+    # ── Load workers from DB into memory cache ───────────────
+    from app.services.mainServices import _load_workers_from_db
+    _load_workers_from_db()
 
     return app

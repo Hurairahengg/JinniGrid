@@ -1,6 +1,11 @@
 """
 JINNI GRID — Combined Worker Runtime
 worker/strategyWorker.py
+
+Uses:
+  worker/indicators.py  — HMA/WMA/SMA/EMA precompute + IndicatorEngine
+  worker/execution.py   — ExecutionLogger, MT5Executor, signal validation,
+                           SL/TP computation, trade records, PositionState
 """
 
 from __future__ import annotations
@@ -15,25 +20,16 @@ import traceback
 import types
 from abc import ABC, abstractmethod
 from collections import deque
-from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-
-# =============================================================================
-# Signal Constants
-# =============================================================================
-
-SIGNAL_BUY = "BUY"
-SIGNAL_SELL = "SELL"
-SIGNAL_HOLD = "HOLD"
-SIGNAL_CLOSE = "CLOSE"
-SIGNAL_CLOSE_LONG = "CLOSE_LONG"
-SIGNAL_CLOSE_SHORT = "CLOSE_SHORT"
-VALID_SIGNALS = {
+from worker.indicators import IndicatorEngine, precompute_indicator_series
+from worker.execution import (
     SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
-    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, None,
-}
+    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, VALID_SIGNALS,
+    PositionState, ExecutionLogger, MT5Executor,
+    validate_signal, compute_sl, compute_tp, build_trade_record,
+)
 
 
 # =============================================================================
@@ -49,10 +45,8 @@ class BaseStrategy(ABC):
 
     def get_metadata(self) -> Dict[str, Any]:
         return {
-            "id": self.strategy_id,
-            "name": self.name or self.strategy_id,
-            "description": self.description or "",
-            "version": self.version,
+            "id": self.strategy_id, "name": self.name or self.strategy_id,
+            "description": self.description or "", "version": self.version,
             "min_lookback": self.min_lookback,
             "parameters": self.get_parameter_schema(),
         }
@@ -91,18 +85,6 @@ class BaseStrategy(ABC):
 # =============================================================================
 # Strategy Context
 # =============================================================================
-
-@dataclass
-class PositionState:
-    has_position: bool = False
-    direction: Optional[str] = None
-    entry_price: Optional[float] = None
-    sl: Optional[float] = None
-    tp: Optional[float] = None
-    size: Optional[float] = None
-    ticket: Optional[int] = None
-    profit: Optional[float] = None
-
 
 class StrategyContext:
     def __init__(self, bars: list, params: dict,
@@ -232,7 +214,6 @@ class RangeBarEngine:
 
         while True:
             o = self.bar["open"]
-
             if self.trend == 0:
                 up_t, dn_t = o + rs, o - rs
                 if p >= up_t:
@@ -261,7 +242,6 @@ class RangeBarEngine:
                 self.bar["low"] = min(self.bar["low"], p)
                 self.bar["close"] = p
                 break
-
             if self.trend == 1:
                 cont_t, rev_t = o + rs, o - (2 * rs)
                 if p >= cont_t:
@@ -288,7 +268,6 @@ class RangeBarEngine:
                 self.bar["low"] = min(self.bar["low"], p)
                 self.bar["close"] = p
                 break
-
             if self.trend == -1:
                 cont_t, rev_t = o - rs, o + (2 * rs)
                 if p <= cont_t:
@@ -326,7 +305,7 @@ class RangeBarEngine:
 
 
 # =============================================================================
-# MT5 Tick Normalizer
+# MT5 Tick Normalizer + Connector
 # =============================================================================
 
 def _tick_field(raw, field: str, default: float = 0.0) -> float:
@@ -342,7 +321,6 @@ def _tick_field(raw, field: str, default: float = 0.0) -> float:
 
 
 def normalize_tick(raw) -> Optional[dict]:
-    """Convert raw MT5 tick (numpy.void or object) into clean dict."""
     ts_val = _tick_field(raw, "time", -1.0)
     if ts_val < 0:
         return None
@@ -360,10 +338,6 @@ def normalize_tick(raw) -> Optional[dict]:
             "bid": bid, "ask": ask, "last": last, "volume": volume}
 
 
-# =============================================================================
-# MT5 Connector
-# =============================================================================
-
 def _import_mt5():
     try:
         import MetaTrader5 as mt5
@@ -377,15 +351,12 @@ def init_mt5() -> Tuple[bool, str]:
     if mt5 is None:
         return False, "MetaTrader5 package not installed."
     if not mt5.initialize():
-        err = mt5.last_error()
-        return False, f"MT5 initialize() failed: {err}"
+        return False, f"MT5 initialize() failed: {mt5.last_error()}"
     info = mt5.terminal_info()
     if info is None:
         return False, "MT5 terminal_info() returned None."
     account = mt5.account_info()
-    acct_str = ""
-    if account:
-        acct_str = f" | account={account.login} broker={account.company}"
+    acct_str = f" | account={account.login} broker={account.company}" if account else ""
     print(f"[MT5] Connected: {info.name}{acct_str}")
     return True, "ok"
 
@@ -397,7 +368,6 @@ def shutdown_mt5() -> None:
 
 
 def get_mt5_account_info() -> Optional[dict]:
-    """Query MT5 for current account info."""
     mt5 = _import_mt5()
     if mt5 is None:
         return None
@@ -415,8 +385,7 @@ def get_mt5_account_info() -> Optional[dict]:
     }
 
 
-def fetch_historical_ticks(symbol: str, lookback_value: int,
-                           lookback_unit: str) -> Tuple[Optional[list], str]:
+def fetch_historical_ticks(symbol, lookback_value, lookback_unit):
     mt5 = _import_mt5()
     if mt5 is None:
         return None, "MetaTrader5 package not installed."
@@ -435,31 +404,24 @@ def fetch_historical_ticks(symbol: str, lookback_value: int,
     if not symbol_info.visible:
         if not mt5.symbol_select(symbol, True):
             return None, f"Failed to enable symbol '{symbol}' in MT5."
-    print(f"[MT5] Fetching ticks: {symbol} from {from_time.isoformat()} to {now.isoformat()}")
+    print(f"[MT5] Fetching ticks: {symbol} from {from_time.isoformat()}")
     ticks = mt5.copy_ticks_range(symbol, from_time, now, mt5.COPY_TICKS_ALL)
     if ticks is None or len(ticks) == 0:
-        err = mt5.last_error()
-        return None, f"No ticks returned for {symbol}. MT5 error: {err}"
+        return None, f"No ticks for {symbol}. MT5 error: {mt5.last_error()}"
     result, skipped = [], 0
-    try:
-        for raw_tick in ticks:
-            n = normalize_tick(raw_tick)
-            if n is None:
-                skipped += 1
-                continue
-            result.append({"ts": n["ts"], "price": n["price"], "volume": n["volume"]})
-    except Exception as exc:
-        tb = traceback.format_exc()
-        return None, f"Tick processing error: {type(exc).__name__}: {exc}\n{tb}"
-    if skipped > 0:
-        print(f"[MT5] Skipped {skipped} ticks with no valid price for {symbol}")
-    if len(result) == 0:
-        return None, f"All {len(ticks)} ticks had no valid price. Skipped: {skipped}"
-    print(f"[MT5] Got {len(result)} usable ticks for {symbol} (skipped {skipped})")
+    for raw_tick in ticks:
+        n = normalize_tick(raw_tick)
+        if n is None:
+            skipped += 1
+            continue
+        result.append({"ts": n["ts"], "price": n["price"], "volume": n["volume"]})
+    if not result:
+        return None, f"All {len(ticks)} ticks had no valid price."
+    print(f"[MT5] Got {len(result)} ticks for {symbol} (skipped {skipped})")
     return result, "ok"
 
 
-def stream_live_ticks(symbol: str, poll_interval: float = 0.05):
+def stream_live_ticks(symbol, poll_interval=0.05):
     mt5 = _import_mt5()
     if mt5 is None:
         raise RuntimeError("MetaTrader5 package not installed.")
@@ -491,381 +453,6 @@ class _MT5ConnectorFacade:
 
 
 mt5_connector = _MT5ConnectorFacade()
-
-
-# =============================================================================
-# Execution Logger
-# =============================================================================
-
-class ExecutionLogger:
-    """Dedicated [EXEC] logger for all trade decisions."""
-
-    def __init__(self, deployment_id: str, symbol: str):
-        self.deployment_id = deployment_id
-        self.symbol = symbol
-        self.buys_attempted = 0
-        self.buys_filled = 0
-        self.sells_attempted = 0
-        self.sells_filled = 0
-        self.closes_attempted = 0
-        self.closes_filled = 0
-        self.holds = 0
-        self.skips = 0
-        self.rejections = 0
-        self.modifications = 0
-
-    def _ts(self) -> str:
-        return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-
-    def _pos_str(self, pos: PositionState) -> str:
-        if not pos or not pos.has_position:
-            return "FLAT"
-        d = (pos.direction or "?").upper()
-        p = f"@{pos.entry_price:.5f}" if pos.entry_price else ""
-        s = f"x{pos.size}" if pos.size else ""
-        pnl = f" pnl={pos.profit:.2f}" if pos.profit is not None else ""
-        return f"{d}{p}{s}{pnl}"
-
-    def log_signal(self, action: str, bar_idx: int, bar_time, price,
-                   pos: PositionState):
-        print(
-            f"[EXEC] {self._ts()} | {action} | {self.symbol} | "
-            f"bar={bar_idx} t={bar_time} | price={price} | "
-            f"pos={self._pos_str(pos)}"
-        )
-
-    def log_open(self, direction: str, result: dict, sl=None, tp=None):
-        if direction == "BUY":
-            self.buys_attempted += 1
-        else:
-            self.sells_attempted += 1
-
-        if result.get("success"):
-            if direction == "BUY":
-                self.buys_filled += 1
-            else:
-                self.sells_filled += 1
-            print(
-                f"[EXEC]   -> OPENED {direction} | "
-                f"ticket={result.get('ticket')} "
-                f"price={result.get('price', 0):.5f} "
-                f"vol={result.get('volume', 0)} "
-                f"sl={sl} tp={tp}"
-            )
-        else:
-            self.rejections += 1
-            print(
-                f"[EXEC]   -> REJECTED {direction} | "
-                f"error={result.get('error', 'unknown')}"
-            )
-
-    def log_close(self, results: list):
-        self.closes_attempted += 1
-        for r in results:
-            if r.get("success"):
-                self.closes_filled += 1
-                print(
-                    f"[EXEC]   -> CLOSED ticket={r.get('ticket')} "
-                    f"price={r.get('price', 0):.5f} "
-                    f"profit={r.get('profit', 0):.2f}"
-                )
-            else:
-                self.rejections += 1
-                print(
-                    f"[EXEC]   -> CLOSE FAILED ticket={r.get('ticket', '?')} "
-                    f"error={r.get('error', 'unknown')}"
-                )
-
-    def log_skip(self, action: str, reason: str):
-        self.skips += 1
-        print(f"[EXEC]   -> SKIPPED {action} | reason={reason}")
-
-    def log_hold(self):
-        self.holds += 1
-
-    def log_modify(self, result: dict, sl=None, tp=None):
-        self.modifications += 1
-        if result.get("success"):
-            print(f"[EXEC]   -> MODIFIED sl={sl} tp={tp}")
-        else:
-            print(f"[EXEC]   -> MODIFY FAILED error={result.get('error')}")
-
-    def get_stats(self) -> dict:
-        return {
-            "buys_attempted": self.buys_attempted,
-            "buys_filled": self.buys_filled,
-            "sells_attempted": self.sells_attempted,
-            "sells_filled": self.sells_filled,
-            "closes_attempted": self.closes_attempted,
-            "closes_filled": self.closes_filled,
-            "holds": self.holds,
-            "skips": self.skips,
-            "rejections": self.rejections,
-            "modifications": self.modifications,
-        }
-
-
-# =============================================================================
-# MT5 Trade Executor
-# =============================================================================
-
-class MT5Executor:
-    """Handles all real MT5 order execution."""
-
-    def __init__(self, symbol: str, lot_size: float, deployment_id: str):
-        self.symbol = symbol
-        self.lot_size = lot_size
-        self.magic = self._make_magic(deployment_id)
-        self._mt5 = _import_mt5()
-        self._filling_mode = None
-
-        if self._mt5:
-            self._filling_mode = self._detect_filling()
-            print(
-                f"[EXECUTOR] Ready: symbol={symbol} lot={lot_size} "
-                f"magic={self.magic} filling={self._filling_mode}"
-            )
-        else:
-            print("[EXECUTOR] WARNING: MT5 not available. Execution disabled.")
-
-    @staticmethod
-    def _make_magic(deployment_id: str) -> int:
-        h = 0
-        for c in deployment_id:
-            h = (h * 31 + ord(c)) & 0xFFFFFFFF
-        return (h % 900000) + 100000
-
-    def _detect_filling(self) -> int:
-        mt5 = self._mt5
-        info = mt5.symbol_info(self.symbol)
-        if info is None:
-            return 1  # IOC fallback
-        fm = info.filling_mode
-        if fm & 2:
-            return 1  # ORDER_FILLING_IOC
-        elif fm & 1:
-            return 0  # ORDER_FILLING_FOK
-        else:
-            return 2  # ORDER_FILLING_RETURN
-
-    # ── Open Orders ─────────────────────────────────────────
-
-    def open_buy(self, sl=None, tp=None, comment="") -> dict:
-        return self._open_order("buy", sl, tp, comment)
-
-    def open_sell(self, sl=None, tp=None, comment="") -> dict:
-        return self._open_order("sell", sl, tp, comment)
-
-    def _open_order(self, direction: str, sl=None, tp=None,
-                    comment="") -> dict:
-        mt5 = self._mt5
-        if mt5 is None:
-            return {"success": False, "error": "MT5 not available"}
-
-        tick = mt5.symbol_info_tick(self.symbol)
-        if tick is None:
-            return {"success": False,
-                    "error": f"No tick data for {self.symbol}"}
-
-        is_buy = direction == "buy"
-        price = tick.ask if is_buy else tick.bid
-        order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": self.symbol,
-            "volume": self.lot_size,
-            "type": order_type,
-            "price": price,
-            "deviation": 30,
-            "magic": self.magic,
-            "comment": comment or f"JG_{direction}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": self._filling_mode,
-        }
-
-        if sl is not None and sl > 0:
-            request["sl"] = float(sl)
-        if tp is not None and tp > 0:
-            request["tp"] = float(tp)
-
-        print(f"[EXECUTOR] Sending {direction.upper()}: {request}")
-
-        result = mt5.order_send(request)
-        if result is None:
-            err = mt5.last_error()
-            return {"success": False, "error": f"order_send returned None: {err}"}
-
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {
-                "success": False,
-                "error": f"retcode={result.retcode} comment={result.comment}",
-                "retcode": result.retcode,
-            }
-
-        return {
-            "success": True,
-            "ticket": result.order,
-            "price": result.price,
-            "volume": result.volume,
-        }
-
-    # ── Close Orders ────────────────────────────────────────
-
-    def close_position(self, ticket: int, pos_type: int,
-                       volume: float, profit: float) -> dict:
-        mt5 = self._mt5
-        if mt5 is None:
-            return {"success": False, "ticket": ticket,
-                    "error": "MT5 not available"}
-
-        tick = mt5.symbol_info_tick(self.symbol)
-        if tick is None:
-            return {"success": False, "ticket": ticket,
-                    "error": f"No tick for {self.symbol}"}
-
-        # Opposite direction to close
-        is_long = (pos_type == 0)
-        close_price = tick.bid if is_long else tick.ask
-        close_type = mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": self.symbol,
-            "volume": volume,
-            "type": close_type,
-            "position": ticket,
-            "price": close_price,
-            "deviation": 30,
-            "magic": self.magic,
-            "comment": "JG_close",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": self._filling_mode,
-        }
-
-        print(f"[EXECUTOR] Closing ticket={ticket}: {request}")
-        result = mt5.order_send(request)
-
-        if result is None:
-            err = mt5.last_error()
-            return {"success": False, "ticket": ticket,
-                    "error": f"order_send None: {err}"}
-
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {
-                "success": False, "ticket": ticket,
-                "error": f"retcode={result.retcode} comment={result.comment}",
-            }
-
-        return {
-            "success": True, "ticket": ticket,
-            "price": result.price, "volume": volume,
-            "profit": profit,
-        }
-
-    def close_all_positions(self) -> list:
-        positions = self.get_positions()
-        results = []
-        for p in positions:
-            r = self.close_position(
-                p["ticket"], p["type"], p["volume"], p["profit"]
-            )
-            results.append(r)
-        return results
-
-    def close_long_positions(self) -> list:
-        positions = [p for p in self.get_positions() if p["type"] == 0]
-        results = []
-        for p in positions:
-            r = self.close_position(
-                p["ticket"], p["type"], p["volume"], p["profit"]
-            )
-            results.append(r)
-        return results
-
-    def close_short_positions(self) -> list:
-        positions = [p for p in self.get_positions() if p["type"] == 1]
-        results = []
-        for p in positions:
-            r = self.close_position(
-                p["ticket"], p["type"], p["volume"], p["profit"]
-            )
-            results.append(r)
-        return results
-
-    # ── Modify SL/TP ────────────────────────────────────────
-
-    def modify_sl_tp(self, ticket: int, sl=None, tp=None) -> dict:
-        mt5 = self._mt5
-        if mt5 is None:
-            return {"success": False, "error": "MT5 not available"}
-
-        positions = mt5.positions_get(ticket=ticket)
-        if positions is None or len(positions) == 0:
-            return {"success": False, "error": f"Position {ticket} not found"}
-
-        pos = positions[0]
-        new_sl = float(sl) if sl is not None else pos.sl
-        new_tp = float(tp) if tp is not None else pos.tp
-
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": self.symbol,
-            "position": ticket,
-            "sl": new_sl,
-            "tp": new_tp,
-        }
-
-        result = mt5.order_send(request)
-        if result is None:
-            return {"success": False, "error": "order_send returned None"}
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {"success": False,
-                    "error": f"retcode={result.retcode} comment={result.comment}"}
-        return {"success": True, "sl": new_sl, "tp": new_tp}
-
-    # ── Query ───────────────────────────────────────────────
-
-    def get_positions(self) -> list:
-        mt5 = self._mt5
-        if mt5 is None:
-            return []
-        positions = mt5.positions_get(symbol=self.symbol)
-        if positions is None:
-            return []
-        result = []
-        for p in positions:
-            if p.magic != self.magic:
-                continue
-            result.append({
-                "ticket": p.ticket, "type": p.type,
-                "volume": p.volume, "price_open": p.price_open,
-                "sl": p.sl, "tp": p.tp, "profit": p.profit,
-                "symbol": p.symbol, "magic": p.magic,
-            })
-        return result
-
-    def get_floating_pnl(self) -> float:
-        return sum(p["profit"] for p in self.get_positions())
-
-    def get_open_count(self) -> int:
-        return len(self.get_positions())
-
-    def get_position_state(self) -> PositionState:
-        positions = self.get_positions()
-        if not positions:
-            return PositionState(has_position=False)
-        p = positions[0]
-        return PositionState(
-            has_position=True,
-            direction="long" if p["type"] == 0 else "short",
-            entry_price=p["price_open"],
-            sl=p["sl"] if p["sl"] != 0 else None,
-            tp=p["tp"] if p["tp"] != 0 else None,
-            size=p["volume"],
-            ticket=p["ticket"],
-            profit=p["profit"],
-        )
 
 
 # =============================================================================
@@ -902,7 +489,7 @@ def load_strategy_from_source(source_code: str, class_name: str,
         return instance, None
     except Exception as exc:
         tb = traceback.format_exc()
-        print(f"[LOADER] Failed to load strategy: {exc}\n{tb}")
+        print(f"[LOADER] Failed: {exc}\n{tb}")
         return None, f"{type(exc).__name__}: {exc}"
 
 
@@ -947,6 +534,7 @@ class StrategyRunner:
         self._bar_engine: Optional[RangeBarEngine] = None
         self._executor: Optional[MT5Executor] = None
         self._exec_log: Optional[ExecutionLogger] = None
+        self._indicator_engine: Optional[IndicatorEngine] = None
         self._runner_state: str = "idle"
         self._last_signal: Optional[dict] = None
         self._last_error: Optional[str] = None
@@ -971,6 +559,10 @@ class StrategyRunner:
         self._warmup_signal_count: int = 0
         self._last_bar_time: Optional[int] = None
         self._current_price: Optional[float] = None
+        self._trade_counter: int = 0
+
+        # Active trade tracking (for MA-cross exit + trade records)
+        self._active_trade_meta: Optional[dict] = None
 
     # ── Diagnostics ─────────────────────────────────────────
 
@@ -979,7 +571,6 @@ class StrategyRunner:
         open_count = self._executor.get_open_count() if self._executor else 0
         floating = self._executor.get_floating_pnl() if self._executor else 0.0
 
-        # Refresh MT5 account equity/balance if available
         if self._executor and self._executor._mt5:
             try:
                 acct = self._executor._mt5.account_info()
@@ -1014,6 +605,7 @@ class StrategyRunner:
             "started_at": self._started_at,
             "open_positions_count": open_count,
             "floating_pnl": floating,
+            "trade_count": self._trade_counter,
             **{f"exec_{k}": v for k, v in exec_stats.items()},
         }
 
@@ -1073,12 +665,15 @@ class StrategyRunner:
 
     def _refresh_position(self):
         if self._executor:
-            self._ctx.position = self._executor.get_position_state()
+            pos = self._executor.get_position_state()
+            if self._active_trade_meta and pos.has_position:
+                pos.entry_bar = self._active_trade_meta.get("entry_bar")
+            self._ctx.position = pos
 
     # ── Pipeline Log ────────────────────────────────────────
 
-    def _log_pipeline(self, ctx: str = ""):
-        c = f" [{ctx}]" if ctx else ""
+    def _log_pipeline(self, label: str = ""):
+        c = f" [{label}]" if label else ""
         exec_s = self._exec_log.get_stats() if self._exec_log else {}
         pos_n = self._executor.get_open_count() if self._executor else 0
         print(
@@ -1087,15 +682,106 @@ class StrategyRunner:
             f"bars={self._total_bars_produced} "
             f"on_bar={self._on_bar_call_count} "
             f"signals={self._signal_count} "
-            f"buys_filled={exec_s.get('buys_filled', 0)} "
-            f"sells_filled={exec_s.get('sells_filled', 0)} "
+            f"buys={exec_s.get('buys_filled', 0)} "
+            f"sells={exec_s.get('sells_filled', 0)} "
             f"closes={exec_s.get('closes_filled', 0)} "
-            f"skips={exec_s.get('skips', 0)} "
-            f"rejects={exec_s.get('rejections', 0)} "
+            f"ma_exits={exec_s.get('ma_cross_exits', 0)} "
             f"positions={pos_n} "
-            f"price={self._current_price} "
-            f"state={self._runner_state}"
+            f"trades={self._trade_counter} "
+            f"price={self._current_price}"
         )
+
+    # ── MA-Cross Exit Check ─────────────────────────────────
+
+    def _check_ma_cross_exit(self, bar: dict) -> bool:
+        """
+        Check if any engine-level MA cross exit triggers.
+        Matches JINNI ZERO backtester _check_exit() MA cross logic.
+        Returns True if a position was closed.
+        """
+        if not self._active_trade_meta:
+            return False
+
+        pos = self._ctx.position
+        if not pos.has_position:
+            return False
+
+        close_price = float(bar.get("close", 0))
+        direction = pos.direction
+
+        # Check TP MA cross
+        tp_ma_key = self._active_trade_meta.get("engine_tp_ma_key")
+        if tp_ma_key:
+            tp_ma_val = self._ctx.indicators.get(tp_ma_key)
+            if tp_ma_val is not None:
+                if direction == "long" and close_price < tp_ma_val:
+                    self._exec_log.log_ma_cross_exit(tp_ma_key, direction,
+                                                     tp_ma_val, close_price)
+                    self._close_and_record("MA_TP_EXIT", bar)
+                    return True
+                if direction == "short" and close_price > tp_ma_val:
+                    self._exec_log.log_ma_cross_exit(tp_ma_key, direction,
+                                                     tp_ma_val, close_price)
+                    self._close_and_record("MA_TP_EXIT", bar)
+                    return True
+
+        # Check SL MA cross
+        sl_ma_key = self._active_trade_meta.get("engine_sl_ma_key")
+        if sl_ma_key:
+            sl_ma_val = self._ctx.indicators.get(sl_ma_key)
+            if sl_ma_val is not None:
+                if direction == "long" and close_price < sl_ma_val:
+                    self._exec_log.log_ma_cross_exit(sl_ma_key, direction,
+                                                     sl_ma_val, close_price)
+                    self._close_and_record("MA_SL_EXIT", bar)
+                    return True
+                if direction == "short" and close_price > sl_ma_val:
+                    self._exec_log.log_ma_cross_exit(sl_ma_key, direction,
+                                                     sl_ma_val, close_price)
+                    self._close_and_record("MA_SL_EXIT", bar)
+                    return True
+
+        return False
+
+    # ── Close + Record Trade ────────────────────────────────
+
+    def _close_and_record(self, reason: str, bar: dict):
+        """Close all positions and write trade record to ctx._trades."""
+        pos = self._ctx.position
+        if not pos.has_position:
+            return
+
+        results = self._executor.close_all_positions()
+        self._exec_log.log_close(results, reason=reason)
+
+        # Build trade record
+        meta = self._active_trade_meta or {}
+        for r in results:
+            if r.get("success"):
+                self._trade_counter += 1
+                record = build_trade_record(
+                    trade_id=self._trade_counter,
+                    direction=pos.direction or "long",
+                    entry_price=pos.entry_price or 0,
+                    entry_bar=meta.get("entry_bar", self._bar_index),
+                    entry_time=meta.get("entry_time", bar.get("time", 0)),
+                    exit_price=r.get("price", 0),
+                    exit_bar=self._bar_index,
+                    exit_time=bar.get("time", 0),
+                    exit_reason=reason,
+                    sl=pos.sl,
+                    tp=pos.tp,
+                    lot_size=pos.size or self.lot_size,
+                    ticket=r.get("ticket"),
+                    profit=r.get("profit", 0),
+                )
+                self._ctx._trades.append(record)
+                print(f"[TRADE #{self._trade_counter}] {record['direction'].upper()} "
+                      f"entry={record['entry_price']} exit={record['exit_price']} "
+                      f"reason={reason} profit={record.get('profit', 0):.2f}")
+
+        self._active_trade_meta = None
+        self._refresh_position()
 
     # ── Bar Callback ────────────────────────────────────────
 
@@ -1113,8 +799,18 @@ class StrategyRunner:
         self._ctx.index = len(bars_list) - 1
         self._bar_index = self._ctx.index
 
-        # Refresh real position from MT5 before calling strategy
+        # Update indicators
+        if self._indicator_engine:
+            self._indicator_engine.update(bars_list, self._ctx)
+
+        # Refresh real position from MT5
         self._refresh_position()
+
+        # Check engine-level MA cross exits BEFORE calling strategy
+        if self._ctx.position.has_position:
+            if self._check_ma_cross_exit(bar):
+                # Position was closed by MA cross — strategy will see flat
+                self._refresh_position()
 
         min_lb = getattr(self._strategy, "min_lookback", 0) or 0
         if self._ctx.index < min_lb:
@@ -1123,7 +819,7 @@ class StrategyRunner:
         self._on_bar_call_count += 1
 
         try:
-            signal = self._strategy.on_bar(self._ctx)
+            raw_signal = self._strategy.on_bar(self._ctx)
         except Exception as exc:
             tb = traceback.format_exc()
             print(f"[RUNNER] on_bar() error: {exc}\n{tb}")
@@ -1131,100 +827,152 @@ class StrategyRunner:
             self._stop_event.set()
             return
 
-        self._handle_signal(signal)
+        action = validate_signal(raw_signal, self._bar_index)
+        self._handle_signal(action, bar)
 
         if self._on_bar_call_count % 50 == 0:
             self._log_pipeline("LIVE_BAR")
 
     # ── Signal Handling + Execution ─────────────────────────
 
-    def _handle_signal(self, signal: Optional[dict]):
-        if signal is None:
-            return
-
-        action = signal.get("signal")
-        if action not in VALID_SIGNALS:
-            print(f"[RUNNER] Invalid signal: {action}")
+    def _handle_signal(self, action: dict, bar: dict):
+        sig = action.get("signal")
+        if sig not in VALID_SIGNALS:
             return
 
         pos = self._ctx.position
-        sl = signal.get("sl")
-        tp = signal.get("tp")
-        comment = signal.get("comment", "")
 
-        # Log the signal
         self._exec_log.log_signal(
-            action, self._bar_index, self._last_bar_time,
+            sig, self._bar_index, self._last_bar_time,
             self._current_price, pos,
         )
 
         # ── HOLD ────────────────────────────────────────
-        if action == SIGNAL_HOLD:
+        if sig == SIGNAL_HOLD:
             self._exec_log.log_hold()
-            if "update_sl" in signal or "update_tp" in signal:
-                self._handle_modify(signal)
+            if "update_sl" in action or "update_tp" in action:
+                self._handle_modify(action)
             return
 
-        self._last_signal = signal
-        self._signal_count += 1
-
-        # ── BUY ─────────────────────────────────────────
-        if action == SIGNAL_BUY:
-            if pos.has_position and pos.direction == "long":
-                self._exec_log.log_skip("BUY", "already long")
-                return
-            if pos.has_position and pos.direction == "short":
-                results = self._executor.close_all_positions()
-                self._exec_log.log_close(results)
-            result = self._executor.open_buy(sl=sl, tp=tp, comment=comment)
-            self._exec_log.log_open("BUY", result, sl, tp)
-
-        # ── SELL ────────────────────────────────────────
-        elif action == SIGNAL_SELL:
-            if pos.has_position and pos.direction == "short":
-                self._exec_log.log_skip("SELL", "already short")
-                return
-            if pos.has_position and pos.direction == "long":
-                results = self._executor.close_all_positions()
-                self._exec_log.log_close(results)
-            result = self._executor.open_sell(sl=sl, tp=tp, comment=comment)
-            self._exec_log.log_open("SELL", result, sl, tp)
-
-        # ── CLOSE ───────────────────────────────────────
-        elif action == SIGNAL_CLOSE:
+        # ── CLOSE variants ──────────────────────────────
+        if sig == SIGNAL_CLOSE or action.get("close"):
             if not pos.has_position:
                 self._exec_log.log_skip("CLOSE", "no position")
                 return
-            results = self._executor.close_all_positions()
-            self._exec_log.log_close(results)
+            reason = action.get("close_reason", "strategy_close")
+            self._close_and_record(reason, bar)
+            self._signal_count += 1
+            self._last_signal = action
+            return
 
-        # ── CLOSE_LONG ──────────────────────────────────
-        elif action == SIGNAL_CLOSE_LONG:
-            results = self._executor.close_long_positions()
-            if not results:
-                self._exec_log.log_skip("CLOSE_LONG", "no long positions")
+        if sig == SIGNAL_CLOSE_LONG:
+            if not pos.has_position or pos.direction != "long":
+                self._exec_log.log_skip("CLOSE_LONG", "no long position")
                 return
-            self._exec_log.log_close(results)
+            self._close_and_record("strategy_close_long", bar)
+            self._signal_count += 1
+            self._last_signal = action
+            return
 
-        # ── CLOSE_SHORT ─────────────────────────────────
-        elif action == SIGNAL_CLOSE_SHORT:
-            results = self._executor.close_short_positions()
-            if not results:
-                self._exec_log.log_skip("CLOSE_SHORT", "no short positions")
+        if sig == SIGNAL_CLOSE_SHORT:
+            if not pos.has_position or pos.direction != "short":
+                self._exec_log.log_skip("CLOSE_SHORT", "no short position")
                 return
-            self._exec_log.log_close(results)
+            self._close_and_record("strategy_close_short", bar)
+            self._signal_count += 1
+            self._last_signal = action
+            return
 
-        # Refresh position after any execution
+        # ── BUY / SELL ──────────────────────────────────
+        if sig not in (SIGNAL_BUY, SIGNAL_SELL):
+            return
+
+        self._signal_count += 1
+        self._last_signal = action
+        direction = "long" if sig == SIGNAL_BUY else "short"
+
+        # Already in same direction
+        if pos.has_position and pos.direction == direction:
+            self._exec_log.log_skip(sig, f"already {direction}")
+            return
+
+        # In opposite direction — close first
+        if pos.has_position:
+            self._close_and_record("reverse", bar)
+
+        # Compute SL from signal (ma_snapshot, fixed, or direct)
+        entry_estimate = self._current_price or float(bar.get("close", 0))
+        sl_price = compute_sl(action, entry_estimate, direction)
+        tp_price = compute_tp(action, entry_estimate, sl_price, direction)
+
+        # Validate SL/TP sanity
+        if sl_price is not None:
+            if direction == "long" and sl_price >= entry_estimate:
+                print(f"[EXEC] WARNING: Long SL {sl_price} >= entry {entry_estimate}, clearing SL")
+                sl_price = None
+            elif direction == "short" and sl_price <= entry_estimate:
+                print(f"[EXEC] WARNING: Short SL {sl_price} <= entry {entry_estimate}, clearing SL")
+                sl_price = None
+
+        if tp_price is not None:
+            if direction == "long" and tp_price <= entry_estimate:
+                print(f"[EXEC] WARNING: Long TP {tp_price} <= entry {entry_estimate}, clearing TP")
+                tp_price = None
+            elif direction == "short" and tp_price >= entry_estimate:
+                print(f"[EXEC] WARNING: Short TP {tp_price} >= entry {entry_estimate}, clearing TP")
+                tp_price = None
+
+        comment = action.get("comment", f"JG_{sig}")
+
+        # Execute
+        if sig == SIGNAL_BUY:
+            result = self._executor.open_buy(sl=sl_price, tp=tp_price, comment=comment)
+        else:
+            result = self._executor.open_sell(sl=sl_price, tp=tp_price, comment=comment)
+
+        self._exec_log.log_open(sig, result, sl_price, tp_price)
+
+        if result.get("success"):
+            fill_price = result.get("price", entry_estimate)
+
+            # Recompute TP from actual fill price for R-multiple
+            if action.get("tp_mode") == "r_multiple" and sl_price is not None:
+                real_risk = abs(fill_price - sl_price)
+                r = float(action.get("tp_r", 1.0))
+                if real_risk > 0:
+                    if direction == "long":
+                        tp_price = round(fill_price + real_risk * r, 5)
+                    else:
+                        tp_price = round(fill_price - real_risk * r, 5)
+                    # Modify TP on the position
+                    mod_result = self._executor.modify_sl_tp(
+                        result["ticket"], sl=sl_price, tp=tp_price
+                    )
+                    self._exec_log.log_modify(mod_result, sl=sl_price, tp=tp_price)
+
+            # Store trade metadata for MA-cross exits + trade records
+            self._active_trade_meta = {
+                "entry_bar": self._bar_index,
+                "entry_time": bar.get("time", 0),
+                "entry_price": fill_price,
+                "direction": direction,
+                "sl": sl_price,
+                "tp": tp_price,
+                "ticket": result.get("ticket"),
+                "engine_sl_ma_key": action.get("engine_sl_ma_key"),
+                "engine_tp_ma_key": action.get("engine_tp_ma_key"),
+            }
+
         self._refresh_position()
         self._report_status()
 
-    def _handle_modify(self, signal: dict):
+    def _handle_modify(self, action: dict):
         pos = self._ctx.position
         if not pos.has_position or not pos.ticket:
             self._exec_log.log_skip("MODIFY", "no position")
             return
-        new_sl = signal.get("update_sl")
-        new_tp = signal.get("update_tp")
+        new_sl = action.get("update_sl")
+        new_tp = action.get("update_tp")
         result = self._executor.modify_sl_tp(pos.ticket, sl=new_sl, tp=new_tp)
         self._exec_log.log_modify(result, sl=new_sl, tp=new_tp)
         self._refresh_position()
@@ -1270,13 +1018,19 @@ class StrategyRunner:
         self._strategy = strategy_instance
         params = self._strategy.validate_parameters(self.strategy_parameters)
         self._ctx = StrategyContext(bars=[], params=params)
+
+        # Build indicator engine from strategy declarations
+        indicator_defs = self._strategy.build_indicators(params)
+        self._indicator_engine = IndicatorEngine(indicator_defs)
+
         try:
             self._strategy.on_init(self._ctx)
         except Exception as exc:
             self._set_state("failed", f"on_init() failed: {type(exc).__name__}: {exc}")
             return
         print(f"[RUNNER] Strategy loaded: {self.class_name} | "
-              f"min_lookback={getattr(self._strategy, 'min_lookback', 0)} | params={params}")
+              f"min_lookback={getattr(self._strategy, 'min_lookback', 0)} | "
+              f"indicators={len(indicator_defs)} | params={params}")
 
         # Phase 2: Init MT5
         ok, msg = mt5_connector.init_mt5()
@@ -1306,7 +1060,7 @@ class StrategyRunner:
         self._current_price = ticks[-1]["price"]
         print(f"[RUNNER] Fetched {len(ticks)} historical ticks for {self.symbol}")
 
-# Phase 4: Generate Initial Bars
+        # Phase 4: Generate Initial Bars
         self._set_state("generating_initial_bars")
         self._bar_engine = RangeBarEngine(
             bar_size_points=self.bar_size_points,
@@ -1321,24 +1075,20 @@ class StrategyRunner:
         if self._bar_engine.bars:
             self._last_bar_time = self._bar_engine.bars[-1].get("time")
 
-        print(
-            f"[RUNNER] Initial bars: {initial_count} "
-            f"(total emitted: {self._total_bars_produced}) "
-            f"(from {len(ticks)} ticks, bar_size={self.bar_size_points}pt)"
-        )
+        print(f"[RUNNER] Initial bars: {initial_count} "
+              f"(total emitted: {self._total_bars_produced}) "
+              f"(from {len(ticks)} ticks, bar_size={self.bar_size_points}pt)")
 
         if initial_count == 0:
-            self._set_state(
-                "failed",
+            self._set_state("failed",
                 f"No bars from {len(ticks)} ticks. "
-                f"bar_size_points={self.bar_size_points} may be too large for {self.symbol}.",
-            )
+                f"bar_size_points={self.bar_size_points} may be too large for {self.symbol}.")
             mt5_connector.shutdown_mt5()
             return
 
         self._log_pipeline("INITIAL_BARS")
 
-        # Phase 5: Warm Up Strategy (signals logged but NOT executed)
+        # Phase 5: Warm Up (signals logged, NOT executed)
         self._set_state("warming_up")
         bars_list = list(self._bar_engine.bars)
         self._ctx._bars = bars_list
@@ -1349,32 +1099,32 @@ class StrategyRunner:
                 return
             self._ctx.index = i
             self._bar_index = i
-            if i < min_lb:
-                continue
-            self._on_bar_call_count += 1
 
-            # Refresh position before warmup bar too
+            # Compute indicators for warmup bars
+            if self._indicator_engine:
+                warmup_slice = bars_list[:i + 1]
+                self._indicator_engine.update(warmup_slice, self._ctx)
+
             self._refresh_position()
 
+            if i < min_lb:
+                continue
+
+            self._on_bar_call_count += 1
             try:
-                signal = self._strategy.on_bar(self._ctx)
-                if signal and signal.get("signal") in (
-                    SIGNAL_BUY, SIGNAL_SELL, SIGNAL_CLOSE,
-                    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT,
-                ):
-                    self._warmup_signal_count += 1
-                    print(
-                        f"[RUNNER] Warmup signal #{self._warmup_signal_count} "
-                        f"at bar {i}: {signal.get('signal')} (NOT executed — warmup only)"
-                    )
+                raw_signal = self._strategy.on_bar(self._ctx)
+                if raw_signal:
+                    s = raw_signal.get("signal")
+                    if s in (SIGNAL_BUY, SIGNAL_SELL, SIGNAL_CLOSE,
+                             SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT):
+                        self._warmup_signal_count += 1
+                        print(f"[RUNNER] Warmup signal #{self._warmup_signal_count} "
+                              f"at bar {i}: {s} (NOT executed)")
             except Exception as exc:
                 print(f"[RUNNER] Warmup on_bar error at bar {i}: {exc}")
 
-        print(
-            f"[RUNNER] Warmup complete. "
-            f"on_bar calls: {self._on_bar_call_count} | "
-            f"warmup signals: {self._warmup_signal_count} (all skipped)"
-        )
+        print(f"[RUNNER] Warmup complete. on_bar calls: {self._on_bar_call_count} | "
+              f"warmup signals: {self._warmup_signal_count} (all skipped)")
         self._log_pipeline("WARMUP_DONE")
 
         # Phase 6: Live Tick Loop (signals ARE executed)
@@ -1386,28 +1136,20 @@ class StrategyRunner:
             for tick in mt5_connector.stream_live_ticks(self.symbol):
                 if self._stop_event.is_set():
                     break
-
                 self._total_ticks_ingested += 1
                 self._current_price = tick["price"]
                 live_tick_count += 1
-
-                self._bar_engine.process_tick(
-                    tick["ts"], tick["price"], tick["volume"],
-                )
-
+                self._bar_engine.process_tick(tick["ts"], tick["price"], tick["volume"])
                 if live_tick_count % 5000 == 0:
                     self._log_pipeline("LIVE_TICK")
-
         except Exception as exc:
             if not self._stop_event.is_set():
                 tb = traceback.format_exc()
                 print(f"[RUNNER] Live loop error: {exc}\n{tb}")
                 self._set_state("failed", f"Live loop error: {type(exc).__name__}: {exc}")
-
         finally:
             self._log_pipeline("SHUTDOWN")
             mt5_connector.shutdown_mt5()
             self._mt5_state = "disconnected"
-
             if not self._stop_event.is_set():
                 self._set_state("stopped")

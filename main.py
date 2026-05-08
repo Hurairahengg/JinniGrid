@@ -6,9 +6,13 @@ Run: python main.py
 import os
 import uvicorn
 
+from app.logging_config import setup_logging
 from app import create_app
 from app.config import Config
 
+
+# Initialize logging BEFORE anything else
+setup_logging()
 
 # App instance at module level so uvicorn reloader can find it
 app = create_app()
@@ -31,24 +35,14 @@ def main():
     print(f"  Dashboard:   http://{host}:{port}")
     print(f"  API docs:    http://{host}:{port}/docs")
     print(f"  Debug mode:  {debug}")
+    print(f"  Database:    data/jinni_grid.db")
+    print(f"  Logs:        data/logs/")
     print("=" * 56)
     print("")
 
     run_kwargs = {"host": host, "port": port, "reload": debug}
 
     if debug:
-        # ── RELOAD FIX ───────────────────────────────────────
-        # The old approach used reload_excludes with glob patterns
-        # like "data/*" — but PurePath.match() does NOT recursively
-        # match "data/strategies/foo.py", so every strategy upload
-        # still triggered a full server reload.
-        #
-        # Fix: whitelist ONLY source directories via reload_dirs.
-        # Writes to data/strategies/ (uploads), data/ (future DB),
-        # or strategies/ (legacy) can never trigger the watcher.
-        #
-        # Trade-off: changes to main.py or config.yaml require a
-        # manual restart. That's fine — config is cached anyway.
         project_root = os.path.dirname(os.path.abspath(__file__))
         run_kwargs["reload_dirs"] = [
             os.path.join(project_root, "app"),
