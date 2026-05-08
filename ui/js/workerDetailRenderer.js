@@ -296,6 +296,16 @@ var WorkerDetailRenderer = (function () {
       if (ptype === 'boolean') {
         input = '<input type="checkbox" class="wd-toggle wd-param-input-ctrl" data-key="' + key + '"' +
           (val ? ' checked' : '') + ' />';
+      } else if (ptype === 'select' && spec.options) {
+        input = '<select class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" style="width:120px;text-align:left;">';
+        spec.options.forEach(function (opt) {
+          var optVal = typeof opt === 'object' ? opt.value : opt;
+          var optLabel = typeof opt === 'object' ? (opt.label || opt.value) : opt;
+          input += '<option value="' + optVal + '"' + (String(optVal) === String(val) ? ' selected' : '') + '>' + optLabel + '</option>';
+        });
+        input += '</select>';
+      } else if (ptype === 'string' || ptype === 'text') {
+        input = '<input type="text" class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" value="' + (val || '') + '" style="width:120px;text-align:left;" />';
       } else {
         var attrs = 'type="number" class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" value="' + val + '"';
         if (spec.min !== undefined && spec.min !== null) attrs += ' min="' + spec.min + '"';
@@ -622,7 +632,10 @@ var WorkerDetailRenderer = (function () {
     document.querySelectorAll('.wd-param-input-ctrl').forEach(function (input) {
       var key = input.getAttribute('data-key');
       var handler = function () {
-        var val = input.type === 'checkbox' ? input.checked : parseFloat(input.value);
+        var val;
+        if (input.type === 'checkbox') val = input.checked;
+        else if (input.tagName === 'SELECT' || input.type === 'text') val = input.value;
+        else val = parseFloat(input.value);
         _parameterValues[key] = val;
         var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
         if (row) {
@@ -697,8 +710,32 @@ var WorkerDetailRenderer = (function () {
               break;
             }
           }
-          _renderStrategyMeta();
-          _loadParamsFromSchema();
+          // If list didn't include full parameters, fetch detail
+          if (_selectedStrategy && (!_selectedStrategy.parameters || Object.keys(_selectedStrategy.parameters).length === 0)) {
+            ApiClient.getStrategy(sid).then(function (data) {
+              if (data.ok && data.strategy) {
+                var detail = data.strategy;
+                // Merge parameters from detail into selected
+                if (detail.parameters && typeof detail.parameters === 'object') {
+                  _selectedStrategy.parameters = detail.parameters;
+                  _selectedStrategy.parameter_count = Object.keys(detail.parameters).length;
+                }
+              }
+              _renderStrategyMeta();
+              _loadParamsFromSchema();
+              _updateChecklist();
+              _addActivity('Strategy selected: ' + sid);
+            }).catch(function () {
+              _renderStrategyMeta();
+              _loadParamsFromSchema();
+              _updateChecklist();
+            });
+          } else {
+            _renderStrategyMeta();
+            _loadParamsFromSchema();
+            _updateChecklist();
+            _addActivity('Strategy selected: ' + sid);
+          }
           _updateChecklist();
           _addActivity('Strategy selected: ' + sid);
         });

@@ -42,6 +42,18 @@ def _sanitize_filename(name: str) -> str:
 def _file_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
+def _safe_eval_node(node):
+    """
+    Safely evaluate an AST node to a Python literal.
+    Handles: str, int, float, bool, None, dict, list, tuple, set.
+    Returns None if the node cannot be safely evaluated.
+    """
+    try:
+        # ast.literal_eval on the source representation
+        source = ast.unparse(node)
+        return ast.literal_eval(source)
+    except (ValueError, TypeError, SyntaxError, RecursionError):
+        return None
 
 def _extract_strategy_class(source: str) -> Optional[dict]:
     """Parse source to find a class extending BaseStrategy."""
@@ -66,14 +78,18 @@ def _extract_strategy_class(source: str) -> Optional[dict]:
                     # Class-level simple assignments: strategy_id = "xyz"
                     if isinstance(item, ast.Assign):
                         for target in item.targets:
-                            if isinstance(target, ast.Name) and isinstance(item.value, ast.Constant):
-                                info[target.id] = item.value.value
+                            if not isinstance(target, ast.Name):
+                                continue
+                            val = _safe_eval_node(item.value)
+                            if val is not None:
+                                info[target.id] = val
                     # Class-level annotated assignments: strategy_id: str = "xyz"
                     elif isinstance(item, ast.AnnAssign):
                         if (isinstance(item.target, ast.Name)
-                                and item.value is not None
-                                and isinstance(item.value, ast.Constant)):
-                            info[item.target.id] = item.value.value
+                                and item.value is not None):
+                            val = _safe_eval_node(item.value)
+                            if val is not None:
+                                info[item.target.id] = val
                 log.info(f"Extracted strategy class: {node.name} fields={list(info.keys())}")
                 return info
 
@@ -117,7 +133,10 @@ def upload_strategy(filename: str, source_code: str) -> dict:
                 "error": f"Found classes {classes} but none extend BaseStrategy. "
                          f"Your class must inherit from BaseStrategy.",
             }
-        return
+        return {
+            "ok": False,
+            "error": "No class found in file. Strategy must contain a class extending BaseStrategy.",
+        }
 
     strategy_id = info.get("strategy_id", "")
     if not strategy_id:
@@ -128,6 +147,9 @@ def upload_strategy(filename: str, source_code: str) -> dict:
     description = info.get("description", "")
     version = info.get("version", "1.0")
     min_lookback = info.get("min_lookback", 0)
+    parameters = info.get("parameters", {})
+    if not isinstance(parameters, dict):
+        parameters = {}
 
     safe_name = _sanitize_filename(strategy_id)
     file_path = os.path.join(STRATEGY_DIR, f"{safe_name}.py")
@@ -157,7 +179,7 @@ def upload_strategy(filename: str, source_code: str) -> dict:
         "min_lookback": min_lookback,
         "file_hash": fhash,
         "file_path": file_path,
-        "parameters": {},
+        "parameters": parameters,
         "uploaded_at": now,
         "is_valid": True,
     })
@@ -296,7 +318,7 @@ def load_strategies_from_disk():
             "min_lookback": info.get("min_lookback", 0),
             "file_hash": _file_hash(source),
             "file_path": fpath,
-            "parameters": {},
+            "parameters": info.get("parameters", {}),
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
             "is_valid": True,
         })

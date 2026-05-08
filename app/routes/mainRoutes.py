@@ -185,6 +185,18 @@ async def get_strategy_detail(strategy_id: str):
     rec = get_strategy(strategy_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Strategy not found.")
+    # Ensure parameters is always a dict
+    params = rec.get("parameters", {})
+    if isinstance(params, str):
+        try:
+            import json
+            params = json.loads(params)
+        except Exception:
+            params = {}
+    rec["parameters"] = params
+    rec["parameter_count"] = len(params)
+    rec["strategy_name"] = rec.get("name", rec.get("strategy_id", ""))
+    rec["validation_status"] = "validated" if rec.get("is_valid") else "invalid"
     return {"ok": True, "strategy": rec}
 
 
