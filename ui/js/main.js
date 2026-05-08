@@ -242,7 +242,11 @@ var DashboardRenderer = (function () {
   function _fetchEquity() {
     ApiClient.getEquityHistory().then(function (data) {
       var hist = data.equity_history || [];
-      if (hist.length === 0) return;
+      if (hist.length === 0) {
+        var wrap = document.getElementById('dash-equity-wrap');
+        if (wrap) wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;gap:10px;"><i class="fa-solid fa-chart-area" style="opacity:0.3;font-size:28px;"></i><div><div style="font-weight:600;margin-bottom:2px;">No Equity Data Yet</div><div style="font-size:10.5px;opacity:0.7;">Trades will build the equity curve as strategies execute.</div></div></div>';
+        return;
+      }
       var labels = hist.map(function (h) { return h.timestamp; });
       var values = hist.map(function (h) { return h.equity; });
       var canvas = document.getElementById('dash-equity-chart'); if (!canvas) return;
@@ -308,6 +312,10 @@ var DashboardRenderer = (function () {
       var workers = data.workers || [], el = document.getElementById('dash-pipeline'); if (!el) return;
       var totalTicks = 0, totalBars = 0, totalSignals = 0, totalOnBar = 0;
       workers.forEach(function (w) { totalTicks += (w.total_ticks || 0); totalBars += (w.total_bars || 0); totalSignals += (w.signal_count || 0); totalOnBar += (w.on_bar_calls || 0); });
+      if (workers.length === 0) {
+        el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:24px;color:var(--text-muted);font-size:12px;gap:10px;"><i class="fa-solid fa-diagram-project" style="opacity:0.3;font-size:24px;"></i><div><div style="font-weight:600;margin-bottom:2px;">No Pipeline Data</div><div style="font-size:10.5px;opacity:0.7;">Connect worker agents to see live tick/bar/signal flow.</div></div></div>';
+        return;
+      }
       el.innerHTML = '<div class="pipeline-flow">' +
         '<div class="pipeline-node"><span class="pipeline-val accent">' + _fmtNum(totalTicks) + '</span><span class="pipeline-lbl">Ticks</span></div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
@@ -593,7 +601,12 @@ var PortfolioRenderer = (function () {
 
   function _loadDaily() {
     ApiClient.getPortfolioPerformance().then(function (data) {
-      var daily = (data.performance || {}).daily || []; if (daily.length === 0) return;
+      var daily = (data.performance || {}).daily || [];
+      if (daily.length === 0) {
+        var w = document.getElementById('port-daily-wrap');
+        if (w) w.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;"><i class="fa-solid fa-calendar-days" style="margin-right:10px;opacity:0.3;font-size:24px;"></i>No daily performance data yet.</div>';
+        return;
+      }
       var labels = daily.map(function (d) { return d.date; });
       var vals = daily.map(function (d) { return d.pnl; });
       var colors = vals.map(function (v) { return v >= 0 ? 'rgba(16,185,129,0.7)' : 'rgba(239,68,68,0.7)'; });

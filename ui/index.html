@@ -4,25 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>JINNI GRID — Mother Server Dashboard</title>
-
-  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet"
   />
-
-  <!-- Font Awesome -->
   <link
     rel="stylesheet"
     href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
   />
-
-  <!-- Main CSS -->
   <link rel="stylesheet" href="/css/style.css" />
 </head>
-
 <body data-theme="dark">
 
   <aside class="sidebar" id="sidebar">
@@ -33,25 +26,26 @@
         <span class="brand-sub">Mother Server</span>
       </div>
     </div>
-
     <nav class="sidebar-nav" id="sidebar-nav">
-      <a href="#dashboard" class="nav-link active">
-        <i class="fa-solid fa-gauge-high"></i><span>Dashboard</span>
+      <a href="#" class="nav-item active" data-page="dashboard">
+        <i class="fa-solid fa-grip"></i><span>Dashboard</span>
       </a>
-
-      <a href="#portfolio" class="nav-link">
+      <a href="#" class="nav-item" data-page="fleet">
+        <i class="fa-solid fa-server"></i><span>Fleet</span>
+      </a>
+      <a href="#" class="nav-item" data-page="portfolio">
         <i class="fa-solid fa-chart-line"></i><span>Portfolio</span>
       </a>
-
-      <a href="#strategies" class="nav-link">
+      <a href="#" class="nav-item" data-page="strategies">
         <i class="fa-solid fa-crosshairs"></i><span>Strategies</span>
       </a>
-
-      <a href="#logs" class="nav-link">
+      <a href="#" class="nav-item" data-page="logs">
         <i class="fa-solid fa-scroll"></i><span>Logs</span>
       </a>
+      <a href="#" class="nav-item" data-page="settings">
+        <i class="fa-solid fa-gear"></i><span>Settings</span>
+      </a>
     </nav>
-
     <div class="sidebar-footer">
       <button class="theme-toggle" id="theme-toggle" title="Toggle Theme">
         <i class="fa-solid fa-sun"></i><span>Light Mode</span>
@@ -65,7 +59,6 @@
         <h1 class="topbar-title" id="topbar-title">Dashboard</h1>
         <span class="topbar-subtitle">Mother Server Control Panel</span>
       </div>
-
       <div class="topbar-right">
         <div class="topbar-status">
           <span class="status-dot status-dot--online pulse"></span>
@@ -74,14 +67,11 @@
         <div class="topbar-clock" id="topbar-clock">00:00:00</div>
       </div>
     </header>
-
     <main class="content" id="main-content"></main>
   </div>
 
-  <!-- Scripts -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.7/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="/js/main.js"></script>
   <script src="/js/workerDetailRenderer.js"></script>
-
 </body>
 </html>

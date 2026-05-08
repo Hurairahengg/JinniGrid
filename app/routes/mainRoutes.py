@@ -5,7 +5,7 @@ app/routes/mainRoutes.py
 
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-
+from app.persistence import save_trade_db
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
@@ -119,6 +119,31 @@ async def portfolio_performance():
     perf = get_portfolio_performance()
     return {"ok": True, "performance": perf, "timestamp": datetime.now(timezone.utc).isoformat()}
 
+class TradeReport(BaseModel):
+    trade_id: Optional[int] = None
+    deployment_id: Optional[str] = None
+    strategy_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    symbol: str
+    direction: str
+    entry_price: float
+    exit_price: Optional[float] = None
+    entry_time: Optional[str] = None
+    exit_time: Optional[str] = None
+    exit_reason: Optional[str] = None
+    sl_level: Optional[float] = None
+    tp_level: Optional[float] = None
+    lot_size: Optional[float] = 0.01
+    ticket: Optional[int] = None
+    points_pnl: Optional[float] = 0
+    profit: Optional[float] = 0
+    bars_held: Optional[int] = 0
+
+
+@router.post("/api/portfolio/trades/report", tags=["Portfolio"])
+async def report_trade(payload: TradeReport):
+    save_trade_db(payload.model_dump())
+    return {"ok": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @router.get("/api/events", tags=["Events"])
 async def get_events(

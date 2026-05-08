@@ -5,11 +5,10 @@ app/services/mainServices.py
 
 import logging
 import math
-import random
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-
+from app.persistence import save_trade_db
 from app.config import Config
 from app.persistence import (
     save_worker, get_all_workers_db, get_worker_db,
@@ -115,172 +114,153 @@ def update_deployment_state(deployment_id: str, state: str, error: str = None) -
 def stop_deployment(deployment_id: str) -> dict:
     return update_deployment_state(deployment_id, "stopped")
 
-
 # =============================================================================
-# Mock Trade Data
-# =============================================================================
-
-_MOCK_TRADES = None
-
-
-def _generate_mock_trades():
-    rng = random.Random(42)
-    trades = []
-    symbols = ['EURUSD', 'GBPUSD', 'XAUUSD', 'USDJPY', 'BTCUSD']
-    strats = ['hma_cross_v1', 'smc_reversal', 'range_breakout']
-    workers = ['vm-worker-01', 'vm-worker-02', 'vm-worker-03']
-    reasons = ['tp_hit', 'sl_hit', 'strategy_close', 'MA_TP_EXIT', 'MA_SL_EXIT', 'reverse']
-    base_prices = {'EURUSD': 1.0850, 'GBPUSD': 1.2650, 'XAUUSD': 2340.0, 'USDJPY': 155.50, 'BTCUSD': 68500.0}
-    base_time = datetime(2026, 2, 5, 8, 0, 0, tzinfo=timezone.utc)
-
-    for i in range(300):
-        sym = rng.choice(symbols)
-        direction = rng.choice(['long', 'short'])
-        lot = rng.choice([0.01, 0.02, 0.05, 0.10, 0.20])
-        is_win = rng.random() < 0.65
-        if is_win:
-            profit = round(rng.uniform(30, 600) * lot * 10, 2)
-        else:
-            profit = round(-rng.uniform(20, 450) * lot * 10, 2)
-        bp = base_prices[sym]
-        entry_p = bp + (rng.random() - 0.5) * bp * 0.008
-        dp = 2 if sym in ('XAUUSD', 'BTCUSD', 'USDJPY') else 5
-        entry_p = round(entry_p, dp)
-        delta = profit / (lot * 100000) if sym in ('EURUSD', 'GBPUSD') else profit / (lot * 100)
-        exit_p = round(entry_p + delta if direction == 'long' else entry_p - delta, dp)
-        bars = max(5, int(rng.gauss(85, 40)))
-        entry_t = base_time + timedelta(hours=i * 2.4 + rng.random() * 2)
-        exit_t = entry_t + timedelta(minutes=bars * rng.uniform(1.5, 3))
-        trades.append({
-            "id": i + 1, "direction": direction, "symbol": sym,
-            "strategy_id": rng.choice(strats), "worker_id": rng.choice(workers),
-            "entry_price": entry_p, "exit_price": exit_p,
-            "entry_time": entry_t.isoformat(), "exit_time": exit_t.isoformat(),
-            "exit_reason": rng.choice(reasons), "lot_size": lot,
-            "profit": profit, "bars_held": bars, "status": "closed",
-        })
-    return trades
-
-
-def _get_mock_trades():
-    global _MOCK_TRADES
-    if _MOCK_TRADES is None:
-        _MOCK_TRADES = _generate_mock_trades()
-    return _MOCK_TRADES
-
-
-# =============================================================================
-# Portfolio Data
+# Portfolio Data (Real — backed by trades table)
 # =============================================================================
 
 def get_portfolio_summary() -> dict:
-    trades = _get_mock_trades()
-    profits = [t['profit'] for t in trades]
+    from app.persistence import get_all_trades_db
+    trades = get_all_trades_db(limit=50000)
+
+    # Live worker data (even if no trades yet)
+    workers = get_all_workers()
+    total_floating = sum((w.get("floating_pnl") or 0) for w in workers)
+    total_positions = sum((w.get("open_positions_count") or 0) for w in workers)
+
+    if not trades:
+        return {
+            "total_balance": 0, "total_equity": 0,
+            "floating_pnl": round(total_floating, 2),
+            "daily_pnl": 0, "open_positions": total_positions,
+            "realized_pnl": 0, "margin_usage": 0,
+            "win_rate": 0, "total_trades": 0,
+            "profit_factor": 0, "max_drawdown": 0, "avg_trade": 0,
+            "avg_winner": 0, "avg_loser": 0, "best_trade": 0,
+            "worst_trade": 0, "sharpe_estimate": 0, "avg_bars_held": 0,
+        }
+
+    profits = [t.get("profit", 0) for t in trades]
     wins = [p for p in profits if p > 0]
     losses = [p for p in profits if p <= 0]
     total_pnl = sum(profits)
-    equity_hist = get_equity_history()
-    peak = 0.0
-    max_dd = 0.0
-    for p in equity_hist:
-        if p['equity'] > peak:
-            peak = p['equity']
-        dd = (peak - p['equity']) / peak * 100 if peak > 0 else 0
+    bars_list = [t.get("bars_held", 0) for t in trades]
+
+    # Max drawdown from cumulative PnL
+    cum, peak, max_dd = 0, 0, 0
+    for p in profits:
+        cum += p
+        if cum > peak:
+            peak = cum
+        dd = (peak - cum) / peak * 100 if peak > 0 else 0
         if dd > max_dd:
             max_dd = dd
-    mean_pnl = total_pnl / len(profits) if profits else 0
+
+    # Sharpe estimate
+    mean_pnl = total_pnl / len(profits)
     variance = sum((p - mean_pnl) ** 2 for p in profits) / (len(profits) - 1) if len(profits) > 1 else 0
     std_pnl = math.sqrt(variance) if variance > 0 else 0
     sharpe = round((mean_pnl / std_pnl * math.sqrt(252)), 2) if std_pnl > 0 else 0
-    bars_list = [t['bars_held'] for t in trades]
+
     return {
-        "total_balance": 248750.00, "total_equity": 251320.45, "floating_pnl": 2570.45,
-        "daily_pnl": 1847.30, "open_positions": 12,
-        "realized_pnl": round(total_pnl, 2), "margin_usage": 34.7,
+        "total_balance": 0, "total_equity": 0,
+        "floating_pnl": round(total_floating, 2),
+        "daily_pnl": 0, "open_positions": total_positions,
+        "realized_pnl": round(total_pnl, 2), "margin_usage": 0,
         "win_rate": round(len(wins) / len(profits) * 100, 1) if profits else 0,
         "total_trades": len(trades),
         "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0 else 0,
-        "max_drawdown": round(max_dd, 2), "avg_trade": round(total_pnl / len(trades), 2) if trades else 0,
+        "max_drawdown": round(max_dd, 2),
+        "avg_trade": round(total_pnl / len(trades), 2),
         "avg_winner": round(sum(wins) / len(wins), 2) if wins else 0,
         "avg_loser": round(sum(losses) / len(losses), 2) if losses else 0,
-        "best_trade": round(max(profits), 2) if profits else 0,
-        "worst_trade": round(min(profits), 2) if profits else 0,
+        "best_trade": round(max(profits), 2),
+        "worst_trade": round(min(profits), 2),
         "sharpe_estimate": sharpe,
         "avg_bars_held": round(sum(bars_list) / len(bars_list), 1) if bars_list else 0,
     }
 
 
 def get_equity_history() -> list:
-    rng = random.Random(42)
-    points = []
-    start = datetime(2025, 11, 1, tzinfo=timezone.utc)
-    val = 200000.0
-    for i in range(180):
-        d = start + timedelta(days=i)
-        val += (rng.random() - 0.42) * 2000
-        if val < 180000:
-            val = 180000.0
-        points.append({"timestamp": d.strftime("%Y-%m-%d"), "equity": round(val, 2)})
-    return points
+    from app.persistence import get_all_trades_db
+    trades = get_all_trades_db(limit=50000)
+    if not trades:
+        return []
+    sorted_trades = sorted(trades, key=lambda t: t.get("exit_time") or "")
+    daily = {}
+    cum = 0
+    for t in sorted_trades:
+        date = (t.get("exit_time") or "")[:10]
+        if not date:
+            continue
+        cum += t.get("profit", 0)
+        daily[date] = round(cum, 2)
+    return [{"timestamp": d, "equity": v} for d, v in sorted(daily.items())]
 
 
 def get_portfolio_trades(strategy_id=None, worker_id=None, symbol=None, limit=200) -> list:
-    trades = list(_get_mock_trades())
-    if strategy_id:
-        trades = [t for t in trades if t['strategy_id'] == strategy_id]
-    if worker_id:
-        trades = [t for t in trades if t['worker_id'] == worker_id]
-    if symbol:
-        trades = [t for t in trades if t['symbol'] == symbol]
-    return trades[:limit]
+    from app.persistence import get_all_trades_db
+    return get_all_trades_db(limit=limit, strategy_id=strategy_id,
+                             worker_id=worker_id, symbol=symbol)
 
 
 def get_portfolio_performance() -> dict:
-    trades = _get_mock_trades()
+    from app.persistence import get_all_trades_db
+    trades = get_all_trades_db(limit=50000)
+    if not trades:
+        return {"daily": [], "by_strategy": [], "by_worker": [], "by_symbol": []}
+
+    # Daily
     daily = {}
     for t in trades:
-        date = t['exit_time'][:10]
+        date = (t.get("exit_time") or "")[:10]
+        if not date:
+            continue
         if date not in daily:
-            daily[date] = {'date': date, 'pnl': 0, 'trades': 0, 'wins': 0}
-        daily[date]['pnl'] += t['profit']
-        daily[date]['trades'] += 1
-        if t['profit'] > 0:
-            daily[date]['wins'] += 1
-    daily_list = sorted(daily.values(), key=lambda x: x['date'])
+            daily[date] = {"date": date, "pnl": 0, "trades": 0, "wins": 0}
+        daily[date]["pnl"] += t.get("profit", 0)
+        daily[date]["trades"] += 1
+        if t.get("profit", 0) > 0:
+            daily[date]["wins"] += 1
+    daily_list = sorted(daily.values(), key=lambda x: x["date"])
     cum = 0
     for d in daily_list:
-        cum += d['pnl']
-        d['pnl'] = round(d['pnl'], 2)
-        d['cumulative'] = round(cum, 2)
+        cum += d["pnl"]
+        d["pnl"] = round(d["pnl"], 2)
+        d["cumulative"] = round(cum, 2)
 
+    # Breakdown helper
     def _breakdown(key):
         bk = {}
         for t in trades:
-            k = t[key]
+            k = t.get(key, "")
+            if not k:
+                continue
             if k not in bk:
-                bk[k] = {key: k, 'trades': 0, 'pnl': 0, 'wins': 0, 'losses': 0, 'total_bars': 0}
-            bk[k]['trades'] += 1
-            bk[k]['pnl'] += t['profit']
-            bk[k]['total_bars'] += t['bars_held']
-            if t['profit'] > 0:
-                bk[k]['wins'] += 1
+                bk[k] = {key: k, "trades": 0, "pnl": 0, "wins": 0,
+                         "losses": 0, "total_bars": 0}
+            bk[k]["trades"] += 1
+            bk[k]["pnl"] += t.get("profit", 0)
+            bk[k]["total_bars"] += t.get("bars_held", 0)
+            if t.get("profit", 0) > 0:
+                bk[k]["wins"] += 1
             else:
-                bk[k]['losses'] += 1
+                bk[k]["losses"] += 1
         for v in bk.values():
-            v['pnl'] = round(v['pnl'], 2)
-            v['win_rate'] = round(v['wins'] / v['trades'] * 100, 1) if v['trades'] > 0 else 0
-            v['avg_bars'] = round(v['total_bars'] / v['trades'], 1) if v['trades'] > 0 else 0
-            w_profits = [t['profit'] for t in trades if t[key] == v[key] and t['profit'] > 0]
-            l_profits = [abs(t['profit']) for t in trades if t[key] == v[key] and t['profit'] <= 0]
-            gl = sum(l_profits)
-            v['profit_factor'] = round(sum(w_profits) / gl, 2) if gl > 0 else 0
+            v["pnl"] = round(v["pnl"], 2)
+            v["win_rate"] = round(v["wins"] / v["trades"] * 100, 1) if v["trades"] > 0 else 0
+            v["avg_bars"] = round(v["total_bars"] / v["trades"], 1) if v["trades"] > 0 else 0
+            w_sum = sum(t.get("profit", 0) for t in trades
+                        if t.get(key) == v[key] and t.get("profit", 0) > 0)
+            l_sum = sum(abs(t.get("profit", 0)) for t in trades
+                        if t.get(key) == v[key] and t.get("profit", 0) <= 0)
+            v["profit_factor"] = round(w_sum / l_sum, 2) if l_sum > 0 else 0
         return list(bk.values())
 
     return {
         "daily": daily_list,
-        "by_strategy": _breakdown('strategy_id'),
-        "by_worker": _breakdown('worker_id'),
-        "by_symbol": _breakdown('symbol'),
+        "by_strategy": _breakdown("strategy_id"),
+        "by_worker": _breakdown("worker_id"),
+        "by_symbol": _breakdown("symbol"),
     }
 
 

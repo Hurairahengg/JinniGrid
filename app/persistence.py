@@ -113,6 +113,33 @@ def init_db():
             data_json TEXT,
             level TEXT DEFAULT 'INFO'
         );
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER,
+            deployment_id TEXT,
+            strategy_id TEXT,
+            worker_id TEXT,
+            symbol TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            exit_price REAL,
+            entry_time TEXT,
+            exit_time TEXT,
+            exit_reason TEXT,
+            sl_level REAL,
+            tp_level REAL,
+            lot_size REAL DEFAULT 0.01,
+            ticket INTEGER,
+            points_pnl REAL DEFAULT 0.0,
+            profit REAL DEFAULT 0.0,
+            bars_held INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'closed',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+        CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id);
+        CREATE INDEX IF NOT EXISTS idx_trades_worker ON trades(worker_id);
 
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
         CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
@@ -354,6 +381,51 @@ def get_events_db(limit: int = 100, category: str = None,
     if deployment_id:
         query += " AND deployment_id = ?"
         params.append(deployment_id)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+# =============================================================================
+# Trade Persistence
+# =============================================================================
+
+def save_trade_db(data: dict):
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("""
+        INSERT INTO trades (trade_id, deployment_id, strategy_id, worker_id,
+            symbol, direction, entry_price, exit_price, entry_time, exit_time,
+            exit_reason, sl_level, tp_level, lot_size, ticket,
+            points_pnl, profit, bars_held, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        data.get("trade_id"), data.get("deployment_id"), data.get("strategy_id"),
+        data.get("worker_id"), data.get("symbol", ""), data.get("direction", ""),
+        data.get("entry_price", 0), data.get("exit_price"),
+        data.get("entry_time"), data.get("exit_time"),
+        data.get("exit_reason"), data.get("sl_level"), data.get("tp_level"),
+        data.get("lot_size", 0.01), data.get("ticket"),
+        data.get("points_pnl", 0), data.get("profit", 0),
+        data.get("bars_held", 0), data.get("status", "closed"), now,
+    ))
+    conn.commit()
+
+
+def get_all_trades_db(limit: int = 500, strategy_id: str = None,
+                      worker_id: str = None, symbol: str = None) -> List[dict]:
+    conn = _get_conn()
+    query = "SELECT * FROM trades WHERE 1=1"
+    params: list = []
+    if strategy_id:
+        query += " AND strategy_id = ?"
+        params.append(strategy_id)
+    if worker_id:
+        query += " AND worker_id = ?"
+        params.append(worker_id)
+    if symbol:
+        query += " AND symbol = ?"
+        params.append(symbol)
     query += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
     rows = conn.execute(query, params).fetchall()
