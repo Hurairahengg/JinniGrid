@@ -681,14 +681,15 @@ var FleetRenderer = (function () {
         '<div class="node-card-body">' +
           _infoRow('Worker ID', '<span class="mono">' + w.worker_id + '</span>') +
           _infoRow('Host', _nullVal(w.host)) +
-          _infoRow('MT5', _nullVal(w.mt5_state, 'Unknown')) +
+          _infoRow('MT5', (w.mt5_state === 'connected' ? '<span style="color:var(--success);">Connected</span>' : _nullVal(w.mt5_state, 'Not Connected'))) +
           _infoRow('Broker', _nullVal(w.broker)) +
           _infoRow('Account', _nullVal(w.account_id)) +
           _infoRow('Strategies', _nullVal(strategies, 'No active strategy')) +
-          _infoRow('Positions', String(w.open_positions_count || 0)) +
+          _infoRow('Positions', '<span style="color:var(--accent);">' + String(w.open_positions_count || 0) + '</span>') +
           _infoRow('Float PnL', '<span' + pnlClass + '>' + pnlVal + '</span>') +
+          _infoRow('Pipeline', '<span class="mono" style="font-size:10px;">' + (w.total_ticks || 0) + ' ticks / ' + (w.total_bars || 0) + ' bars / ' + (w.signal_count || 0) + ' sig</span>') +
+          _infoRow('Price', (w.current_price ? '<span class="mono">' + Number(w.current_price).toFixed(2) + '</span>' : '<span class="value-null">\u2014</span>')) +
           _infoRow('Heartbeat', _formatAge(w.heartbeat_age_seconds)) +
-          _infoRow('Agent', _nullVal(w.agent_version)) +
           _infoRow('Errors', _nullVal(errorsStr, 'None')) +
           '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Deploy Strategy</div>' +
         '</div>' +
