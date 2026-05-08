@@ -200,7 +200,12 @@ async def get_strategy_file(strategy_id: str):
 async def validate_strategy_endpoint(strategy_id: str):
     result = validate_strategy(strategy_id)
     if not result["ok"]:
-        raise HTTPException(status_code=422, detail=result)
+        return {
+            "ok": False,
+            "strategy_id": strategy_id,
+            "valid": False,
+            "error": result.get("error", "Unknown validation error"),
+        }
     return result
 
 

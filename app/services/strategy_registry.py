@@ -23,7 +23,8 @@ from app.persistence import (
 log = logging.getLogger("jinni.strategy")
 
 STRATEGY_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "strategies"
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "data", "strategies"
 )
 
 _lock = threading.Lock()
@@ -47,6 +48,7 @@ def _extract_strategy_class(source: str) -> Optional[dict]:
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
+        log.warning(f"Strategy syntax error: {e}")
         return None
 
     for node in ast.walk(tree):
@@ -61,11 +63,26 @@ def _extract_strategy_class(source: str) -> Optional[dict]:
             if base_name == "BaseStrategy":
                 info = {"class_name": node.name}
                 for item in node.body:
+                    # Class-level simple assignments: strategy_id = "xyz"
                     if isinstance(item, ast.Assign):
                         for target in item.targets:
                             if isinstance(target, ast.Name) and isinstance(item.value, ast.Constant):
                                 info[target.id] = item.value.value
+                    # Class-level annotated assignments: strategy_id: str = "xyz"
+                    elif isinstance(item, ast.AnnAssign):
+                        if (isinstance(item.target, ast.Name)
+                                and item.value is not None
+                                and isinstance(item.value, ast.Constant)):
+                            info[item.target.id] = item.value.value
+                log.info(f"Extracted strategy class: {node.name} fields={list(info.keys())}")
                 return info
+
+    # Log what classes WERE found for debugging
+    classes_found = [n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    if classes_found:
+        log.warning(f"Found classes {classes_found} but none extend BaseStrategy")
+    else:
+        log.warning("No classes found in strategy source at all")
     return None
 
 
@@ -77,12 +94,30 @@ def upload_strategy(filename: str, source_code: str) -> dict:
     """Upload and persist a strategy file."""
     _ensure_dir()
 
-    info = _extract_strategy_class(source_code)
-    if info is None:
+    # Check syntax first
+    try:
+        ast.parse(source_code)
+    except SyntaxError as e:
         return {
             "ok": False,
-            "error": "No class extending BaseStrategy found. Check your code.",
+            "error": f"Python syntax error at line {e.lineno}: {e.msg}",
         }
+
+    info = _extract_strategy_class(source_code)
+    if info is None:
+        # Give a detailed error
+        try:
+            tree = ast.parse(source_code)
+            classes = [n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+        except Exception:
+            classes = []
+        if classes:
+            return {
+                "ok": False,
+                "error": f"Found classes {classes} but none extend BaseStrategy. "
+                         f"Your class must inherit from BaseStrategy.",
+            }
+        return
 
     strategy_id = info.get("strategy_id", "")
     if not strategy_id:
@@ -149,16 +184,28 @@ def get_all_strategies() -> list:
     db_strategies = get_all_strategies_db()
     result = []
     for s in db_strategies:
+        params = s.get("parameters", {})
+        if isinstance(params, str):
+            try:
+                import json
+                params = json.loads(params)
+            except Exception:
+                params = {}
         result.append({
             "strategy_id": s["strategy_id"],
+            "strategy_name": s.get("name", s["strategy_id"]),
+            "name": s.get("name", s["strategy_id"]),
             "filename": s.get("filename", ""),
             "class_name": s.get("class_name", ""),
-            "name": s.get("name", s["strategy_id"]),
             "description": s.get("description", ""),
             "version": s.get("version", ""),
             "min_lookback": s.get("min_lookback", 0),
             "file_hash": s.get("file_hash", ""),
             "uploaded_at": s.get("uploaded_at", ""),
+            "validation_status": "validated" if s.get("is_valid") else "invalid",
+            "parameter_count": len(params) if isinstance(params, dict) else 0,
+            "parameters": params,
+            "error": None,
         })
     return result
 

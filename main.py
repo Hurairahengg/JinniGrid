@@ -44,10 +44,12 @@ def main():
 
     if debug:
         project_root = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(project_root, "data")
         run_kwargs["reload_dirs"] = [
             os.path.join(project_root, "app"),
             os.path.join(project_root, "ui"),
         ]
+        run_kwargs["reload_excludes"] = [data_dir]
 
     uvicorn.run("main:app", **run_kwargs)
 
