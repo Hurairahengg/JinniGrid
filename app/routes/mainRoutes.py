@@ -261,17 +261,22 @@ async def list_strategies():
 
 @router.get("/api/grid/strategies/{strategy_id}", tags=["Strategies"])
 async def get_strategy_detail(strategy_id: str):
+    import json as _json
     rec = get_strategy(strategy_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Strategy not found.")
-    # Ensure parameters is a dict
-    params = rec.get("parameters", {})
-    if isinstance(params, str):
+
+    # Parameters are stored as parameters_json in DB
+    params = {}
+    raw = rec.get("parameters_json") or rec.get("parameters") or "{}"
+    if isinstance(raw, str):
         try:
-            import json
-            params = json.loads(params)
+            params = _json.loads(raw)
         except Exception:
             params = {}
+    elif isinstance(raw, dict):
+        params = raw
+
     rec["parameters"] = params
     rec["parameter_count"] = len(params)
     rec["strategy_name"] = rec.get("name", rec.get("strategy_id", ""))
