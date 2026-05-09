@@ -16,8 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.persistence import (
-    save_strategy, get_all_strategies_db, get_strategy_db,
-    delete_strategy_db, log_event_db,
+    save_strategy, get_all_strategies_db, get_strategy_db, log_event_db
 )
 
 log = logging.getLogger("jinni.strategy")
