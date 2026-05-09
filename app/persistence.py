@@ -145,6 +145,23 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
         CREATE INDEX IF NOT EXISTS idx_events_worker ON events(worker_id);
         CREATE INDEX IF NOT EXISTS idx_events_deployment ON events(deployment_id);
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            balance REAL DEFAULT 0.0,
+            equity REAL DEFAULT 0.0,
+            floating_pnl REAL DEFAULT 0.0,
+            open_positions INTEGER DEFAULT 0,
+            cumulative_pnl REAL DEFAULT 0.0
+        );
+        CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(timestamp);
     """)
     conn.commit()
 
@@ -429,3 +446,226 @@ def get_all_trades_db(limit: int = 500, strategy_id: str = None,
     params.append(limit)
     rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
+
+# =============================================================================
+# Settings Persistence
+# =============================================================================
+
+_DEFAULT_SETTINGS = {
+    "refresh_interval": "5",
+    "default_symbol": "XAUUSD",
+    "default_bar_size": "100",
+    "default_lot_size": "0.01",
+    "debug_mode": "true",
+    "starting_capital": "10000",
+    "worker_timeout_seconds": "90",
+    "log_verbosity": "INFO",
+}
+
+
+def get_setting(key: str, default: str = None) -> Optional[str]:
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row:
+        return row["value"]
+    return default if default is not None else _DEFAULT_SETTINGS.get(key)
+
+
+def get_all_settings() -> dict:
+    conn = _get_conn()
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    result = dict(_DEFAULT_SETTINGS)
+    for r in rows:
+        result[r["key"]] = r["value"]
+    return result
+
+
+def save_setting(key: str, value: str):
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("""
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    """, (key, str(value), now))
+    conn.commit()
+
+
+def save_settings_bulk(settings: dict):
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    for key, value in settings.items():
+        conn.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+        """, (key, str(value), now))
+    conn.commit()
+
+
+# =============================================================================
+# Equity Snapshots
+# =============================================================================
+
+def save_equity_snapshot_db(balance: float, equity: float,
+                            floating_pnl: float = 0.0,
+                            open_positions: int = 0,
+                            cumulative_pnl: float = 0.0):
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("""
+        INSERT INTO equity_snapshots (timestamp, balance, equity, floating_pnl,
+            open_positions, cumulative_pnl)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (now, balance, equity, floating_pnl, open_positions, cumulative_pnl))
+    conn.commit()
+
+
+def get_equity_snapshots_db(limit: int = 2000) -> List[dict]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM equity_snapshots ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def clear_equity_snapshots_db():
+    conn = _get_conn()
+    conn.execute("DELETE FROM equity_snapshots")
+    conn.commit()
+
+
+# =============================================================================
+# Admin Functions
+# =============================================================================
+
+def delete_all_trades_db():
+    conn = _get_conn()
+    count = conn.execute("SELECT COUNT(*) as c FROM trades").fetchone()["c"]
+    conn.execute("DELETE FROM trades")
+    conn.commit()
+    return count
+
+
+def delete_trades_by_strategy_db(strategy_id: str) -> int:
+    conn = _get_conn()
+    count = conn.execute(
+        "SELECT COUNT(*) as c FROM trades WHERE strategy_id = ?", (strategy_id,)
+    ).fetchone()["c"]
+    conn.execute("DELETE FROM trades WHERE strategy_id = ?", (strategy_id,))
+    conn.commit()
+    return count
+
+
+def delete_trades_by_worker_db(worker_id: str) -> int:
+    conn = _get_conn()
+    count = conn.execute(
+        "SELECT COUNT(*) as c FROM trades WHERE worker_id = ?", (worker_id,)
+    ).fetchone()["c"]
+    conn.execute("DELETE FROM trades WHERE worker_id = ?", (worker_id,))
+    conn.commit()
+    return count
+
+
+def delete_strategy_full_db(strategy_id: str) -> dict:
+    """Delete strategy from DB + file on disk."""
+    conn = _get_conn()
+    rec = conn.execute(
+        "SELECT file_path FROM strategies WHERE strategy_id = ?", (strategy_id,)
+    ).fetchone()
+    file_path = rec["file_path"] if rec else None
+
+    conn.execute("DELETE FROM strategies WHERE strategy_id = ?", (strategy_id,))
+    conn.execute("DELETE FROM deployments WHERE strategy_id = ?", (strategy_id,))
+    conn.commit()
+
+    file_deleted = False
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            file_deleted = True
+        except OSError:
+            pass
+
+    return {"strategy_id": strategy_id, "file_deleted": file_deleted}
+
+
+def remove_worker_db(worker_id: str) -> dict:
+    conn = _get_conn()
+    conn.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,))
+    dep_count = conn.execute(
+        "SELECT COUNT(*) as c FROM deployments WHERE worker_id = ?", (worker_id,)
+    ).fetchone()["c"]
+    conn.execute(
+        "UPDATE deployments SET state='stopped', last_error='worker removed' "
+        "WHERE worker_id = ? AND state NOT IN ('stopped','failed')",
+        (worker_id,)
+    )
+    conn.commit()
+    return {"worker_id": worker_id, "deployments_stopped": dep_count}
+
+
+def remove_stale_workers_db(threshold_seconds: int = 300) -> int:
+    """Remove workers not seen for longer than threshold."""
+    conn = _get_conn()
+    now = datetime.now(timezone.utc)
+    rows = conn.execute("SELECT worker_id, last_heartbeat_at FROM workers").fetchall()
+    removed = 0
+    for r in rows:
+        try:
+            last = datetime.fromisoformat(r["last_heartbeat_at"])
+            if (now - last).total_seconds() > threshold_seconds:
+                conn.execute("DELETE FROM workers WHERE worker_id = ?", (r["worker_id"],))
+                removed += 1
+        except (TypeError, ValueError):
+            conn.execute("DELETE FROM workers WHERE worker_id = ?", (r["worker_id"],))
+            removed += 1
+    conn.commit()
+    return removed
+
+
+def clear_events_db() -> int:
+    conn = _get_conn()
+    count = conn.execute("SELECT COUNT(*) as c FROM events").fetchone()["c"]
+    conn.execute("DELETE FROM events")
+    conn.commit()
+    return count
+
+
+def get_system_stats_db() -> dict:
+    conn = _get_conn()
+    stats = {}
+    for table in ("strategies", "workers", "deployments", "events", "trades",
+                   "settings", "equity_snapshots"):
+        try:
+            row = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()
+            stats[f"{table}_count"] = row["c"]
+        except Exception:
+            stats[f"{table}_count"] = 0
+
+    db_size = 0
+    if os.path.exists(DB_PATH):
+        db_size = os.path.getsize(DB_PATH)
+    stats["db_size_bytes"] = db_size
+    stats["db_size_mb"] = round(db_size / (1024 * 1024), 2)
+    stats["db_path"] = DB_PATH
+
+    active = conn.execute(
+        "SELECT COUNT(*) as c FROM deployments WHERE state NOT IN ('stopped','failed')"
+    ).fetchone()["c"]
+    stats["active_deployments"] = active
+
+    return stats
+
+
+def full_system_reset_db() -> dict:
+    """Nuclear option — clear everything."""
+    conn = _get_conn()
+    counts = {}
+    for table in ("trades", "events", "deployments", "equity_snapshots"):
+        row = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()
+        counts[table] = row["c"]
+        conn.execute(f"DELETE FROM {table}")
+    conn.execute("UPDATE workers SET reported_state='offline'")
+    conn.commit()
+    return counts

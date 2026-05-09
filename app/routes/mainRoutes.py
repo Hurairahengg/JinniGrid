@@ -15,6 +15,16 @@ from app.services.mainServices import (
     process_heartbeat,
     get_all_workers,
     get_fleet_summary,
+    get_system_settings,
+    save_system_settings,
+    admin_get_stats,
+    admin_delete_strategy,
+    admin_reset_portfolio,
+    admin_clear_trades,
+    admin_remove_worker,
+    admin_remove_stale_workers,
+    admin_clear_events,
+    admin_full_reset,
     get_portfolio_summary,
     get_equity_history,
     get_portfolio_trades,
@@ -357,3 +367,78 @@ async def system_summary():
         "error_nodes": fleet["error_workers"], "total_open_positions": portfolio["open_positions"],
         "system_status": system_status, "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    
+# =============================================================================
+# Settings Endpoints
+# =============================================================================
+
+@router.get("/api/settings", tags=["Settings"])
+async def get_settings():
+    return {"ok": True, "settings": get_system_settings()}
+
+
+class SettingsUpdate(BaseModel):
+    settings: Dict[str, Any]
+
+
+@router.put("/api/settings", tags=["Settings"])
+async def update_settings(payload: SettingsUpdate):
+    result = save_system_settings(payload.settings)
+    return {"ok": True, "settings": result}
+
+
+# =============================================================================
+# Admin Endpoints
+# =============================================================================
+
+@router.get("/api/admin/stats", tags=["Admin"])
+async def admin_stats():
+    return {"ok": True, "stats": admin_get_stats()}
+
+
+@router.post("/api/admin/strategies/{strategy_id}/delete", tags=["Admin"])
+async def admin_delete_strategy_endpoint(strategy_id: str):
+    result = admin_delete_strategy(strategy_id)
+    return {"ok": True, **result}
+
+
+@router.post("/api/admin/portfolio/reset", tags=["Admin"])
+async def admin_reset_portfolio_endpoint():
+    result = admin_reset_portfolio()
+    return {"ok": True, **result}
+
+
+@router.post("/api/admin/trades/clear", tags=["Admin"])
+async def admin_clear_trades_endpoint():
+    result = admin_clear_trades()
+    return {"ok": True, **result}
+
+
+@router.post("/api/admin/workers/{worker_id}/remove", tags=["Admin"])
+async def admin_remove_worker_endpoint(worker_id: str):
+    result = admin_remove_worker(worker_id)
+    return {"ok": True, **result}
+
+
+@router.post("/api/admin/workers/stale/remove", tags=["Admin"])
+async def admin_remove_stale_workers_endpoint():
+    result = admin_remove_stale_workers()
+    return {"ok": True, **result}
+
+
+@router.post("/api/admin/events/clear", tags=["Admin"])
+async def admin_clear_events_endpoint():
+    result = admin_clear_events()
+    return {"ok": True, **result}
+
+
+class SystemResetConfirm(BaseModel):
+    confirm: str
+
+
+@router.post("/api/admin/system/reset", tags=["Admin"])
+async def admin_full_reset_endpoint(payload: SystemResetConfirm):
+    if payload.confirm != "RESET_EVERYTHING":
+        raise HTTPException(status_code=400, detail="Must send confirm='RESET_EVERYTHING'")
+    result = admin_full_reset()
+    return {"ok": True, "cleared": result}

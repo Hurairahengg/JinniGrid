@@ -8,13 +8,20 @@ import math
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from app.persistence import save_trade_db
+
 from app.config import Config
 from app.persistence import (
+    init_db,
     save_worker, get_all_workers_db, get_worker_db,
-    save_deployment, update_deployment_state_db,
-    get_all_deployments_db, get_deployment_db,
+    save_deployment, get_all_deployments_db, get_deployment_db,
+    update_deployment_state_db,
     log_event_db, get_events_db,
+    save_trade_db, get_all_trades_db,
+    save_equity_snapshot_db, get_equity_snapshots_db, clear_equity_snapshots_db,
+    get_setting, get_all_settings, save_setting, save_settings_bulk,
+    delete_all_trades_db, delete_trades_by_strategy_db, delete_trades_by_worker_db,
+    delete_strategy_full_db, remove_worker_db, remove_stale_workers_db,
+    clear_events_db, get_system_stats_db, full_system_reset_db,
 )
 
 log = logging.getLogger("jinni.worker")
@@ -123,13 +130,164 @@ def update_deployment_state(deployment_id: str, state: str, error: str = None) -
 def stop_deployment(deployment_id: str) -> dict:
     return update_deployment_state(deployment_id, "stopped")
 
+
+# =============================================================================
+# Worker Registry
+# =============================================================================
+
+_workers_cache: dict = {}
+_worker_lock = threading.Lock()
+
+# In-memory equity snapshots (also backed by DB now)
+_equity_history: list = []
+
+
+def _load_workers_from_db():
+    global _workers_cache
+    db_workers = get_all_workers_db()
+    with _worker_lock:
+        for w in db_workers:
+            wid = w["worker_id"]
+            hb_at = w.get("last_heartbeat_at")
+            if hb_at:
+                try:
+                    dt = datetime.fromisoformat(hb_at)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    dt = datetime.now(timezone.utc)
+            else:
+                dt = datetime.now(timezone.utc)
+            w["_last_heartbeat_dt"] = dt
+            _workers_cache[wid] = w
+    sys_log.info(f"Loaded {len(_workers_cache)} workers from DB")
+
+
+def process_heartbeat(payload: dict) -> dict:
+    worker_id = payload["worker_id"].strip()
+    now = datetime.now(timezone.utc)
+    is_new = False
+    with _worker_lock:
+        if worker_id not in _workers_cache:
+            is_new = True
+        _workers_cache[worker_id] = {**payload, "worker_id": worker_id,
+                                      "last_heartbeat_at": now.isoformat(), "_last_heartbeat_dt": now}
+    save_worker(worker_id, {**payload, "last_heartbeat_at": now.isoformat()})
+    if is_new:
+        log.info(f"Worker '{worker_id}' registered")
+        log_event_db("worker", "registered", f"Worker {worker_id} first heartbeat", worker_id=worker_id)
+
+    # Compute equity snapshot on every heartbeat (persists to DB)
+    _compute_equity_snapshot()
+
+    return {"ok": True, "worker_id": worker_id, "registered": is_new, "server_time": now.isoformat()}
+
+
+def get_all_workers() -> list:
+    fleet_config = Config.get_fleet_config()
+    stale_threshold = fleet_config.get("stale_threshold_seconds", 30)
+    offline_threshold = fleet_config.get("offline_threshold_seconds", 90)
+    now = datetime.now(timezone.utc)
+    result = []
+    with _worker_lock:
+        for wid, rec in _workers_cache.items():
+            hb_dt = rec.get("_last_heartbeat_dt", now)
+            age = round((now - hb_dt).total_seconds(), 1)
+            reported = rec.get("reported_state", rec.get("state", "online"))
+            if age >= offline_threshold:
+                effective = "offline"
+            elif age >= stale_threshold:
+                effective = "stale"
+            else:
+                effective = reported
+            result.append({
+                "worker_id": rec.get("worker_id", wid), "worker_name": rec.get("worker_name"),
+                "host": rec.get("host"), "state": effective, "reported_state": reported,
+                "last_heartbeat_at": rec.get("last_heartbeat_at"), "heartbeat_age_seconds": age,
+                "agent_version": rec.get("agent_version"), "mt5_state": rec.get("mt5_state"),
+                "account_id": rec.get("account_id"), "broker": rec.get("broker"),
+                "active_strategies": rec.get("active_strategies") or [],
+                "open_positions_count": rec.get("open_positions_count", 0),
+                "floating_pnl": rec.get("floating_pnl"),
+                "errors": rec.get("errors") or [],
+                "total_ticks": rec.get("total_ticks", 0),
+                "total_bars": rec.get("total_bars", 0),
+                "on_bar_calls": rec.get("on_bar_calls", 0),
+                "signal_count": rec.get("signal_count", 0),
+                "last_bar_time": rec.get("last_bar_time"),
+                "current_price": rec.get("current_price"),
+            })
+    return result
+
+
+def get_fleet_summary() -> dict:
+    workers = get_all_workers()
+    counts = {"online_workers": 0, "stale_workers": 0, "offline_workers": 0,
+              "error_workers": 0, "warning_workers": 0}
+    online_states = {"online", "running", "idle"}
+    for w in workers:
+        state = w["state"]
+        if state in online_states:
+            counts["online_workers"] += 1
+        elif state == "stale":
+            counts["stale_workers"] += 1
+        elif state == "offline":
+            counts["offline_workers"] += 1
+        elif state == "error":
+            counts["error_workers"] += 1
+        elif state == "warning":
+            counts["warning_workers"] += 1
+    counts["total_workers"] = len(workers)
+    return counts
+
+
 # =============================================================================
 # Portfolio Data (Real — backed by trades table)
 # =============================================================================
 
+def _compute_equity_snapshot():
+    """Compute and store an equity snapshot from current fleet state to DB."""
+    floating = 0.0
+    open_pos = 0
+    with _worker_lock:
+        for w in _workers_cache.values():
+            floating += (w.get("floating_pnl") or 0.0)
+            open_pos += (w.get("open_positions_count") or 0)
+
+    trades = get_all_trades_db(limit=100000)
+    cum_pnl = sum(float(t.get("profit", 0) or 0) for t in trades)
+    starting = float(get_setting("starting_capital", "10000") or "10000")
+    balance = starting + cum_pnl
+    equity = balance + floating
+
+    # Save to DB (persists through restarts)
+    try:
+        save_equity_snapshot_db(
+            balance=round(balance, 2),
+            equity=round(equity, 2),
+            floating_pnl=round(floating, 2),
+            open_positions=open_pos,
+            cumulative_pnl=round(cum_pnl, 2),
+        )
+    except Exception as e:
+        print(f"[PORTFOLIO] Equity snapshot save failed: {e}")
+
+    # Also keep in-memory for fast access
+    now = datetime.now(timezone.utc).isoformat()
+    _equity_history.append({
+        "timestamp": now,
+        "equity": round(equity, 2),
+        "balance": round(balance, 2),
+        "floating_pnl": round(floating, 2),
+        "open_positions": open_pos,
+        "label": now[-8:],
+    })
+    if len(_equity_history) > 5000:
+        _equity_history[:] = _equity_history[-5000:]
+
+
 def get_portfolio_summary() -> dict:
-    from app.persistence import get_all_trades_db
-    trades = get_all_trades_db(limit=50000)
+    trades = get_all_trades_db(limit=100000)
 
     # Live worker data (even if no trades yet)
     workers = get_all_workers()
@@ -170,8 +328,11 @@ def get_portfolio_summary() -> dict:
     std_pnl = math.sqrt(variance) if variance > 0 else 0
     sharpe = round((mean_pnl / std_pnl * math.sqrt(252)), 2) if std_pnl > 0 else 0
 
+    starting = float(get_setting("starting_capital", "10000") or "10000")
+
     return {
-        "total_balance": 0, "total_equity": 0,
+        "total_balance": round(starting + total_pnl, 2),
+        "total_equity": round(starting + total_pnl + total_floating, 2),
         "floating_pnl": round(total_floating, 2),
         "daily_pnl": 0, "open_positions": total_positions,
         "realized_pnl": round(total_pnl, 2), "margin_usage": 0,
@@ -190,31 +351,77 @@ def get_portfolio_summary() -> dict:
 
 
 def get_equity_history() -> list:
-    from app.persistence import get_all_trades_db
-    trades = get_all_trades_db(limit=50000)
-    if not trades:
-        return []
-    sorted_trades = sorted(trades, key=lambda t: t.get("exit_time") or "")
-    daily = {}
-    cum = 0
-    for t in sorted_trades:
-        date = (t.get("exit_time") or "")[:10]
-        if not date:
-            continue
-        cum += t.get("profit", 0)
-        daily[date] = round(cum, 2)
-    return [{"timestamp": d, "equity": v} for d, v in sorted(daily.items())]
+    """Build equity curve from closed trades + periodic snapshots."""
+    starting_cap = float(get_setting("starting_capital", "10000") or "10000")
+
+    # Method 1: Build from closed trades (trade-by-trade equity)
+    trades = get_all_trades_db(limit=100000)
+    trade_curve = []
+    if trades:
+        sorted_trades = sorted(trades, key=lambda t: t.get("created_at", ""))
+        cumulative_pnl = 0.0
+        for t in sorted_trades:
+            profit = float(t.get("profit", 0) or 0)
+            cumulative_pnl += profit
+            equity = starting_cap + cumulative_pnl
+            ts = t.get("exit_time") or t.get("created_at", "")
+            ts_str = str(ts)
+            label = ts_str[-8:] if len(ts_str) >= 8 else ts_str
+            trade_curve.append({
+                "timestamp": ts_str,
+                "equity": round(equity, 2),
+                "balance": round(equity, 2),
+                "floating_pnl": 0.0,
+                "open_positions": 0,
+                "cumulative_pnl": round(cumulative_pnl, 2),
+                "label": label,
+                "source": "trade",
+            })
+
+    # Method 2: Periodic snapshots (from heartbeats — includes floating PnL)
+    snapshots = get_equity_snapshots_db(limit=2000)
+    snap_curve = []
+    for s in snapshots:
+        ts = s.get("timestamp", "")
+        label = ts[-8:] if len(ts) >= 8 else ts
+        snap_curve.append({
+            "timestamp": ts,
+            "equity": s.get("equity", starting_cap),
+            "balance": s.get("balance", starting_cap),
+            "floating_pnl": s.get("floating_pnl", 0),
+            "open_positions": s.get("open_positions", 0),
+            "cumulative_pnl": s.get("cumulative_pnl", 0),
+            "label": label,
+            "source": "snapshot",
+        })
+
+    # Merge: prefer trade points, fill gaps with snapshots
+    combined = trade_curve + snap_curve
+    combined.sort(key=lambda x: x.get("timestamp", ""))
+
+    # If nothing at all, return single starting point
+    if not combined:
+        return [{
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "equity": starting_cap,
+            "balance": starting_cap,
+            "floating_pnl": 0,
+            "open_positions": 0,
+            "cumulative_pnl": 0,
+            "label": "start",
+            "source": "initial",
+        }]
+
+    return combined
 
 
 def get_portfolio_trades(strategy_id=None, worker_id=None, symbol=None, limit=200) -> list:
-    from app.persistence import get_all_trades_db
     return get_all_trades_db(limit=limit, strategy_id=strategy_id,
                              worker_id=worker_id, symbol=symbol)
 
 
 def get_portfolio_performance() -> dict:
-    from app.persistence import get_all_trades_db
-    trades = get_all_trades_db(limit=50000)
+    trades = get_all_trades_db(limit=100000)
     if not trades:
         return {"daily": [], "by_strategy": [], "by_worker": [], "by_symbol": []}
 
@@ -292,103 +499,95 @@ def get_events_list(category=None, level=None, worker_id=None,
 
 
 # =============================================================================
-# Worker Registry
+# Settings Service
 # =============================================================================
 
-_workers_cache: dict = {}
-_worker_lock = threading.Lock()
+def get_system_settings() -> dict:
+    return get_all_settings()
 
 
-def _load_workers_from_db():
-    global _workers_cache
-    db_workers = get_all_workers_db()
-    with _worker_lock:
-        for w in db_workers:
-            wid = w["worker_id"]
-            hb_at = w.get("last_heartbeat_at")
-            if hb_at:
-                try:
-                    dt = datetime.fromisoformat(hb_at)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                except (ValueError, TypeError):
-                    dt = datetime.now(timezone.utc)
-            else:
-                dt = datetime.now(timezone.utc)
-            w["_last_heartbeat_dt"] = dt
-            _workers_cache[wid] = w
-    sys_log.info(f"Loaded {len(_workers_cache)} workers from DB")
+def save_system_settings(settings: dict) -> dict:
+    save_settings_bulk(settings)
+    return get_all_settings()
 
 
-def process_heartbeat(payload: dict) -> dict:
-    worker_id = payload["worker_id"].strip()
-    now = datetime.now(timezone.utc)
-    is_new = False
-    with _worker_lock:
-        if worker_id not in _workers_cache:
-            is_new = True
-        _workers_cache[worker_id] = {**payload, "worker_id": worker_id,
-                                      "last_heartbeat_at": now.isoformat(), "_last_heartbeat_dt": now}
-    save_worker(worker_id, {**payload, "last_heartbeat_at": now.isoformat()})
-    if is_new:
-        log.info(f"Worker '{worker_id}' registered")
-        log_event_db("worker", "registered", f"Worker {worker_id} first heartbeat", worker_id=worker_id)
-    return {"ok": True, "worker_id": worker_id, "registered": is_new, "server_time": now.isoformat()}
+# =============================================================================
+# Admin Service
+# =============================================================================
+
+def admin_get_stats() -> dict:
+    stats = get_system_stats_db()
+    stats["fleet_summary"] = get_fleet_summary()
+    return stats
 
 
-def get_all_workers() -> list:
-    fleet_config = Config.get_fleet_config()
-    stale_threshold = fleet_config.get("stale_threshold_seconds", 30)
-    offline_threshold = fleet_config.get("offline_threshold_seconds", 90)
-    now = datetime.now(timezone.utc)
-    result = []
-    with _worker_lock:
-        for wid, rec in _workers_cache.items():
-            hb_dt = rec.get("_last_heartbeat_dt", now)
-            age = round((now - hb_dt).total_seconds(), 1)
-            reported = rec.get("reported_state", rec.get("state", "online"))
-            if age >= offline_threshold:
-                effective = "offline"
-            elif age >= stale_threshold:
-                effective = "stale"
-            else:
-                effective = reported
-            result.append({
-                "worker_id": rec.get("worker_id", wid), "worker_name": rec.get("worker_name"),
-                "host": rec.get("host"), "state": effective, "reported_state": reported,
-                "last_heartbeat_at": rec.get("last_heartbeat_at"), "heartbeat_age_seconds": age,
-                "agent_version": rec.get("agent_version"), "mt5_state": rec.get("mt5_state"),
-                "account_id": rec.get("account_id"), "broker": rec.get("broker"),
-"active_strategies": rec.get("active_strategies") or [],
-                "open_positions_count": rec.get("open_positions_count", 0),
-                "floating_pnl": rec.get("floating_pnl"),
-                "errors": rec.get("errors") or [],
-                "total_ticks": rec.get("total_ticks", 0),
-                "total_bars": rec.get("total_bars", 0),
-                "on_bar_calls": rec.get("on_bar_calls", 0),
-                "signal_count": rec.get("signal_count", 0),
-                "last_bar_time": rec.get("last_bar_time"),
-                "current_price": rec.get("current_price"),
-            })
+def admin_delete_strategy(strategy_id: str) -> dict:
+    result = delete_strategy_full_db(strategy_id)
+    log_event_db("strategy", "deleted",
+                 f"Strategy {strategy_id} deleted by admin",
+                 strategy_id=strategy_id, level="WARNING")
     return result
 
 
-def get_fleet_summary() -> dict:
-    workers = get_all_workers()
-    counts = {"online_workers": 0, "stale_workers": 0, "offline_workers": 0,
-              "error_workers": 0, "warning_workers": 0}
-    online_states = {"online", "running", "idle"}
-    for w in workers:
-        state = w["state"]
-        if state in online_states:
-            counts["online_workers"] += 1
-        elif state == "stale":
-            counts["stale_workers"] += 1
-        elif state == "offline":
-            counts["offline_workers"] += 1
-        elif state == "error":
-            counts["error_workers"] += 1
-        elif state == "warning":
-            counts["warning_workers"] += 1
-    counts["total_workers"] = len(workers)
+def admin_reset_portfolio() -> dict:
+    trade_count = delete_all_trades_db()
+    clear_equity_snapshots_db()
+    _equity_history.clear()
+    log_event_db("system", "portfolio_reset",
+                 f"Portfolio reset: {trade_count} trades deleted", level="WARNING")
+    return {"trades_deleted": trade_count, "equity_cleared": True}
+
+
+def admin_clear_trades() -> dict:
+    count = delete_all_trades_db()
+    log_event_db("system", "trades_cleared",
+                 f"{count} trades deleted by admin", level="WARNING")
+    return {"trades_deleted": count}
+
+
+def admin_remove_worker(worker_id: str) -> dict:
+    with _worker_lock:
+        _workers_cache.pop(worker_id, None)
+    with _command_lock:
+        _command_queues.pop(worker_id, None)
+    result = remove_worker_db(worker_id)
+    log_event_db("worker", "removed",
+                 f"Worker {worker_id} removed by admin",
+                 worker_id=worker_id, level="WARNING")
+    return result
+
+
+def admin_remove_stale_workers(threshold: int = 300) -> dict:
+    count = remove_stale_workers_db(threshold)
+    now = datetime.now(timezone.utc)
+    with _worker_lock:
+        stale_ids = []
+        for wid, w in _workers_cache.items():
+            hb = w.get("last_heartbeat_at")
+            if hb:
+                try:
+                    last = datetime.fromisoformat(hb)
+                    if (now - last).total_seconds() > threshold:
+                        stale_ids.append(wid)
+                except (TypeError, ValueError):
+                    stale_ids.append(wid)
+        for wid in stale_ids:
+            _workers_cache.pop(wid, None)
+    log_event_db("system", "stale_workers_removed",
+                 f"{count} stale workers removed", level="WARNING")
+    return {"removed": count}
+
+
+def admin_clear_events() -> dict:
+    count = clear_events_db()
+    return {"events_cleared": count}
+
+
+def admin_full_reset() -> dict:
+    counts = full_system_reset_db()
+    _equity_history.clear()
+    with _worker_lock:
+        _workers_cache.clear()
+    with _command_lock:
+        _command_queues.clear()
     return counts

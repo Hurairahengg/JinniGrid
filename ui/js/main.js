@@ -50,7 +50,19 @@ var ApiClient = (function () {
       var q = [];
       if (params) { for (var k in params) { if (params[k]) q.push(k + '=' + encodeURIComponent(params[k])); } }
       return _request('GET', '/api/events' + (q.length ? '?' + q.join('&') : ''));
-    }
+    },
+    // Settings
+    getSettings: function () { return _request('GET', '/api/settings'); },
+    saveSettings: function (settings) { return _request('PUT', '/api/settings', { settings: settings }); },
+    // Admin
+    getAdminStats: function () { return _request('GET', '/api/admin/stats'); },
+    adminDeleteStrategy: function (sid) { return _request('POST', '/api/admin/strategies/' + sid + '/delete'); },
+    adminResetPortfolio: function () { return _request('POST', '/api/admin/portfolio/reset'); },
+    adminClearTrades: function () { return _request('POST', '/api/admin/trades/clear'); },
+    adminRemoveWorker: function (wid) { return _request('POST', '/api/admin/workers/' + wid + '/remove'); },
+    adminRemoveStaleWorkers: function () { return _request('POST', '/api/admin/workers/stale/remove'); },
+    adminClearEvents: function () { return _request('POST', '/api/admin/events/clear'); },
+    adminFullReset: function () { return _request('POST', '/api/admin/system/reset', { confirm: 'RESET_EVERYTHING' }); }
   };
 })();
 
@@ -173,41 +185,28 @@ var DashboardRenderer = (function () {
 
   function render() {
     var html = '<div class="dashboard">';
-
-    /* Row 1: KPIs */
     html += '<section><div class="section-header"><i class="fa-solid fa-gauge-high"></i><h2>System Overview</h2><span class="section-badge">LIVE</span></div>';
     html += '<div id="dash-kpi" class="portfolio-grid"><div class="loading-state" style="min-height:80px;grid-column:1/-1;"><div class="spinner"></div></div></div></section>';
-
-    /* Row 2: Equity Chart + Portfolio Stats */
     html += '<div class="dash-split-row">';
     html += '<section class="dash-chart-section"><div class="section-header"><i class="fa-solid fa-chart-area"></i><h2>Equity Curve</h2></div>';
     html += '<div class="chart-container"><div class="chart-wrapper" id="dash-equity-wrap"><canvas id="dash-equity-chart"></canvas></div></div></section>';
     html += '<section class="dash-stats-section"><div class="section-header"><i class="fa-solid fa-chart-pie"></i><h2>Portfolio Stats</h2></div>';
     html += '<div id="dash-port-stats" class="dash-stats-grid"><div class="loading-state" style="min-height:200px;"><div class="spinner"></div></div></div></section>';
     html += '</div>';
-
-    /* Row 3: Fleet + Pipeline + Active Strategies */
     html += '<div class="dash-triple-row">';
-
     html += '<section><div class="section-header"><i class="fa-solid fa-server"></i><h2>Fleet Health</h2><span class="section-badge">LIVE</span></div>';
     html += '<div id="dash-fleet" class="dash-panel-body"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
-
     html += '<section><div class="section-header"><i class="fa-solid fa-diagram-project"></i><h2>Pipeline</h2></div>';
     html += '<div id="dash-pipeline" class="dash-panel-body"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
-
     html += '<section><div class="section-header"><i class="fa-solid fa-crosshairs"></i><h2>Active Strategies</h2></div>';
     html += '<div id="dash-strategies" class="dash-panel-body"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
-
     html += '</div>';
-
-    /* Row 4: Recent Trades + Deployments */
     html += '<div class="dash-dual-row">';
     html += '<section><div class="section-header"><i class="fa-solid fa-receipt"></i><h2>Recent Trades</h2></div>';
     html += '<div id="dash-trades"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
     html += '<section><div class="section-header"><i class="fa-solid fa-rocket"></i><h2>Recent Deployments</h2><span class="section-badge">LIVE</span></div>';
     html += '<div id="dash-deploys"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
     html += '</div>';
-
     html += '</div>';
     document.getElementById('main-content').innerHTML = html;
     _fetchAll();
@@ -247,7 +246,7 @@ var DashboardRenderer = (function () {
         if (wrap) wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;gap:10px;"><i class="fa-solid fa-chart-area" style="opacity:0.3;font-size:28px;"></i><div><div style="font-weight:600;margin-bottom:2px;">No Equity Data Yet</div><div style="font-size:10.5px;opacity:0.7;">Trades will build the equity curve as strategies execute.</div></div></div>';
         return;
       }
-      var labels = hist.map(function (h) { return h.timestamp; });
+      var labels = hist.map(function (h) { return h.label || h.timestamp; });
       var values = hist.map(function (h) { return h.equity; });
       var canvas = document.getElementById('dash-equity-chart'); if (!canvas) return;
       if (_charts.equity) _charts.equity.destroy();
@@ -295,7 +294,7 @@ var DashboardRenderer = (function () {
         workers.forEach(function (w) {
           var name = w.worker_name || w.worker_id, state = w.state || 'unknown';
           var strats = w.active_strategies && w.active_strategies.length > 0 ? w.active_strategies.join(', ') : '<span class="value-null">\u2014</span>';
-          var mt5 = w.mt5_state === 'connected' ? '<span style="color:var(--success);">●</span>' : '<span class="value-null">○</span>';
+          var mt5 = w.mt5_state === 'connected' ? '<span style="color:var(--success);">\u25CF</span>' : '<span class="value-null">\u25CB</span>';
           html += '<tr class="clickable" onclick="DashboardRenderer._openWorker(\'' + w.worker_id + '\')"><td class="mono">' + name + '</td><td><span class="state-pill ' + state + '">' + state.toUpperCase() + '</span></td><td>' + mt5 + '</td><td class="mono">' + strats + '</td><td class="mono">' + _formatAge(w.heartbeat_age_seconds) + '</td></tr>';
         });
         html += '</tbody></table></div>';
@@ -487,32 +486,15 @@ var PortfolioRenderer = (function () {
 
   function render() {
     var html = '<div class="fleet-page" id="portfolio-page">';
-
-    /* Header */
     html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-chart-line" style="color:var(--accent);margin-right:8px;"></i>Portfolio Analytics</span><div class="fleet-page-meta"><button class="wd-refresh-btn" id="port-refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button></div></div>';
-
-    /* View Mode Tabs */
     html += '<div class="port-tabs" id="port-tabs"><button class="port-tab active" data-mode="overall">Overall</button><button class="port-tab" data-mode="strategy">By Strategy</button><button class="port-tab" data-mode="worker">By Worker</button><button class="port-tab" data-mode="symbol">By Symbol</button></div>';
-
-    /* Filters */
     html += '<div class="port-filters" id="port-filters"><div class="wd-form-group"><label class="wd-form-label">Strategy</label><select class="wd-form-select port-filter" id="port-f-strategy"><option value="">All</option></select></div><div class="wd-form-group"><label class="wd-form-label">Worker</label><select class="wd-form-select port-filter" id="port-f-worker"><option value="">All</option></select></div><div class="wd-form-group"><label class="wd-form-label">Symbol</label><select class="wd-form-select port-filter" id="port-f-symbol"><option value="">All</option></select></div></div>';
-
-    /* Stats */
     html += '<div id="port-stats" class="dash-stats-grid" style="margin-bottom:20px;"><div class="loading-state" style="min-height:80px;"><div class="spinner"></div></div></div>';
-
-    /* Charts Row */
     html += '<div class="dash-split-row"><section class="dash-chart-section"><div class="section-header"><i class="fa-solid fa-chart-area"></i><h2>Equity Curve</h2></div><div class="chart-container"><div class="chart-wrapper" id="port-equity-wrap"><canvas id="port-equity-chart"></canvas></div></div></section>';
     html += '<section class="dash-chart-section"><div class="section-header"><i class="fa-solid fa-arrow-trend-down"></i><h2>Drawdown</h2></div><div class="chart-container"><div class="chart-wrapper" id="port-dd-wrap"><canvas id="port-dd-chart"></canvas></div></div></section></div>';
-
-    /* Daily Performance Chart */
     html += '<section><div class="section-header"><i class="fa-solid fa-calendar-days"></i><h2>Daily P&L</h2></div><div class="chart-container"><div class="chart-wrapper" style="height:220px;" id="port-daily-wrap"><canvas id="port-daily-chart"></canvas></div></div></section>';
-
-    /* Breakdown Table */
     html += '<div id="port-breakdown"></div>';
-
-    /* Trade Table */
     html += '<section><div class="section-header"><i class="fa-solid fa-list"></i><h2>Trade History</h2></div><div id="port-trades"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
-
     html += '</div>';
     document.getElementById('main-content').innerHTML = html;
     _attachEvents();
@@ -545,7 +527,7 @@ var PortfolioRenderer = (function () {
     ApiClient.getPortfolioTrades({ limit: 500 }).then(function (data) {
       var trades = data.trades || [];
       var strats = {}, workers = {}, syms = {};
-      trades.forEach(function (t) { strats[t.strategy_id] = 1; workers[t.worker_id] = 1; syms[t.symbol] = 1; });
+      trades.forEach(function (t) { if (t.strategy_id) strats[t.strategy_id] = 1; if (t.worker_id) workers[t.worker_id] = 1; if (t.symbol) syms[t.symbol] = 1; });
       function _fill(id, obj) {
         var el = document.getElementById(id); if (!el) return;
         var val = el.value;
@@ -578,17 +560,18 @@ var PortfolioRenderer = (function () {
 
   function _loadEquity() {
     ApiClient.getEquityHistory().then(function (data) {
-      var hist = data.equity_history || []; if (hist.length === 0) return;
-      var labels = hist.map(function (h) { return h.timestamp; }), vals = hist.map(function (h) { return h.equity; });
-
-      /* Equity */
+      var hist = data.equity_history || [];
+      if (hist.length === 0) {
+        var ew = document.getElementById('port-equity-wrap');
+        if (ew) ew.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;gap:10px;"><i class="fa-solid fa-chart-area" style="opacity:0.3;font-size:28px;"></i><div><div style="font-weight:600;margin-bottom:2px;">No Equity Data Yet</div><div style="font-size:10.5px;opacity:0.7;">Trades will build the equity curve.</div></div></div>';
+        return;
+      }
+      var labels = hist.map(function (h) { return h.label || h.timestamp; }), vals = hist.map(function (h) { return h.equity; });
       var c1 = document.getElementById('port-equity-chart'); if (!c1) return;
       if (_charts.equity) _charts.equity.destroy();
       var ctx1 = c1.getContext('2d'), g1 = ctx1.createLinearGradient(0, 0, 0, 280);
       g1.addColorStop(0, 'rgba(6,182,212,0.25)'); g1.addColorStop(1, 'rgba(6,182,212,0)');
       _charts.equity = new Chart(ctx1, { type: 'line', data: { labels: labels, datasets: [{ data: vals, borderColor: ChartHelper.accentColor(), backgroundColor: g1, borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }] }, options: ChartHelper.baseOpts({ scales: { x: { grid: { color: ChartHelper.gridColor(), drawBorder: false }, ticks: { color: ChartHelper.textColor(), font: { family: 'JetBrains Mono', size: 10 }, maxRotation: 0, maxTicksLimit: 10 } }, y: { grid: { color: ChartHelper.gridColor(), drawBorder: false }, ticks: { color: ChartHelper.textColor(), font: { family: 'JetBrains Mono', size: 10 }, callback: function (v) { return '$' + _fmtNum(v); } } } } }) });
-
-      /* Drawdown */
       var peak = 0, dd = [];
       vals.forEach(function (v) { if (v > peak) peak = v; dd.push(peak > 0 ? -((peak - v) / peak * 100) : 0); });
       var c2 = document.getElementById('port-dd-chart'); if (!c2) return;
@@ -671,16 +654,12 @@ var LogsRenderer = (function () {
   function render() {
     var html = '<div class="fleet-page" id="logs-page">';
     html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-scroll" style="color:var(--accent);margin-right:8px;"></i>Event Logs</span><div class="fleet-page-meta"><label class="log-auto-label"><input type="checkbox" id="log-auto-check" checked /> Auto-refresh</label><button class="wd-refresh-btn" id="log-refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button></div></div>';
-
-    /* Filters */
     html += '<div class="log-filters">';
     html += '<div class="wd-form-group"><label class="wd-form-label">Category</label><select class="wd-form-select log-f" id="log-f-cat"><option value="">All</option><option value="system">SYSTEM</option><option value="worker">WORKER</option><option value="execution">EXECUTION</option><option value="strategy">STRATEGY</option><option value="deployment">DEPLOYMENT</option><option value="command">COMMAND</option></select></div>';
     html += '<div class="wd-form-group"><label class="wd-form-label">Level</label><select class="wd-form-select log-f" id="log-f-level"><option value="">All</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="DEBUG">DEBUG</option></select></div>';
     html += '<div class="wd-form-group"><label class="wd-form-label">Worker</label><input type="text" class="wd-form-input log-f" id="log-f-worker" placeholder="worker id\u2026" /></div>';
     html += '<div class="wd-form-group"><label class="wd-form-label">Search</label><input type="text" class="wd-form-input log-f" id="log-f-search" placeholder="keyword\u2026" /></div>';
     html += '</div>';
-
-    /* Table */
     html += '<div id="log-content"><div class="loading-state" style="min-height:200px;"><div class="spinner"></div><p>Loading events\u2026</p></div></div>';
     html += '</div>';
     document.getElementById('main-content').innerHTML = html;
@@ -700,36 +679,36 @@ var LogsRenderer = (function () {
 
   function _fetch() {
     var params = {};
-    var cat = document.getElementById('log-f-cat').value; if (cat) params.category = cat;
-    var lvl = document.getElementById('log-f-level').value; if (lvl) params.level = lvl;
-    var wk = document.getElementById('log-f-worker').value.trim(); if (wk) params.worker_id = wk;
-    var search = document.getElementById('log-f-search').value.trim(); if (search) params.search = search;
+    var cat = document.getElementById('log-f-cat'); if (cat && cat.value) params.category = cat.value;
+    var lvl = document.getElementById('log-f-level'); if (lvl && lvl.value) params.level = lvl.value;
+    var wk = document.getElementById('log-f-worker'); if (wk && wk.value.trim()) params.worker_id = wk.value.trim();
+    var search = document.getElementById('log-f-search'); if (search && search.value.trim()) params.search = search.value.trim();
     params.limit = 300;
 
     ApiClient.getEvents(params).then(function (data) {
       var events = data.events || [], el = document.getElementById('log-content'); if (!el) return;
       if (events.length === 0) { el.innerHTML = '<div style="padding:24px;color:var(--text-muted);font-size:12px;text-align:center;"><i class="fa-solid fa-circle-info" style="margin-right:6px;"></i>No events found matching filters.</div>'; return; }
 
-      var html = '<div class="log-count">' + data.count + ' events</div>';
+      var html = '<div class="log-count">' + (data.count || events.length) + ' events</div>';
       html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table log-table"><thead><tr><th style="width:150px;">Timestamp</th><th style="width:90px;">Category</th><th style="width:60px;">Level</th><th style="width:100px;">Type</th><th>Message</th><th style="width:80px;">Worker</th></tr></thead><tbody>';
 
       events.forEach(function (ev, idx) {
         var ts = (ev.timestamp || '').replace('T', ' ').substring(0, 19);
-        var cat = (ev.category || '').toUpperCase();
-        var lvl = ev.level || 'INFO';
-        var lvlClass = lvl === 'ERROR' ? 'text-danger' : lvl === 'WARNING' ? 'text-warning' : 'text-muted';
+        var evCat = (ev.category || '').toUpperCase();
+        var evLvl = ev.level || 'INFO';
+        var lvlClass = evLvl === 'ERROR' ? 'text-danger' : evLvl === 'WARNING' ? 'text-warning' : 'text-muted';
         var catClass = '';
-        if (cat === 'EXECUTION') catClass = 'text-success';
-        else if (cat === 'STRATEGY') catClass = 'text-accent';
-        else if (cat === 'WORKER') catClass = 'text-warning';
+        if (evCat === 'EXECUTION') catClass = 'text-success';
+        else if (evCat === 'STRATEGY') catClass = 'text-accent';
+        else if (evCat === 'WORKER') catClass = 'text-warning';
         var msg = ev.message || '';
         var hasData = ev.data_json && ev.data_json !== 'null';
         var expandId = 'log-expand-' + idx;
 
         html += '<tr class="log-row' + (hasData ? ' clickable' : '') + '"' + (hasData ? ' onclick="LogsRenderer._toggle(\'' + expandId + '\')"' : '') + '>';
         html += '<td class="mono" style="font-size:10.5px;">' + ts + '</td>';
-        html += '<td class="mono ' + catClass + '" style="font-size:10px;">' + cat + '</td>';
-        html += '<td class="mono ' + lvlClass + '" style="font-size:10px;font-weight:600;">' + lvl + '</td>';
+        html += '<td class="mono ' + catClass + '" style="font-size:10px;">' + evCat + '</td>';
+        html += '<td class="mono ' + lvlClass + '" style="font-size:10px;font-weight:600;">' + evLvl + '</td>';
         html += '<td class="mono" style="font-size:10px;">' + (ev.event_type || '') + '</td>';
         html += '<td style="font-size:11px;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + msg + (hasData ? ' <i class="fa-solid fa-chevron-down" style="font-size:8px;opacity:0.4;margin-left:4px;"></i>' : '') + '</td>';
         html += '<td class="mono" style="font-size:10px;">' + (ev.worker_id || '\u2014') + '</td>';
@@ -760,12 +739,383 @@ var LogsRenderer = (function () {
 })();
 
 /* ============================================================
+   SETTINGS + ADMIN RENDERER
+   ============================================================ */
+var SettingsRenderer = (function () {
+  'use strict';
+
+  var _settings = {};
+  var _stats = {};
+  var _strategies = [];
+  var _workers = [];
+  var _activeTab = 'general';
+
+  function _fmtBytes(b) {
+    if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+    return b + ' B';
+  }
+
+  function _buildPage() {
+    var html = '<div class="fleet-page">';
+    html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-gear" style="margin-right:8px;color:var(--accent);"></i>Settings & Administration</span></div>';
+    html += '<div class="port-tabs" id="settings-tabs">';
+    html += '<button class="port-tab' + (_activeTab === 'general' ? ' active' : '') + '" data-tab="general">General Settings</button>';
+    html += '<button class="port-tab' + (_activeTab === 'admin' ? ' active' : '') + '" data-tab="admin">System Management</button>';
+    html += '</div>';
+    html += '<div id="settings-content"></div>';
+    html += '</div>';
+    return html;
+  }
+
+  function _renderGeneral() {
+    var s = _settings;
+    var fields = [
+      { key: 'refresh_interval', label: 'Dashboard Refresh Interval', type: 'number', unit: 'seconds', min: 1, max: 60 },
+      { key: 'default_symbol', label: 'Default Symbol', type: 'text', placeholder: 'e.g. XAUUSD' },
+      { key: 'default_bar_size', label: 'Default Bar Size', type: 'number', unit: 'points', min: 1 },
+      { key: 'default_lot_size', label: 'Default Lot Size', type: 'number', step: '0.01', min: 0.01 },
+      { key: 'starting_capital', label: 'Starting Capital', type: 'number', unit: '$', min: 100 },
+      { key: 'worker_timeout_seconds', label: 'Worker Offline Timeout', type: 'number', unit: 'seconds', min: 10 },
+      { key: 'log_verbosity', label: 'Log Verbosity', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'] },
+      { key: 'debug_mode', label: 'Debug Mode', type: 'toggle' }
+    ];
+
+    var html = '<div class="wd-panel"><div class="wd-panel-header">General Settings</div><div class="wd-panel-body">';
+    html += '<div class="wd-form-grid">';
+
+    fields.forEach(function (f) {
+      var val = s[f.key] || '';
+      html += '<div class="wd-form-group">';
+      html += '<label class="wd-form-label">' + f.label + (f.unit ? ' (' + f.unit + ')' : '') + '</label>';
+
+      if (f.type === 'toggle') {
+        var checked = val === 'true' || val === true ? ' checked' : '';
+        html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" class="settings-input" data-key="' + f.key + '"' + checked + ' /> <span style="font-size:12px;color:var(--text-muted);">' + (checked ? 'Enabled' : 'Disabled') + '</span></label>';
+      } else if (f.type === 'select') {
+        html += '<select class="wd-form-select settings-input" data-key="' + f.key + '">';
+        f.options.forEach(function (o) {
+          html += '<option value="' + o + '"' + (val === o ? ' selected' : '') + '>' + o + '</option>';
+        });
+        html += '</select>';
+      } else {
+        var attrs = 'type="' + f.type + '" class="wd-form-input settings-input" data-key="' + f.key + '" value="' + val + '"';
+        if (f.min !== undefined) attrs += ' min="' + f.min + '"';
+        if (f.max !== undefined) attrs += ' max="' + f.max + '"';
+        if (f.step) attrs += ' step="' + f.step + '"';
+        if (f.placeholder) attrs += ' placeholder="' + f.placeholder + '"';
+        html += '<input ' + attrs + ' />';
+      }
+      html += '</div>';
+    });
+
+    html += '</div>';
+    html += '<div style="margin-top:16px;display:flex;gap:10px;">';
+    html += '<button class="wd-btn wd-btn-primary" id="save-settings-btn"><i class="fa-solid fa-floppy-disk"></i> Save Settings</button>';
+    html += '<button class="wd-btn wd-btn-ghost" id="reset-settings-btn"><i class="fa-solid fa-rotate-left"></i> Reset to Defaults</button>';
+    html += '</div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function _renderAdmin() {
+    var html = '';
+
+    // System Stats
+    html += '<div class="wd-panel"><div class="wd-panel-header" style="display:flex;justify-content:space-between;align-items:center;">System Overview';
+    html += '<button class="wd-btn wd-btn-ghost" id="refresh-stats-btn" style="font-size:11px;padding:4px 10px;"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button></div><div class="wd-panel-body">';
+    html += '<div class="wd-status-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
+    var statCards = [
+      { label: 'Database Size', value: _fmtBytes(_stats.db_size_bytes || 0) },
+      { label: 'Strategies', value: _stats.strategies_count || 0 },
+      { label: 'Workers', value: _stats.workers_count || 0 },
+      { label: 'Active Deploys', value: _stats.active_deployments || 0 },
+      { label: 'Total Trades', value: _stats.trades_count || 0 },
+      { label: 'Events', value: _stats.events_count || 0 },
+      { label: 'Equity Snaps', value: _stats.equity_snapshots_count || 0 },
+      { label: 'Settings', value: _stats.settings_count || 0 }
+    ];
+    statCards.forEach(function (c) {
+      html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:12px;text-align:center;"><div class="mono" style="font-size:16px;font-weight:600;color:var(--accent);">' + c.value + '</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + c.label + '</div></div>';
+    });
+    html += '</div></div></div>';
+
+    // Strategy Management
+    html += '<div class="wd-panel"><div class="wd-panel-header">Strategy Management <span class="panel-badge">' + _strategies.length + ' STRATEGIES</span></div><div class="wd-panel-body">';
+    if (_strategies.length === 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No strategies registered.</div>';
+    } else {
+      _strategies.forEach(function (s) {
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;margin-bottom:6px;">' +
+          '<div><span class="mono" style="color:var(--accent);font-size:12px;">' + (s.name || s.strategy_id) + '</span>' +
+          '<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">v' + (s.version || '?') + '</span></div>' +
+          '<button class="wd-btn wd-btn-ghost admin-delete-strategy" data-sid="' + s.strategy_id + '" style="font-size:10.5px;color:var(--danger);padding:4px 10px;">' +
+          '<i class="fa-solid fa-trash"></i> Delete</button></div>';
+      });
+    }
+    html += '</div></div>';
+
+    // Worker Management
+    html += '<div class="wd-panel"><div class="wd-panel-header">Worker Management <span class="panel-badge">' + _workers.length + ' WORKERS</span></div><div class="wd-panel-body">';
+    if (_workers.length === 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No workers registered.</div>';
+    } else {
+      _workers.forEach(function (w) {
+        var stateClass = w.state || 'unknown';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;margin-bottom:6px;">' +
+          '<div><span class="mono" style="font-size:12px;">' + (w.worker_name || w.worker_id) + '</span>' +
+          '<span class="state-pill ' + stateClass + '" style="margin-left:8px;">' + stateClass.toUpperCase() + '</span></div>' +
+          '<button class="wd-btn wd-btn-ghost admin-remove-worker" data-wid="' + w.worker_id + '" style="font-size:10.5px;color:var(--danger);padding:4px 10px;">' +
+          '<i class="fa-solid fa-trash"></i> Remove</button></div>';
+      });
+    }
+    html += '<button class="wd-btn wd-btn-ghost" id="remove-stale-btn" style="margin-top:8px;font-size:11px;"><i class="fa-solid fa-broom"></i> Remove All Stale Workers</button>';
+    html += '</div></div>';
+
+    // Portfolio Management
+    html += '<div class="wd-panel"><div class="wd-panel-header">Portfolio Management</div><div class="wd-panel-body">';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
+    html += '<button class="wd-btn wd-btn-ghost" id="admin-clear-trades"><i class="fa-solid fa-eraser"></i> Delete All Trades (' + (_stats.trades_count || 0) + ')</button>';
+    html += '<button class="wd-btn wd-btn-ghost" id="admin-reset-portfolio"><i class="fa-solid fa-rotate-left"></i> Reset Portfolio (Trades + Equity)</button>';
+    html += '</div></div></div>';
+
+    // Log Management
+    html += '<div class="wd-panel"><div class="wd-panel-header">Log Management</div><div class="wd-panel-body">';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
+    html += '<button class="wd-btn wd-btn-ghost" id="admin-clear-events"><i class="fa-solid fa-eraser"></i> Clear All Events (' + (_stats.events_count || 0) + ')</button>';
+    html += '</div></div></div>';
+
+    // Danger Zone
+    html += '<div class="wd-panel" style="border:1px solid var(--danger);">';
+    html += '<div class="wd-panel-header" style="color:var(--danger);"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Danger Zone</div><div class="wd-panel-body">';
+    html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Full system reset deletes ALL trades, events, deployments, and equity data. Workers are set offline. Strategies and settings are preserved.</p>';
+    html += '<button class="wd-btn" id="admin-full-reset" style="background:rgba(239,68,68,0.15);color:var(--danger);font-weight:600;border:1px solid var(--danger);"><i class="fa-solid fa-skull-crossbones"></i> Full System Reset</button>';
+    html += '</div></div>';
+
+    return html;
+  }
+
+  function _renderTab() {
+    var el = document.getElementById('settings-content');
+    if (!el) return;
+    if (_activeTab === 'general') {
+      el.innerHTML = _renderGeneral();
+      _attachGeneralEvents();
+    } else {
+      el.innerHTML = _renderAdmin();
+      _attachAdminEvents();
+    }
+  }
+
+  function _attachGeneralEvents() {
+    var saveBtn = document.getElementById('save-settings-btn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        var updated = {};
+        document.querySelectorAll('.settings-input').forEach(function (input) {
+          var key = input.getAttribute('data-key');
+          if (input.type === 'checkbox') {
+            updated[key] = input.checked ? 'true' : 'false';
+          } else {
+            updated[key] = input.value;
+          }
+        });
+        ApiClient.saveSettings(updated).then(function (data) {
+          _settings = data.settings || {};
+          ToastManager.show('Settings saved.', 'success');
+        }).catch(function () { ToastManager.show('Failed to save settings.', 'error'); });
+      });
+    }
+    var resetBtn = document.getElementById('reset-settings-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', function () {
+        var defaults = {
+          refresh_interval: '5', default_symbol: 'XAUUSD', default_bar_size: '100',
+          default_lot_size: '0.01', starting_capital: '10000', worker_timeout_seconds: '90',
+          log_verbosity: 'INFO', debug_mode: 'true'
+        };
+        ApiClient.saveSettings(defaults).then(function (data) {
+          _settings = data.settings || {};
+          _renderTab();
+          ToastManager.show('Settings reset to defaults.', 'info');
+        }).catch(function () { ToastManager.show('Failed to reset settings.', 'error'); });
+      });
+    }
+  }
+
+  function _attachAdminEvents() {
+    var refreshBtn = document.getElementById('refresh-stats-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function () { _loadData(); });
+    }
+
+    document.querySelectorAll('.admin-delete-strategy').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var sid = btn.getAttribute('data-sid');
+        ModalManager.show({
+          title: 'Delete Strategy', type: 'danger',
+          bodyHtml: '<p>Delete strategy <strong>' + sid + '</strong>? This removes the strategy file and all deployment records.</p>',
+          confirmText: 'Delete',
+          onConfirm: function () {
+            ApiClient.adminDeleteStrategy(sid).then(function () {
+              ToastManager.show('Strategy ' + sid + ' deleted.', 'success');
+              _loadData();
+            }).catch(function () { ToastManager.show('Delete failed.', 'error'); });
+          }
+        });
+      });
+    });
+
+    document.querySelectorAll('.admin-remove-worker').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var wid = btn.getAttribute('data-wid');
+        ModalManager.show({
+          title: 'Remove Worker', type: 'danger',
+          bodyHtml: '<p>Remove worker <strong>' + wid + '</strong>? Active deployments will be stopped.</p>',
+          confirmText: 'Remove',
+          onConfirm: function () {
+            ApiClient.adminRemoveWorker(wid).then(function () {
+              ToastManager.show('Worker removed.', 'success');
+              _loadData();
+            }).catch(function () { ToastManager.show('Remove failed.', 'error'); });
+          }
+        });
+      });
+    });
+
+    var staleBtn = document.getElementById('remove-stale-btn');
+    if (staleBtn) {
+      staleBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: 'Remove Stale Workers',
+          bodyHtml: '<p>Remove all workers that haven\'t sent a heartbeat in over 5 minutes?</p>',
+          confirmText: 'Remove Stale',
+          onConfirm: function () {
+            ApiClient.adminRemoveStaleWorkers().then(function (d) {
+              ToastManager.show((d.removed || 0) + ' stale workers removed.', 'success');
+              _loadData();
+            }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    }
+
+    var clearTradesBtn = document.getElementById('admin-clear-trades');
+    if (clearTradesBtn) {
+      clearTradesBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: 'Delete All Trades', type: 'danger',
+          bodyHtml: '<p>Delete ALL trade records? This cannot be undone.</p>',
+          confirmText: 'Delete All Trades',
+          onConfirm: function () {
+            ApiClient.adminClearTrades().then(function (d) {
+              ToastManager.show((d.trades_deleted || 0) + ' trades deleted.', 'success');
+              _loadData();
+            }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    }
+
+    var resetPortBtn = document.getElementById('admin-reset-portfolio');
+    if (resetPortBtn) {
+      resetPortBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: 'Reset Portfolio', type: 'danger',
+          bodyHtml: '<p>Reset entire portfolio? This deletes all trades AND equity history.</p>',
+          confirmText: 'Reset Portfolio',
+          onConfirm: function () {
+            ApiClient.adminResetPortfolio().then(function () {
+              ToastManager.show('Portfolio reset.', 'success');
+              _loadData();
+            }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    }
+
+    var clearEventsBtn = document.getElementById('admin-clear-events');
+    if (clearEventsBtn) {
+      clearEventsBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: 'Clear All Events',
+          bodyHtml: '<p>Delete all event log entries?</p>',
+          confirmText: 'Clear Events',
+          onConfirm: function () {
+            ApiClient.adminClearEvents().then(function (d) {
+              ToastManager.show((d.events_cleared || 0) + ' events cleared.', 'success');
+              _loadData();
+            }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    }
+
+    var fullResetBtn = document.getElementById('admin-full-reset');
+    if (fullResetBtn) {
+      fullResetBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: '\u26A0\uFE0F FULL SYSTEM RESET', type: 'danger',
+          bodyHtml: '<p>This will delete <strong>ALL</strong> trades, events, deployments, and equity data.</p>' +
+            '<p style="color:var(--danger);font-weight:600;margin-top:8px;"><i class="fa-solid fa-triangle-exclamation"></i> This action is irreversible. Only strategies and settings are preserved.</p>',
+          confirmText: 'RESET EVERYTHING',
+          onConfirm: function () {
+            ApiClient.adminFullReset().then(function () {
+              ToastManager.show('System reset complete.', 'warning');
+              _loadData();
+            }).catch(function () { ToastManager.show('Reset failed.', 'error'); });
+          }
+        });
+      });
+    }
+  }
+
+  function _loadData() {
+    Promise.all([
+      ApiClient.getSettings().catch(function () { return { settings: {} }; }),
+      ApiClient.getAdminStats().catch(function () { return { stats: {} }; }),
+      ApiClient.getStrategies().catch(function () { return { strategies: [] }; }),
+      ApiClient.getFleetWorkers().catch(function () { return { workers: [] }; })
+    ]).then(function (results) {
+      _settings = (results[0] && results[0].settings) || {};
+      _stats = (results[1] && results[1].stats) || {};
+      _strategies = (results[2] && results[2].strategies) || [];
+      var fleetData = results[3] || {};
+      _workers = fleetData.workers || [];
+      _renderTab();
+    }).catch(function () {
+      var el = document.getElementById('settings-content');
+      if (el) el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);"><i class="fa-solid fa-circle-exclamation" style="font-size:32px;opacity:0.3;margin-bottom:12px;display:block;"></i><h3 style="margin-bottom:4px;">Failed to Load</h3><p style="font-size:12px;">Could not reach server.</p></div>';
+    });
+  }
+
+  function render() {
+    var el = document.getElementById('main-content');
+    el.innerHTML = _buildPage();
+
+    document.querySelectorAll('#settings-tabs .port-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        _activeTab = tab.getAttribute('data-tab');
+        document.querySelectorAll('#settings-tabs .port-tab').forEach(function (t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        _renderTab();
+      });
+    });
+
+    _loadData();
+  }
+
+  function destroy() {}
+
+  return { render: render, destroy: destroy };
+})();
+
+/* ============================================================
    APP (NAVIGATION)
    ============================================================ */
 var App = (function () {
   'use strict';
   var currentPage = 'dashboard', _selectedWorker = null;
-  var pageDescriptions = { settings: 'System configuration and preferences.' };
 
   function init() { ThemeManager.init(); setupNavigation(); startClock(); navigateTo('dashboard'); }
 
@@ -782,10 +1132,11 @@ var App = (function () {
     if (currentPage === 'strategies') StrategiesRenderer.destroy();
     if (currentPage === 'portfolio') PortfolioRenderer.destroy();
     if (currentPage === 'logs') LogsRenderer.destroy();
+    if (currentPage === 'settings') SettingsRenderer.destroy();
     currentPage = page;
     var navPage = page === 'workerDetail' ? 'fleet' : page;
     document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (item) { item.classList.toggle('active', item.getAttribute('data-page') === navPage); });
-    var titleMap = { workerDetail: 'Worker Detail', portfolio: 'Portfolio', logs: 'Logs' };
+    var titleMap = { workerDetail: 'Worker Detail', portfolio: 'Portfolio', logs: 'Logs', settings: 'Settings' };
     document.getElementById('topbar-title').textContent = titleMap[page] || (page.charAt(0).toUpperCase() + page.slice(1));
     if (page === 'dashboard') DashboardRenderer.render();
     else if (page === 'fleet') FleetRenderer.render();
@@ -793,14 +1144,14 @@ var App = (function () {
     else if (page === 'strategies') StrategiesRenderer.render();
     else if (page === 'portfolio') PortfolioRenderer.render();
     else if (page === 'logs') LogsRenderer.render();
+    else if (page === 'settings') SettingsRenderer.render();
     else renderPlaceholder(page);
   }
 
   function navigateToWorkerDetail(workerData) { _selectedWorker = workerData; navigateTo('workerDetail'); }
 
   function renderPlaceholder(page) {
-    var desc = pageDescriptions[page] || 'Under development.';
-    document.getElementById('main-content').innerHTML = '<div class="placeholder-page"><i class="fa-solid fa-gear"></i><h2>' + (page.charAt(0).toUpperCase() + page.slice(1)) + '</h2><p>' + desc + '</p></div>';
+    document.getElementById('main-content').innerHTML = '<div class="placeholder-page"><i class="fa-solid fa-gear"></i><h2>' + (page.charAt(0).toUpperCase() + page.slice(1)) + '</h2><p>Under development.</p></div>';
   }
 
   function startClock() { function u() { var n = new Date(); document.getElementById('topbar-clock').textContent = String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0') + ':' + String(n.getSeconds()).padStart(2, '0'); } u(); setInterval(u, 1000); }
