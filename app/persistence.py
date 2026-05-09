@@ -569,6 +569,35 @@ def delete_all_trades_db():
     conn.commit()
     return count
 
+def delete_strategy_full_db(strategy_id: str) -> dict:
+    """Delete strategy + all its deployments + trades + strategy file."""
+    conn = _get_conn()
+    # Delete deployments
+    dep_count = conn.execute(
+        "SELECT COUNT(*) FROM deployments WHERE strategy_id=?", (strategy_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM deployments WHERE strategy_id=?", (strategy_id,))
+
+    # Delete trades for this strategy
+    trade_count = conn.execute(
+        "SELECT COUNT(*) FROM trades WHERE strategy_id=?", (strategy_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
+
+    # Delete the strategy itself
+    conn.execute("DELETE FROM strategies WHERE strategy_id=?", (strategy_id,))
+
+    # Delete strategy file from disk
+    try:
+        import glob, os
+        for path in glob.glob(f"strategies/*{strategy_id}*"):
+            os.remove(path)
+    except Exception:
+        pass
+
+    conn.commit()
+    return {"ok": True, "strategy_id": strategy_id,
+            "deployments_deleted": dep_count, "trades_deleted": trade_count}
 
 def delete_trades_by_strategy_db(strategy_id: str) -> int:
     conn = _get_conn()
