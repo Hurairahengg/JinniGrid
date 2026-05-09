@@ -182,6 +182,22 @@ class PositionState:
     ticket: Optional[int] = None
     profit: Optional[float] = None
     entry_bar: Optional[int] = None
+    # Backtester-compatible fields
+    bars_held: int = 0
+    unrealized_pts: float = 0.0
+    unrealized_pnl: float = 0.0
+    mae: float = 0.0
+    mfe: float = 0.0
+
+    @property
+    def sl_level(self) -> Optional[float]:
+        """Backtester-compatible alias for sl."""
+        return self.sl
+
+    @property
+    def tp_level(self) -> Optional[float]:
+        """Backtester-compatible alias for tp."""
+        return self.tp
 
 
 # =============================================================================

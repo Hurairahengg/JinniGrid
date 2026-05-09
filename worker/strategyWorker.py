@@ -87,21 +87,41 @@ class BaseStrategy(ABC):
 # =============================================================================
 
 class StrategyContext:
+    """
+    Strategy execution context — backtester-compatible.
+
+    ctx.index:           absolute monotonic bar counter (never resets, never wraps)
+    ctx.bar:             current bar dict (OHLCV)
+    ctx.bars:            rolling bar window (deque snapshot, use negative indexing for lookback)
+    ctx.indicators:      current bar indicator values {key: float}
+    ctx.ind_series:      full indicator series {key: [float]} over current bar window
+    ctx.prev_indicators: previous bar's indicator values (backtester compat)
+    ctx.position:        PositionState (has_position, direction, sl_level, tp_level, etc.)
+    ctx.params:          strategy parameters
+    ctx.state:           mutable dict — persists across bars (strategy's scratch space)
+    ctx.trades:          closed trade records (read-only list)
+    ctx.equity:          current mark-to-market equity
+    ctx.balance:         current realized balance
+    """
+
     def __init__(self, bars: list, params: dict,
                  position: Optional[PositionState] = None):
         self._bars = bars
         self._params = params
         self._position = position or PositionState()
-        self._index: int = 0
+        self._index: int = 0           # absolute monotonic bar counter
+        self._bar_offset: int = 0      # position of current bar in _bars
         self._trades: list = []
         self._equity: float = 0.0
         self._balance: float = 0.0
         self._indicators: dict = {}
         self._ind_series: dict = {}
+        self._prev_indicators: dict = {}
         self.state: dict = {}
 
     @property
     def index(self) -> int:
+        """Absolute monotonic bar counter (matches backtester ctx.index)."""
         return self._index
 
     @index.setter
@@ -110,21 +130,30 @@ class StrategyContext:
 
     @property
     def bar(self) -> dict:
-        if 0 <= self._index < len(self._bars):
-            return self._bars[self._index]
+        """Current bar OHLCV dict."""
+        if 0 <= self._bar_offset < len(self._bars):
+            return self._bars[self._bar_offset]
         return {}
 
     @property
     def bars(self) -> list:
+        """Rolling bar window. Use negative indexing for lookback: bars[-2] = previous bar."""
         return self._bars
 
     @property
     def indicators(self) -> dict:
+        """Current bar indicator values {key: value}."""
         return self._indicators
 
     @property
     def ind_series(self) -> dict:
+        """Full indicator series over current bar window {key: [values]}."""
         return self._ind_series
+
+    @property
+    def prev_indicators(self) -> dict:
+        """Previous bar's indicator values (backtester-compatible)."""
+        return self._prev_indicators
 
     @property
     def position(self) -> PositionState:
@@ -158,7 +187,6 @@ class StrategyContext:
     def balance(self, val: float):
         self._balance = val
 
-
 # =============================================================================
 # Range Bar Engine
 # =============================================================================
@@ -174,10 +202,12 @@ def _make_bar(time_: int, open_: float, high_: float, low_: float,
 
 class RangeBarEngine:
     def __init__(self, bar_size_points: float, max_bars: int = 500,
-                 on_bar: Optional[Callable[[dict], None]] = None):
+                 on_bar: Optional[Callable[[dict], None]] = None,
+                 debug: bool = False):
         self.range_size = float(bar_size_points)
         self.max_bars = max_bars
         self._on_bar = on_bar
+        self.debug = debug
         self.trend = 0
         self.bar: Optional[dict] = None
         self.bars: deque = deque(maxlen=max_bars)
@@ -189,6 +219,14 @@ class RangeBarEngine:
     def current_bars_count(self) -> int:
         return len(self.bars)
 
+    def _snap_to_grid(self, price: float) -> float:
+        """Snap price to nearest 0-based grid level (multiple of range_size from 0).
+        Grid: ..., -2*rs, -rs, 0, rs, 2*rs, 3*rs, ...
+        Ensures consistent bar boundaries regardless of dataset start price.
+        """
+        level = round(price / self.range_size)
+        return round(level * self.range_size, 5)
+
     def _emit(self, bar_dict: dict) -> None:
         ts = int(bar_dict["time"])
         if self._last_emitted_ts is not None and ts <= self._last_emitted_ts:
@@ -197,12 +235,25 @@ class RangeBarEngine:
         self._last_emitted_ts = ts
         self.bars.append(bar_dict)
         self.total_bars_emitted += 1
+        # Debug: log during historical generation (live bars logged by _on_new_bar)
+        if self.debug and self._on_bar is None:
+            if self.total_bars_emitted <= 5 or self.total_bars_emitted % 100 == 0:
+                d = "UP" if bar_dict["close"] > bar_dict["open"] else "DN"
+                print(f"[RENKO] BAR #{self.total_bars_emitted} {d} | "
+                      f"O={bar_dict['open']:.5f} H={bar_dict['high']:.5f} "
+                      f"L={bar_dict['low']:.5f} C={bar_dict['close']:.5f} "
+                      f"| trend={self.trend}")
         if self._on_bar:
             self._on_bar(bar_dict)
 
     def _start_bar(self, ts: int, price: float, volume: float) -> None:
-        self.bar = {"time": ts, "open": price, "high": price,
-                    "low": price, "close": price, "volume": volume}
+        # FIX: Snap the opening price to the 0-based grid
+        snapped = self._snap_to_grid(price)
+        self.bar = {"time": ts, "open": snapped, "high": snapped,
+                    "low": snapped, "close": snapped, "volume": volume}
+        if self.debug:
+            print(f"[RENKO] Start bar: raw_price={price:.5f} "
+                  f"snapped_open={snapped:.5f} grid_size={self.range_size}")
 
     def process_tick(self, ts: int, price: float, volume: float = 0.0) -> None:
         self.total_ticks += 1
@@ -215,7 +266,8 @@ class RangeBarEngine:
         while True:
             o = self.bar["open"]
             if self.trend == 0:
-                up_t, dn_t = o + rs, o - rs
+                up_t = round(o + rs, 5)
+                dn_t = round(o - rs, 5)
                 if p >= up_t:
                     self.bar["high"] = max(self.bar["high"], up_t)
                     self.bar["low"] = min(self.bar["low"], o)
@@ -243,7 +295,8 @@ class RangeBarEngine:
                 self.bar["close"] = p
                 break
             if self.trend == 1:
-                cont_t, rev_t = o + rs, o - (2 * rs)
+                cont_t = round(o + rs, 5)
+                rev_t = round(o - (2 * rs), 5)
                 if p >= cont_t:
                     self.bar["high"] = max(self.bar["high"], cont_t)
                     self.bar["low"] = min(self.bar["low"], o)
@@ -255,7 +308,8 @@ class RangeBarEngine:
                                 "low": cont_t, "close": cont_t, "volume": 0.0}
                     continue
                 if p <= rev_t:
-                    ro, rc = o - rs, o - (2 * rs)
+                    ro = round(o - rs, 5)
+                    rc = round(o - (2 * rs), 5)
                     h_ = max(self.bar["high"], o)
                     l_ = min(self.bar["low"], rc)
                     self._emit(_make_bar(self.bar["time"], ro, h_, l_, rc,
@@ -269,7 +323,8 @@ class RangeBarEngine:
                 self.bar["close"] = p
                 break
             if self.trend == -1:
-                cont_t, rev_t = o - rs, o + (2 * rs)
+                cont_t = round(o - rs, 5)
+                rev_t = round(o + (2 * rs), 5)
                 if p <= cont_t:
                     self.bar["high"] = max(self.bar["high"], o)
                     self.bar["low"] = min(self.bar["low"], cont_t)
@@ -281,7 +336,8 @@ class RangeBarEngine:
                                 "low": cont_t, "close": cont_t, "volume": 0.0}
                     continue
                 if p >= rev_t:
-                    ro, rc = o + rs, o + (2 * rs)
+                    ro = round(o + rs, 5)
+                    rc = round(o + (2 * rs), 5)
                     h_ = max(self.bar["high"], rc)
                     l_ = min(self.bar["low"], o)
                     self._emit(_make_bar(self.bar["time"], ro, h_, l_, rc,
@@ -302,7 +358,6 @@ class RangeBarEngine:
         self._last_emitted_ts = None
         self.total_ticks = 0
         self.total_bars_emitted = 0
-
 
 # =============================================================================
 # MT5 Tick Normalizer + Connector
@@ -513,9 +568,12 @@ def _ensure_base_importable():
 # =============================================================================
 
 class StrategyRunner:
-    def __init__(self, deployment_config: dict, status_callback=None):
+    def __init__(self, deployment_config: dict, status_callback=None,
+                 trade_callback=None, debug: bool = True):
         self.config = deployment_config
         self._status_callback = status_callback
+        self._trade_callback = trade_callback
+        self.debug = debug
 
         self.deployment_id: str = deployment_config["deployment_id"]
         self.strategy_id: str = deployment_config["strategy_id"]
@@ -528,6 +586,7 @@ class StrategyRunner:
         self.max_bars: int = deployment_config.get("max_bars_in_memory", 500)
         self.lot_size: float = deployment_config.get("lot_size", 0.01)
         self.strategy_parameters: dict = deployment_config.get("strategy_parameters") or {}
+        self.worker_id: str = deployment_config.get("worker_id", "")
 
         self._strategy = None
         self._ctx: Optional[StrategyContext] = None
@@ -560,6 +619,10 @@ class StrategyRunner:
         self._last_bar_time: Optional[int] = None
         self._current_price: Optional[float] = None
         self._trade_counter: int = 0
+
+        # Backtester-aligned execution state
+        self._absolute_bar_counter: int = -1   # monotonic bar counter (never wraps)
+        self._prev_indicators: dict = {}        # previous bar's indicator snapshot
 
         # Active trade tracking (for MA-cross exit + trade records)
         self._active_trade_meta: Optional[dict] = None
@@ -636,6 +699,22 @@ class StrategyRunner:
                 print(f"[RUNNER] Status report attempt {attempt + 1}/3 failed: {exc}")
                 if attempt < 2:
                     time.sleep(1.0)
+                    
+    def _report_trade(self, record: dict):
+        """Report a closed trade to Mother server + local ledger via callback."""
+        if not self._trade_callback:
+            return
+        report = {
+            **record,
+            "deployment_id": self.deployment_id,
+            "strategy_id": self.strategy_id,
+            "worker_id": self.worker_id,
+            "symbol": self.symbol,
+        }
+        try:
+            self._trade_callback(report)
+        except Exception as exc:
+            print(f"[RUNNER] Trade report callback failed: {exc}")
 
     def _set_state(self, state: str, error: str = None):
         self._runner_state = state
@@ -664,10 +743,21 @@ class StrategyRunner:
     # ── Position Refresh ────────────────────────────────────
 
     def _refresh_position(self):
+        """Refresh position from MT5 and enrich with backtester-compatible fields."""
         if self._executor:
             pos = self._executor.get_position_state()
             if self._active_trade_meta and pos.has_position:
                 pos.entry_bar = self._active_trade_meta.get("entry_bar")
+                # Compute bars_held (backtester compat)
+                pos.bars_held = max(0, self._bar_index - (pos.entry_bar or self._bar_index))
+                # Compute unrealized points (backtester compat)
+                close_price = self._current_price or 0.0
+                if pos.entry_price and close_price > 0:
+                    if pos.direction == "long":
+                        pos.unrealized_pts = round(close_price - pos.entry_price, 5)
+                    elif pos.direction == "short":
+                        pos.unrealized_pts = round(pos.entry_price - close_price, 5)
+                    pos.unrealized_pnl = round(pos.profit or 0.0, 2)
             self._ctx.position = pos
 
     # ── Pipeline Log ────────────────────────────────────────
@@ -779,6 +869,7 @@ class StrategyRunner:
                 print(f"[TRADE #{self._trade_counter}] {record['direction'].upper()} "
                       f"entry={record['entry_price']} exit={record['exit_price']} "
                       f"reason={reason} profit={record.get('profit', 0):.2f}")
+                self._report_trade(record)
 
         self._active_trade_meta = None
         self._refresh_position()
@@ -786,6 +877,19 @@ class StrategyRunner:
     # ── Bar Callback ────────────────────────────────────────
 
     def _on_new_bar(self, bar: dict):
+        """
+        Live bar callback — backtester-aligned execution flow.
+
+        Step order matches backtester _run_generator():
+          1. Update context (bars, index, indicators, prev_indicators)
+          2. Refresh position from MT5
+          3. Engine-level exit checks (MA cross)
+          4. Call strategy.on_bar()
+          5. Handle CLOSE → re-call strategy for potential flip (backtester Step 4)
+          6. Handle BUY/SELL
+          7. Handle HOLD + dynamic SL/TP updates
+          8. Store prev_indicators for next bar
+        """
         self._total_bars_produced += 1
         self._last_bar_time = bar.get("time")
 
@@ -794,30 +898,37 @@ class StrategyRunner:
         if self._strategy is None or self._ctx is None:
             return
 
+        # ── Step 1: Update context ──────────────────────────────
+        self._absolute_bar_counter += 1
+
         bars_list = list(self._bar_engine.bars)
         self._ctx._bars = bars_list
-        self._ctx.index = len(bars_list) - 1
-        self._bar_index = self._ctx.index
+        self._ctx._bar_offset = len(bars_list) - 1
+        self._ctx._index = self._absolute_bar_counter    # absolute monotonic
+        self._bar_index = self._absolute_bar_counter
+        self._ctx._prev_indicators = dict(self._prev_indicators)
 
         # Update indicators
         if self._indicator_engine:
             self._indicator_engine.update(bars_list, self._ctx)
 
-        # Refresh real position from MT5
+        # ── Step 2: Refresh position from MT5 ───────────────────
         self._refresh_position()
 
-        # Check engine-level MA cross exits BEFORE calling strategy
+        # ── Step 3: Engine-level MA cross exits ─────────────────
         if self._ctx.position.has_position:
             if self._check_ma_cross_exit(bar):
-                # Position was closed by MA cross — strategy will see flat
                 self._refresh_position()
 
+        # ── Min lookback gate ───────────────────────────────────
         min_lb = getattr(self._strategy, "min_lookback", 0) or 0
-        if self._ctx.index < min_lb:
+        if self._absolute_bar_counter < min_lb:
+            self._prev_indicators = dict(self._ctx._indicators)
             return
 
         self._on_bar_call_count += 1
 
+        # ── Step 4: Call strategy ───────────────────────────────
         try:
             raw_signal = self._strategy.on_bar(self._ctx)
         except Exception as exc:
@@ -828,16 +939,82 @@ class StrategyRunner:
             return
 
         action = validate_signal(raw_signal, self._bar_index)
-        self._handle_signal(action, bar)
+        sig = action.get("signal")
 
+        # ── Step 5: Handle CLOSE + re-call for flip ─────────────
+        # Matches backtester Step 4: after closing, re-call strategy
+        # with flat position so it can immediately signal BUY/SELL.
+        closed_position = False
+
+        if (sig == SIGNAL_CLOSE or action.get("close")) and self._ctx.position.has_position:
+            reason = action.get("close_reason", "strategy_close")
+            self._close_and_record(reason, bar)
+            self._signal_count += 1
+            self._last_signal = action
+            closed_position = True
+
+        elif sig == SIGNAL_CLOSE_LONG:
+            if self._ctx.position.has_position and self._ctx.position.direction == "long":
+                self._close_and_record("strategy_close_long", bar)
+                self._signal_count += 1
+                self._last_signal = action
+                closed_position = True
+            else:
+                self._exec_log.log_skip("CLOSE_LONG", "no long position")
+
+        elif sig == SIGNAL_CLOSE_SHORT:
+            if self._ctx.position.has_position and self._ctx.position.direction == "short":
+                self._close_and_record("strategy_close_short", bar)
+                self._signal_count += 1
+                self._last_signal = action
+                closed_position = True
+            else:
+                self._exec_log.log_skip("CLOSE_SHORT", "no short position")
+
+        if closed_position:
+            # ★ BACKTESTER STEP 4: Re-call strategy with flat position
+            self._refresh_position()
+            if not self._ctx.position.has_position:
+                try:
+                    raw2 = self._strategy.on_bar(self._ctx)
+                    action2 = validate_signal(raw2, self._bar_index)
+                    sig2 = action2.get("signal")
+                    if sig2 in (SIGNAL_BUY, SIGNAL_SELL):
+                        print(f"[RUNNER] Post-CLOSE re-call: {sig2} "
+                              f"(backtester flip at bar {self._bar_index})")
+                        self._handle_signal(action2, bar)
+                    elif "update_sl" in action2 or "update_tp" in action2:
+                        self._handle_modify(action2)
+                except Exception as exc:
+                    print(f"[RUNNER] Re-call on_bar() after CLOSE error: {exc}")
+
+        # ── Step 6: Handle BUY/SELL (only if we didn't just close) ──
+        elif sig in (SIGNAL_BUY, SIGNAL_SELL):
+            self._handle_signal(action, bar)
+
+        # ── Step 7: Handle HOLD + dynamic SL/TP updates ────────
+        elif sig == SIGNAL_HOLD or sig is None:
+            self._exec_log.log_hold()
+            if "update_sl" in action or "update_tp" in action:
+                self._handle_modify(action)
+
+        # ── Periodic pipeline log ───────────────────────────────
         if self._on_bar_call_count % 50 == 0:
             self._log_pipeline("LIVE_BAR")
 
-    # ── Signal Handling + Execution ─────────────────────────
+        # ── Step 8: Store prev indicators for next bar ──────────
+        self._prev_indicators = dict(self._ctx._indicators)
 
     def _handle_signal(self, action: dict, bar: dict):
+        """
+        Execute a BUY or SELL signal. CLOSE/HOLD are handled in _on_new_bar.
+        Called for:
+          - Direct BUY/SELL from strategy
+          - BUY/SELL from post-CLOSE re-call (backtester flip)
+          - Reverse (opposite direction while in position)
+        """
         sig = action.get("signal")
-        if sig not in VALID_SIGNALS:
+        if sig not in (SIGNAL_BUY, SIGNAL_SELL):
             return
 
         pos = self._ctx.position
@@ -847,84 +1024,59 @@ class StrategyRunner:
             self._current_price, pos,
         )
 
-        # ── HOLD ────────────────────────────────────────
-        if sig == SIGNAL_HOLD:
-            self._exec_log.log_hold()
-            if "update_sl" in action or "update_tp" in action:
-                self._handle_modify(action)
-            return
-
-        # ── CLOSE variants ──────────────────────────────
-        if sig == SIGNAL_CLOSE or action.get("close"):
-            if not pos.has_position:
-                self._exec_log.log_skip("CLOSE", "no position")
-                return
-            reason = action.get("close_reason", "strategy_close")
-            self._close_and_record(reason, bar)
-            self._signal_count += 1
-            self._last_signal = action
-            return
-
-        if sig == SIGNAL_CLOSE_LONG:
-            if not pos.has_position or pos.direction != "long":
-                self._exec_log.log_skip("CLOSE_LONG", "no long position")
-                return
-            self._close_and_record("strategy_close_long", bar)
-            self._signal_count += 1
-            self._last_signal = action
-            return
-
-        if sig == SIGNAL_CLOSE_SHORT:
-            if not pos.has_position or pos.direction != "short":
-                self._exec_log.log_skip("CLOSE_SHORT", "no short position")
-                return
-            self._close_and_record("strategy_close_short", bar)
-            self._signal_count += 1
-            self._last_signal = action
-            return
-
-        # ── BUY / SELL ──────────────────────────────────
-        if sig not in (SIGNAL_BUY, SIGNAL_SELL):
-            return
-
         self._signal_count += 1
         self._last_signal = action
         direction = "long" if sig == SIGNAL_BUY else "short"
 
-        # Already in same direction
+        # Already in same direction — skip
         if pos.has_position and pos.direction == direction:
             self._exec_log.log_skip(sig, f"already {direction}")
             return
 
-        # In opposite direction — close first
+        # In opposite direction — close first (reverse)
         if pos.has_position:
             self._close_and_record("reverse", bar)
+            self._refresh_position()
 
-        # Compute SL from signal (ma_snapshot, fixed, or direct)
+        # ── Compute SL ─────────────────────────────────────────
         entry_estimate = self._current_price or float(bar.get("close", 0))
         sl_price = compute_sl(action, entry_estimate, direction)
         tp_price = compute_tp(action, entry_estimate, sl_price, direction)
 
-        # Validate SL/TP sanity
+        # ── Validate SL sanity ─────────────────────────────────
         if sl_price is not None:
             if direction == "long" and sl_price >= entry_estimate:
-                print(f"[EXEC] WARNING: Long SL {sl_price} >= entry {entry_estimate}, clearing SL")
+                print(f"[EXEC] WARNING: Long SL {sl_price:.5f} >= entry "
+                      f"{entry_estimate:.5f}, clearing SL")
                 sl_price = None
             elif direction == "short" and sl_price <= entry_estimate:
-                print(f"[EXEC] WARNING: Short SL {sl_price} <= entry {entry_estimate}, clearing SL")
+                print(f"[EXEC] WARNING: Short SL {sl_price:.5f} <= entry "
+                      f"{entry_estimate:.5f}, clearing SL")
                 sl_price = None
 
+        # ── Validate TP sanity ─────────────────────────────────
         if tp_price is not None:
             if direction == "long" and tp_price <= entry_estimate:
-                print(f"[EXEC] WARNING: Long TP {tp_price} <= entry {entry_estimate}, clearing TP")
+                print(f"[EXEC] WARNING: Long TP {tp_price:.5f} <= entry "
+                      f"{entry_estimate:.5f}, clearing TP")
                 tp_price = None
             elif direction == "short" and tp_price >= entry_estimate:
-                print(f"[EXEC] WARNING: Short TP {tp_price} >= entry {entry_estimate}, clearing TP")
+                print(f"[EXEC] WARNING: Short TP {tp_price:.5f} >= entry "
+                      f"{entry_estimate:.5f}, clearing TP")
                 tp_price = None
+
+        # Warn if R-multiple TP lost due to SL clearing
+        if sl_price is None and action.get("tp_mode") == "r_multiple":
+            print(f"[EXEC] WARNING: SL cleared but tp_mode=r_multiple — no TP")
+            tp_price = None
+
+        # Warn if completely unprotected
+        if sl_price is None and tp_price is None:
+            print(f"[EXEC] ⚠️ CAUTION: Opening {direction} with NO SL and NO TP")
 
         comment = action.get("comment", f"JG_{sig}")
 
-        # Execute
+        # ── Execute via MT5 ────────────────────────────────────
         if sig == SIGNAL_BUY:
             result = self._executor.open_buy(sl=sl_price, tp=tp_price, comment=comment)
         else:
@@ -935,7 +1087,7 @@ class StrategyRunner:
         if result.get("success"):
             fill_price = result.get("price", entry_estimate)
 
-            # Recompute TP from actual fill price for R-multiple
+            # ── Recompute TP from fill price for R-multiple ────
             if action.get("tp_mode") == "r_multiple" and sl_price is not None:
                 real_risk = abs(fill_price - sl_price)
                 r = float(action.get("tp_r", 1.0))
@@ -944,13 +1096,15 @@ class StrategyRunner:
                         tp_price = round(fill_price + real_risk * r, 5)
                     else:
                         tp_price = round(fill_price - real_risk * r, 5)
-                    # Modify TP on the position
                     mod_result = self._executor.modify_sl_tp(
                         result["ticket"], sl=sl_price, tp=tp_price
                     )
                     self._exec_log.log_modify(mod_result, sl=sl_price, tp=tp_price)
+                    print(f"[EXEC] R-multiple TP: fill={fill_price:.5f} "
+                          f"sl={sl_price:.5f} risk={real_risk:.5f} "
+                          f"R={r} tp={tp_price:.5f}")
 
-            # Store trade metadata for MA-cross exits + trade records
+            # ── Store trade metadata ───────────────────────────
             self._active_trade_meta = {
                 "entry_bar": self._bar_index,
                 "entry_time": bar.get("time", 0),
@@ -1060,12 +1214,22 @@ class StrategyRunner:
         self._current_price = ticks[-1]["price"]
         print(f"[RUNNER] Fetched {len(ticks)} historical ticks for {self.symbol}")
 
+        if self.debug:
+            prices = [t["price"] for t in ticks]
+            print(f"[DEBUG] Tick price range: min={min(prices):.5f} "
+                  f"max={max(prices):.5f} last={prices[-1]:.5f} "
+                  f"spread={max(prices)-min(prices):.5f}")
+            grid_snap = round(round(prices[-1] / self.bar_size_points) * self.bar_size_points, 5)
+            print(f"[DEBUG] Grid alignment: bar_size={self.bar_size_points} "
+                  f"nearest_grid_level={grid_snap}")
+
         # Phase 4: Generate Initial Bars
         self._set_state("generating_initial_bars")
         self._bar_engine = RangeBarEngine(
             bar_size_points=self.bar_size_points,
             max_bars=self.max_bars,
             on_bar=None,
+            debug=self.debug,
         )
         for tick in ticks:
             self._bar_engine.process_tick(tick["ts"], tick["price"], tick["volume"])
@@ -1079,6 +1243,23 @@ class StrategyRunner:
               f"(total emitted: {self._total_bars_produced}) "
               f"(from {len(ticks)} ticks, bar_size={self.bar_size_points}pt)")
 
+        if self.debug and initial_count > 0:
+            b_first = self._bar_engine.bars[0]
+            b_last = self._bar_engine.bars[-1]
+            # Verify grid alignment
+            opens = [b["open"] for b in self._bar_engine.bars]
+            closes = [b["close"] for b in self._bar_engine.bars]
+            all_grid = True
+            for v in opens + closes:
+                remainder = round(v % self.bar_size_points, 10)
+                if remainder > 1e-8 and abs(remainder - self.bar_size_points) > 1e-8:
+                    all_grid = False
+                    break
+            grid_status = "✅ ALL GRID-ALIGNED" if all_grid else "⚠️ SOME OFF-GRID"
+            print(f"[DEBUG] Bar[0]:  O={b_first['open']:.5f} C={b_first['close']:.5f}")
+            print(f"[DEBUG] Bar[-1]: O={b_last['open']:.5f} C={b_last['close']:.5f}")
+            print(f"[DEBUG] Grid check: {grid_status}")
+
         if initial_count == 0:
             self._set_state("failed",
                 f"No bars from {len(ticks)} ticks. "
@@ -1088,26 +1269,39 @@ class StrategyRunner:
 
         self._log_pipeline("INITIAL_BARS")
 
-        # Phase 5: Warm Up (signals logged, NOT executed)
+        # Phase 5: Warm Up — backtester-aligned
+        # Feeds bars incrementally, calls on_bar(), logs signals but does NOT execute.
+        # Uses absolute bar counter starting from 0 (matches backtester ctx.index).
         self._set_state("warming_up")
         bars_list = list(self._bar_engine.bars)
-        self._ctx._bars = bars_list
         min_lb = getattr(self._strategy, "min_lookback", 0) or 0
+        self._prev_indicators = {}
+
+        print(f"[WARMUP] {len(bars_list)} bars | min_lookback={min_lb}")
 
         for i in range(len(bars_list)):
             if self._stop_event.is_set():
                 return
-            self._ctx.index = i
-            self._bar_index = i
 
-            # Compute indicators for warmup bars
+            # Feed incremental slice (strategy sees bars[0..i], same as live)
+            warmup_slice = bars_list[:i + 1]
+            self._ctx._bars = warmup_slice
+            self._ctx._bar_offset = len(warmup_slice) - 1
+            self._ctx._index = i              # absolute monotonic counter
+            self._bar_index = i
+            self._absolute_bar_counter = i
+
+            # Prev indicators from last iteration
+            self._ctx._prev_indicators = dict(self._prev_indicators)
+
+            # Compute indicators on the slice
             if self._indicator_engine:
-                warmup_slice = bars_list[:i + 1]
                 self._indicator_engine.update(warmup_slice, self._ctx)
 
             self._refresh_position()
 
             if i < min_lb:
+                self._prev_indicators = dict(self._ctx._indicators)
                 continue
 
             self._on_bar_call_count += 1
@@ -1118,13 +1312,17 @@ class StrategyRunner:
                     if s in (SIGNAL_BUY, SIGNAL_SELL, SIGNAL_CLOSE,
                              SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT):
                         self._warmup_signal_count += 1
-                        print(f"[RUNNER] Warmup signal #{self._warmup_signal_count} "
+                        print(f"[WARMUP] Signal #{self._warmup_signal_count} "
                               f"at bar {i}: {s} (NOT executed)")
             except Exception as exc:
-                print(f"[RUNNER] Warmup on_bar error at bar {i}: {exc}")
+                print(f"[WARMUP] on_bar error at bar {i}: {exc}")
 
-        print(f"[RUNNER] Warmup complete. on_bar calls: {self._on_bar_call_count} | "
-              f"warmup signals: {self._warmup_signal_count} (all skipped)")
+            # Store indicators for next bar's prev_indicators
+            self._prev_indicators = dict(self._ctx._indicators)
+
+        print(f"[RUNNER] Warmup complete. on_bar={self._on_bar_call_count} | "
+              f"warmup_signals={self._warmup_signal_count} (all skipped) | "
+              f"absolute_bar_counter={self._absolute_bar_counter}")
         self._log_pipeline("WARMUP_DONE")
 
         # Phase 6: Live Tick Loop (signals ARE executed)

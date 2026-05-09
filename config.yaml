@@ -1,5 +1,5 @@
 server:
-  host: "192.168.3.232"
+  host: "0.0.0.0"
   port: 5100
   debug: true
   cors_origins:

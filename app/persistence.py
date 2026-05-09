@@ -187,7 +187,6 @@ def get_all_strategies_db() -> List[dict]:
     for r in rows:
         d = dict(r)
         d["parameters"] = json.loads(d.pop("parameters_json", "{}"))
-        d["active_strategies"] = json.loads(d.get("active_strategies_json", "[]")) if "active_strategies_json" in d.keys() else []
         result.append(d)
     return result
 

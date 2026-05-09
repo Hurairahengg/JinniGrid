@@ -715,7 +715,6 @@ var WorkerDetailRenderer = (function () {
             ApiClient.getStrategy(sid).then(function (data) {
               if (data.ok && data.strategy) {
                 var detail = data.strategy;
-                // Merge parameters from detail into selected
                 if (detail.parameters && typeof detail.parameters === 'object') {
                   _selectedStrategy.parameters = detail.parameters;
                   _selectedStrategy.parameter_count = Object.keys(detail.parameters).length;
@@ -736,8 +735,6 @@ var WorkerDetailRenderer = (function () {
             _updateChecklist();
             _addActivity('Strategy selected: ' + sid);
           }
-          _updateChecklist();
-          _addActivity('Strategy selected: ' + sid);
         });
       }
     }).catch(function () {

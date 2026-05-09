@@ -10,7 +10,7 @@ import os
 # Not where this script file is located.
 ROOT = Path.cwd().resolve()
 
-CHUNK_COUNT = 3
+CHUNK_COUNT = 4
 OUTPUT_PREFIX = "repo_snapshot_part_"
 OUTPUT_SUFFIX = ".md"
 

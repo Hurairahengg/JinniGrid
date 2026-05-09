@@ -75,6 +75,7 @@ class HeartbeatPayload(BaseModel):
 
 
 @router.post("/api/Grid/workers/heartbeat", tags=["Grid"])
+@router.post("/api/grid/workers/heartbeat", tags=["Grid"])
 async def worker_heartbeat(payload: HeartbeatPayload):
     if not payload.worker_id or not payload.worker_id.strip():
         raise HTTPException(status_code=422, detail={"ok": False, "error": "worker_id is required"})
@@ -280,10 +281,11 @@ async def stop_deployment_endpoint(deployment_id: str):
     dep = get_deployment(deployment_id)
     if not dep:
         raise HTTPException(status_code=404, detail="Deployment not found.")
+    if dep.get("state") in ("stopped", "failed"):
+        return {"ok": True, "deployment": dep, "message": "Deployment already stopped/failed."}
     enqueue_command(dep["worker_id"], "stop_strategy", {"deployment_id": deployment_id})
     result = stop_deployment(deployment_id)
     return result
-
 
 @router.get("/api/grid/workers/{worker_id}/commands/poll", tags=["Worker Commands"])
 async def poll_worker_commands(worker_id: str):
@@ -328,6 +330,12 @@ async def report_runner_status(worker_id: str, payload: RunnerStatusReport):
     dep_state = state_map.get(payload.runner_state)
     if dep_state:
         update_deployment_state(payload.deployment_id, dep_state, error=payload.last_error)
+    else:
+        import logging
+        logging.getLogger("jinni.worker").warning(
+            f"Unknown runner_state '{payload.runner_state}' from worker {worker_id} "
+            f"(deployment={payload.deployment_id})"
+        )
     return {"ok": True, "received": True}
 
 

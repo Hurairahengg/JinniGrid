@@ -44,9 +44,18 @@ def enqueue_command(worker_id: str, command_type: str, payload: dict) -> dict:
 
 
 def poll_commands(worker_id: str) -> list:
+    now = datetime.now(timezone.utc)
     with _command_lock:
         queue = _command_queues.get(worker_id, [])
         pending = [c for c in queue if c["state"] == "pending"]
+        # Prune acknowledged commands older than 5 minutes
+        _command_queues[worker_id] = [
+            c for c in queue
+            if c["state"] == "pending" or (
+                c.get("acked_at") and
+                (now - datetime.fromisoformat(c["acked_at"])).total_seconds() < 300
+            )
+        ]
     return pending
 
 
@@ -168,7 +177,7 @@ def get_portfolio_summary() -> dict:
         "realized_pnl": round(total_pnl, 2), "margin_usage": 0,
         "win_rate": round(len(wins) / len(profits) * 100, 1) if profits else 0,
         "total_trades": len(trades),
-        "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0 else 0,
+        "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0 else (999.99 if wins else 0),
         "max_drawdown": round(max_dd, 2),
         "avg_trade": round(total_pnl / len(trades), 2),
         "avg_winner": round(sum(wins) / len(wins), 2) if wins else 0,
@@ -253,7 +262,7 @@ def get_portfolio_performance() -> dict:
                         if t.get(key) == v[key] and t.get("profit", 0) > 0)
             l_sum = sum(abs(t.get("profit", 0)) for t in trades
                         if t.get(key) == v[key] and t.get("profit", 0) <= 0)
-            v["profit_factor"] = round(w_sum / l_sum, 2) if l_sum > 0 else 0
+            v["profit_factor"] = round(w_sum / l_sum, 2) if l_sum > 0 else (999.99 if w_sum > 0 else 0)
         return list(bk.values())
 
     return {

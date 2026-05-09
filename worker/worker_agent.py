@@ -19,6 +19,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from strategyWorker import StrategyRunner
+from portfolio import TradeLedger
 
 
 def load_config():
@@ -50,6 +51,10 @@ class WorkerAgent:
 
         self._runner: StrategyRunner | None = None
         self._runner_lock = threading.Lock()
+
+        # Local trade ledger for persistence (Bug 18 fix)
+        self._ledger = TradeLedger(self.worker_id)
+        print(f"[AGENT] TradeLedger initialized for worker '{self.worker_id}'")
 
     # ── Heartbeat ───────────────────────────────────────────
 
@@ -110,6 +115,51 @@ class WorkerAgent:
         except Exception as e:
             print(f"[ERROR] Heartbeat: {type(e).__name__}: {e}")
 
+    # ── Trade Reporting (Bug 13/18/19 fix) ──────────────────
+
+    def _report_trade(self, report: dict):
+        """Report a closed trade to Mother server AND save to local ledger."""
+        # 1. Save to local TradeLedger
+        try:
+            self._ledger.add_trade(
+                report,
+                deployment_id=report.get("deployment_id"),
+                strategy_id=report.get("strategy_id"),
+            )
+            print(f"[TRADE] Saved locally: {report.get('direction')} "
+                  f"{report.get('symbol')} profit={report.get('profit', 0):.2f}")
+        except Exception as e:
+            print(f"[ERROR] Local trade save failed: {e}")
+
+        # 2. POST to Mother Server
+        payload = {
+            "trade_id": report.get("id"),
+            "deployment_id": report.get("deployment_id"),
+            "strategy_id": report.get("strategy_id"),
+            "worker_id": report.get("worker_id"),
+            "symbol": report.get("symbol", ""),
+            "direction": report.get("direction", ""),
+            "entry_price": report.get("entry_price", 0),
+            "exit_price": report.get("exit_price"),
+            "entry_time": str(report.get("entry_time", "")),
+            "exit_time": str(report.get("exit_time", "")),
+            "exit_reason": report.get("exit_reason"),
+            "sl_level": report.get("sl_level"),
+            "tp_level": report.get("tp_level"),
+            "lot_size": report.get("lot_size", 0.01),
+            "ticket": report.get("ticket"),
+            "points_pnl": report.get("points_pnl", 0),
+            "profit": report.get("profit", 0),
+            "bars_held": report.get("bars_held", 0),
+        }
+        endpoint = f"{self.mother_url}/api/portfolio/trades/report"
+        try:
+            requests.post(endpoint, json=payload, timeout=10)
+            print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
+                  f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+        except Exception as e:
+            print(f"[ERROR] Trade report to Mother failed: {e}")
+
     # ── Command Polling ─────────────────────────────────────
 
     def poll_commands(self):
@@ -159,13 +209,21 @@ class WorkerAgent:
     def _handle_deploy(self, payload: dict):
         with self._runner_lock:
             if self._runner:
-                print("[RUNNER] Stopping existing runner before new deployment.")
+                # Bug 20 fix: log clear warning when replacing existing runner
+                print(f"[WARNING] Replacing existing runner "
+                      f"(deployment={self._runner.deployment_id}) "
+                      f"with new deployment {payload.get('deployment_id')}. "
+                      f"Only one runner per worker is supported.")
                 self._runner.stop()
                 self._runner = None
+
+            # Inject worker_id so StrategyRunner can include it in trade reports
+            payload["worker_id"] = self.worker_id
 
             runner = StrategyRunner(
                 deployment_config=payload,
                 status_callback=self._report_runner_status,
+                trade_callback=self._report_trade,
             )
             self._runner = runner
             runner.start()
@@ -196,6 +254,7 @@ class WorkerAgent:
         print(f"  Mother URL:   {self.mother_url}")
         print(f"  Heartbeat:    {self.heartbeat_interval}s")
         print(f"  Agent:        v{self.agent_version}")
+        print(f"  Trade Ledger: data/portfolio_{self.worker_id}.db")
         print("=" * 56)
         print("")
 
