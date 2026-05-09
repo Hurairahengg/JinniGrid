@@ -164,6 +164,17 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(timestamp);
     """)
     conn.commit()
+    # Migrations — add columns that may not exist in older DBs
+    _migrations = [
+        ("workers", "account_balance", "REAL DEFAULT 0.0"),
+        ("workers", "account_equity", "REAL DEFAULT 0.0"),
+    ]
+    for table, col, col_type in _migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
 
 # =============================================================================
@@ -270,6 +281,19 @@ def save_worker(worker_id: str, data: dict):
         data.get("last_bar_time"), data.get("current_price"),
         first_seen, now,
     ))
+    # Update account fields (may not exist in INSERT if schema is old)
+    if data.get("account_balance") is not None or data.get("account_equity") is not None:
+        try:
+            conn.execute("""
+                UPDATE workers SET account_balance=?, account_equity=?
+                WHERE worker_id=?
+            """, (
+                data.get("account_balance", 0.0),
+                data.get("account_equity", 0.0),
+                worker_id,
+            ))
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
 
 
@@ -457,7 +481,6 @@ _DEFAULT_SETTINGS = {
     "default_bar_size": "100",
     "default_lot_size": "0.01",
     "debug_mode": "true",
-    "starting_capital": "10000",
     "worker_timeout_seconds": "90",
     "log_verbosity": "INFO",
 }

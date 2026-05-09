@@ -185,8 +185,14 @@ def process_heartbeat(payload: dict) -> dict:
 
 def get_all_workers() -> list:
     fleet_config = Config.get_fleet_config()
-    stale_threshold = fleet_config.get("stale_threshold_seconds", 30)
-    offline_threshold = fleet_config.get("offline_threshold_seconds", 90)
+    # Use DB setting if available, else fall back to config.yaml
+    timeout_setting = get_setting("worker_timeout_seconds")
+    if timeout_setting:
+        offline_threshold = int(timeout_setting)
+        stale_threshold = max(10, offline_threshold // 3)
+    else:
+        stale_threshold = fleet_config.get("stale_threshold_seconds", 30)
+        offline_threshold = fleet_config.get("offline_threshold_seconds", 90)
     now = datetime.now(timezone.utc)
     result = []
     with _worker_lock:
@@ -246,40 +252,64 @@ def get_fleet_summary() -> dict:
 # =============================================================================
 
 def _compute_equity_snapshot():
-    """Compute and store an equity snapshot from current fleet state to DB."""
-    floating = 0.0
+    """
+    Compute equity snapshot from REAL data:
+    - Balance/equity from worker MT5 accounts (if available)
+    - Floating PnL from worker heartbeats
+    - Realized PnL from closed trades in DB
+    """
+    total_balance = 0.0
+    total_equity = 0.0
+    total_floating = 0.0
     open_pos = 0
+    has_account_data = False
+
     with _worker_lock:
         for w in _workers_cache.values():
-            floating += (w.get("floating_pnl") or 0.0)
+            # Real MT5 account data (preferred)
+            acc_bal = w.get("account_balance")
+            acc_eq = w.get("account_equity")
+            if acc_bal is not None and acc_bal > 0:
+                total_balance += acc_bal
+                has_account_data = True
+            if acc_eq is not None and acc_eq > 0:
+                total_equity += acc_eq
+                has_account_data = True
+
+            total_floating += (w.get("floating_pnl") or 0.0)
             open_pos += (w.get("open_positions_count") or 0)
 
+    # Realized PnL from trade history
     trades = get_all_trades_db(limit=100000)
-    cum_pnl = sum(float(t.get("profit", 0) or 0) for t in trades)
-    starting = float(get_setting("starting_capital", "10000") or "10000")
-    balance = starting + cum_pnl
-    equity = balance + floating
+    realized_pnl = sum(float(t.get("profit", 0) or 0) for t in trades)
 
-    # Save to DB (persists through restarts)
+    # If no MT5 account data, derive from trades only
+    if not has_account_data:
+        total_balance = realized_pnl
+        total_equity = realized_pnl + total_floating
+
+    # Save to DB
     try:
         save_equity_snapshot_db(
-            balance=round(balance, 2),
-            equity=round(equity, 2),
-            floating_pnl=round(floating, 2),
+            balance=round(total_balance, 2),
+            equity=round(total_equity, 2),
+            floating_pnl=round(total_floating, 2),
             open_positions=open_pos,
-            cumulative_pnl=round(cum_pnl, 2),
+            cumulative_pnl=round(realized_pnl, 2),
         )
     except Exception as e:
         print(f"[PORTFOLIO] Equity snapshot save failed: {e}")
 
-    # Also keep in-memory for fast access
+    # In-memory cache
     now = datetime.now(timezone.utc).isoformat()
     _equity_history.append({
         "timestamp": now,
-        "equity": round(equity, 2),
-        "balance": round(balance, 2),
-        "floating_pnl": round(floating, 2),
+        "equity": round(total_equity, 2),
+        "balance": round(total_balance, 2),
+        "floating_pnl": round(total_floating, 2),
         "open_positions": open_pos,
+        "realized_pnl": round(realized_pnl, 2),
+        "has_account_data": has_account_data,
         "label": now[-8:],
     })
     if len(_equity_history) > 5000:
@@ -289,14 +319,38 @@ def _compute_equity_snapshot():
 def get_portfolio_summary() -> dict:
     trades = get_all_trades_db(limit=100000)
 
-    # Live worker data (even if no trades yet)
+    # Per-worker account data from heartbeats
     workers = get_all_workers()
-    total_floating = sum((w.get("floating_pnl") or 0) for w in workers)
-    total_positions = sum((w.get("open_positions_count") or 0) for w in workers)
+    total_balance = 0.0
+    total_equity = 0.0
+    total_floating = 0.0
+    total_positions = 0
+    has_account_data = False
+
+    for w in workers:
+        acc_bal = w.get("account_balance")
+        acc_eq = w.get("account_equity")
+        if acc_bal is not None and acc_bal > 0:
+            total_balance += acc_bal
+            has_account_data = True
+        if acc_eq is not None and acc_eq > 0:
+            total_equity += acc_eq
+            has_account_data = True
+        total_floating += (w.get("floating_pnl") or 0)
+        total_positions += (w.get("open_positions_count") or 0)
+
+    # Realized PnL from closed trades
+    realized_pnl = sum(float(t.get("profit", 0) or 0) for t in trades) if trades else 0
+
+    # If no MT5 account data, derive from trades
+    if not has_account_data:
+        total_balance = realized_pnl
+        total_equity = realized_pnl + total_floating
 
     if not trades:
         return {
-            "total_balance": 0, "total_equity": 0,
+            "total_balance": round(total_balance, 2),
+            "total_equity": round(total_equity, 2),
             "floating_pnl": round(total_floating, 2),
             "daily_pnl": 0, "open_positions": total_positions,
             "realized_pnl": 0, "margin_usage": 0,
@@ -304,16 +358,18 @@ def get_portfolio_summary() -> dict:
             "profit_factor": 0, "max_drawdown": 0, "avg_trade": 0,
             "avg_winner": 0, "avg_loser": 0, "best_trade": 0,
             "worst_trade": 0, "sharpe_estimate": 0, "avg_bars_held": 0,
+            "has_account_data": has_account_data,
+            "active_workers": len([w for w in workers if w.get("state") in ("online", "running")]),
         }
 
-    profits = [t.get("profit", 0) for t in trades]
+    profits = [float(t.get("profit", 0) or 0) for t in trades]
     wins = [p for p in profits if p > 0]
     losses = [p for p in profits if p <= 0]
     total_pnl = sum(profits)
-    bars_list = [t.get("bars_held", 0) for t in trades]
+    bars_list = [t.get("bars_held", 0) or 0 for t in trades]
 
     # Max drawdown from cumulative PnL
-    cum, peak, max_dd = 0, 0, 0
+    cum, peak, max_dd = 0.0, 0.0, 0.0
     for p in profits:
         cum += p
         if cum > peak:
@@ -328,11 +384,9 @@ def get_portfolio_summary() -> dict:
     std_pnl = math.sqrt(variance) if variance > 0 else 0
     sharpe = round((mean_pnl / std_pnl * math.sqrt(252)), 2) if std_pnl > 0 else 0
 
-    starting = float(get_setting("starting_capital", "10000") or "10000")
-
     return {
-        "total_balance": round(starting + total_pnl, 2),
-        "total_equity": round(starting + total_pnl + total_floating, 2),
+        "total_balance": round(total_balance, 2),
+        "total_equity": round(total_equity, 2),
         "floating_pnl": round(total_floating, 2),
         "daily_pnl": 0, "open_positions": total_positions,
         "realized_pnl": round(total_pnl, 2), "margin_usage": 0,
@@ -347,14 +401,17 @@ def get_portfolio_summary() -> dict:
         "worst_trade": round(min(profits), 2),
         "sharpe_estimate": sharpe,
         "avg_bars_held": round(sum(bars_list) / len(bars_list), 1) if bars_list else 0,
+        "has_account_data": has_account_data,
+        "active_workers": len([w for w in workers if w.get("state") in ("online", "running")]),
     }
 
-
 def get_equity_history() -> list:
-    """Build equity curve from closed trades + periodic snapshots."""
-    starting_cap = float(get_setting("starting_capital", "10000") or "10000")
-
-    # Method 1: Build from closed trades (trade-by-trade equity)
+    """
+    Build equity curve from:
+    1. Closed trades (trade-by-trade realized PnL progression)
+    2. Periodic snapshots (real MT5 account data from heartbeats)
+    """
+    # Trade-by-trade curve (realized PnL progression)
     trades = get_all_trades_db(limit=100000)
     trade_curve = []
     if trades:
@@ -363,22 +420,20 @@ def get_equity_history() -> list:
         for t in sorted_trades:
             profit = float(t.get("profit", 0) or 0)
             cumulative_pnl += profit
-            equity = starting_cap + cumulative_pnl
             ts = t.get("exit_time") or t.get("created_at", "")
             ts_str = str(ts)
             label = ts_str[-8:] if len(ts_str) >= 8 else ts_str
             trade_curve.append({
                 "timestamp": ts_str,
-                "equity": round(equity, 2),
-                "balance": round(equity, 2),
+                "equity": round(cumulative_pnl, 2),
+                "balance": round(cumulative_pnl, 2),
                 "floating_pnl": 0.0,
-                "open_positions": 0,
-                "cumulative_pnl": round(cumulative_pnl, 2),
+                "realized_pnl": round(cumulative_pnl, 2),
                 "label": label,
                 "source": "trade",
             })
 
-    # Method 2: Periodic snapshots (from heartbeats — includes floating PnL)
+    # Periodic snapshots (real account data from heartbeats)
     snapshots = get_equity_snapshots_db(limit=2000)
     snap_curve = []
     for s in snapshots:
@@ -386,34 +441,38 @@ def get_equity_history() -> list:
         label = ts[-8:] if len(ts) >= 8 else ts
         snap_curve.append({
             "timestamp": ts,
-            "equity": s.get("equity", starting_cap),
-            "balance": s.get("balance", starting_cap),
+            "equity": s.get("equity", 0),
+            "balance": s.get("balance", 0),
             "floating_pnl": s.get("floating_pnl", 0),
-            "open_positions": s.get("open_positions", 0),
-            "cumulative_pnl": s.get("cumulative_pnl", 0),
+            "realized_pnl": s.get("cumulative_pnl", 0),
             "label": label,
             "source": "snapshot",
         })
 
-    # Merge: prefer trade points, fill gaps with snapshots
-    combined = trade_curve + snap_curve
-    combined.sort(key=lambda x: x.get("timestamp", ""))
+    # Use snapshots if available (real account data), else fall back to trade curve
+    if snap_curve:
+        # Downsample snapshots (one per minute max to avoid flooding)
+        result = []
+        last_minute = ""
+        for s in snap_curve:
+            minute = s["timestamp"][:16]  # YYYY-MM-DDTHH:MM
+            if minute != last_minute:
+                result.append(s)
+                last_minute = minute
+        return result if result else snap_curve
 
-    # If nothing at all, return single starting point
-    if not combined:
-        return [{
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "equity": starting_cap,
-            "balance": starting_cap,
-            "floating_pnl": 0,
-            "open_positions": 0,
-            "cumulative_pnl": 0,
-            "label": "start",
-            "source": "initial",
-        }]
+    if trade_curve:
+        return trade_curve
 
-    return combined
-
+    return [{
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "equity": 0,
+        "balance": 0,
+        "floating_pnl": 0,
+        "realized_pnl": 0,
+        "label": "start",
+        "source": "initial",
+    }]
 
 def get_portfolio_trades(strategy_id=None, worker_id=None, symbol=None, limit=200) -> list:
     return get_all_trades_db(limit=limit, strategy_id=strategy_id,

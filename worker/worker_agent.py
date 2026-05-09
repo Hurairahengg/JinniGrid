@@ -100,6 +100,9 @@ class WorkerAgent:
             "signal_count": diag.get("signal_count", 0),
             "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
             "current_price": diag.get("current_price"),
+            # MT5 account data (for portfolio)
+            "account_balance": diag.get("account_balance"),
+            "account_equity": diag.get("account_equity"),
         }
 
     def send_heartbeat(self):
@@ -154,9 +157,12 @@ class WorkerAgent:
         }
         endpoint = f"{self.mother_url}/api/portfolio/trades/report"
         try:
-            requests.post(endpoint, json=payload, timeout=10)
-            print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
-                  f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+            resp = requests.post(endpoint, json=payload, timeout=10)
+            if resp.status_code == 200:
+                print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
+                      f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+            else:
+                print(f"[ERROR] Trade report HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             print(f"[ERROR] Trade report to Mother failed: {e}")
 

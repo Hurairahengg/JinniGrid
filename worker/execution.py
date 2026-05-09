@@ -573,6 +573,66 @@ class MT5Executor:
             ticket=p["ticket"],
             profit=p["profit"],
         )
+    # ── Deal History (for broker-side closes) ───────────────
+
+    def get_closed_deal_profit(self, ticket: int) -> dict:
+        """
+        Look up the profit of a position that was closed by the broker (SL/TP).
+        Uses MT5 deal history. Returns {profit, close_price, close_time} or empty dict.
+        """
+        mt5 = self._mt5
+        if mt5 is None:
+            return {}
+        try:
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            # Search deals for this position in the last 2 hours
+            deals = mt5.history_deals_get(
+                now - timedelta(hours=2), now, position=ticket
+            )
+            if deals is None or len(deals) == 0:
+                return {}
+            # The closing deal is the one with DEAL_ENTRY_OUT (1)
+            close_deal = None
+            for d in deals:
+                if d.entry == 1:  # DEAL_ENTRY_OUT
+                    close_deal = d
+                    break
+            if close_deal is None:
+                # Fallback: use last deal
+                close_deal = deals[-1]
+            return {
+                "profit": close_deal.profit,
+                "close_price": close_deal.price,
+                "close_time": close_deal.time,
+                "commission": close_deal.commission,
+                "swap": close_deal.swap,
+                "fee": getattr(close_deal, "fee", 0.0),
+            }
+        except Exception as exc:
+            print(f"[EXECUTOR] Deal history lookup failed for ticket {ticket}: {exc}")
+            return {}
+
+    def get_account_info(self) -> dict:
+        """Get MT5 account balance, equity, and margin info."""
+        mt5 = self._mt5
+        if mt5 is None:
+            return {}
+        try:
+            info = mt5.account_info()
+            if info is None:
+                return {}
+            return {
+                "balance": info.balance,
+                "equity": info.equity,
+                "margin": info.margin,
+                "free_margin": info.margin_free,
+                "profit": info.profit,  # total floating
+                "currency": info.currency,
+            }
+        except Exception as exc:
+            print(f"[EXECUTOR] Account info failed: {exc}")
+            return {}
 
 
 # =============================================================================

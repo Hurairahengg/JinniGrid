@@ -155,7 +155,7 @@ function _nullVal(val, fb) { if (val === null || val === undefined || val === ''
 function _formatAge(seconds) { if (seconds === null || seconds === undefined) return '<span class="value-null">\u2014</span>'; var s = Math.round(seconds); if (s < 60) return s + 's ago'; if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago'; return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago'; }
 
 /* ============================================================
-   DASHBOARD RENDERER (PRO QUANT TERMINAL)
+   DASHBOARD RENDERER
    ============================================================ */
 var DashboardRenderer = (function () {
   'use strict';
@@ -206,8 +206,7 @@ var DashboardRenderer = (function () {
     html += '<div id="dash-trades"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
     html += '<section><div class="section-header"><i class="fa-solid fa-rocket"></i><h2>Recent Deployments</h2><span class="section-badge">LIVE</span></div>';
     html += '<div id="dash-deploys"><div class="loading-state" style="min-height:120px;"><div class="spinner"></div></div></div></section>';
-    html += '</div>';
-    html += '</div>';
+    html += '</div></div>';
     document.getElementById('main-content').innerHTML = html;
     _fetchAll();
     _intervals.push(setInterval(_fetchLive, 10000));
@@ -226,14 +225,21 @@ var DashboardRenderer = (function () {
       var p = r[0].portfolio || {}, sys = r[1], deps = r[2].deployments || [];
       var running = deps.filter(function (d) { return d.state === 'running'; }).length;
       var el = document.getElementById('dash-kpi'); if (!el) return;
+
+      // Show real MT5 balance if available, else realized PnL
+      var balLabel = p.has_account_data ? 'MT5 Balance' : 'Realized P&L';
+      var balValue = p.has_account_data ? p.total_balance : p.realized_pnl;
+      var eqLabel = p.has_account_data ? 'MT5 Equity' : 'Equity (est)';
+      var eqValue = p.has_account_data ? p.total_equity : p.realized_pnl + (p.floating_pnl || 0);
+
       el.innerHTML =
-        _kpiCard('fa-wallet', 'Equity', '$' + _fmtNum(p.total_equity || 0), 'neutral') +
-        _kpiCard('fa-chart-line', 'Realized P&L', _fmtMoney(p.realized_pnl), (p.realized_pnl || 0) >= 0 ? 'positive' : 'negative') +
+        _kpiCard('fa-wallet', balLabel, balValue ? ('$' + _fmtNum(balValue)) : 'No Data', balValue > 0 ? 'positive' : (balValue < 0 ? 'negative' : 'neutral')) +
+        _kpiCard('fa-chart-line', eqLabel, eqValue ? ('$' + _fmtNum(eqValue)) : 'No Data', eqValue > 0 ? 'positive' : (eqValue < 0 ? 'negative' : 'neutral')) +
+        _kpiCard('fa-coins', 'Realized P&L', _fmtMoney(p.realized_pnl), (p.realized_pnl || 0) >= 0 ? 'positive' : 'negative') +
         _kpiCard('fa-clock', 'Floating P&L', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'positive' : 'negative') +
         _kpiCard('fa-percent', 'Win Rate', _fmtPct(p.win_rate), (p.win_rate || 0) >= 50 ? 'positive' : 'negative') +
         _kpiCard('fa-chart-bar', 'Profit Factor', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'positive' : 'negative') +
-        _kpiCard('fa-arrow-trend-down', 'Max Drawdown', _fmtPct(p.max_drawdown), 'negative') +
-        _kpiCard('fa-server', 'Online Nodes', (sys.online_nodes || 0) + '/' + (sys.total_nodes || 0), (sys.online_nodes || 0) > 0 ? 'positive' : 'warning') +
+        _kpiCard('fa-server', 'Workers', (p.active_workers || 0) + ' active', (p.active_workers || 0) > 0 ? 'positive' : 'warning') +
         _kpiCard('fa-play', 'Running', String(running), running > 0 ? 'positive' : 'neutral');
     });
   }
@@ -241,7 +247,7 @@ var DashboardRenderer = (function () {
   function _fetchEquity() {
     ApiClient.getEquityHistory().then(function (data) {
       var hist = data.equity_history || [];
-      if (hist.length === 0) {
+      if (hist.length === 0 || (hist.length === 1 && hist[0].source === 'initial')) {
         var wrap = document.getElementById('dash-equity-wrap');
         if (wrap) wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;gap:10px;"><i class="fa-solid fa-chart-area" style="opacity:0.3;font-size:28px;"></i><div><div style="font-weight:600;margin-bottom:2px;">No Equity Data Yet</div><div style="font-size:10.5px;opacity:0.7;">Trades will build the equity curve as strategies execute.</div></div></div>';
         return;
@@ -383,7 +389,6 @@ var DashboardRenderer = (function () {
   }
 
   function destroy() { _intervals.forEach(clearInterval); _intervals = []; _destroyCharts(); }
-
   return { render: render, destroy: destroy, _openWorker: _openWorker };
 })();
 
@@ -543,7 +548,7 @@ var PortfolioRenderer = (function () {
       var p = data.portfolio || {}, el = document.getElementById('port-stats'); if (!el) return;
       function _s(l, v, c) { return '<div class="dash-stat-item"><span class="dash-stat-val' + (c ? ' ' + c : '') + '">' + v + '</span><span class="dash-stat-lbl">' + l + '</span></div>'; }
       el.innerHTML =
-        _s('Net Profit', _fmtMoney(p.realized_pnl), (p.realized_pnl || 0) >= 0 ? 'positive' : 'negative') +
+        _s('Realized P&L', _fmtMoney(p.realized_pnl), (p.realized_pnl || 0) >= 0 ? 'positive' : 'negative') +
         _s('Total Trades', p.total_trades || 0) +
         _s('Win Rate', _fmtPct(p.win_rate), (p.win_rate || 0) >= 50 ? 'positive' : 'negative') +
         _s('Profit Factor', p.profit_factor || 0, (p.profit_factor || 0) >= 1 ? 'positive' : 'negative') +
@@ -561,7 +566,7 @@ var PortfolioRenderer = (function () {
   function _loadEquity() {
     ApiClient.getEquityHistory().then(function (data) {
       var hist = data.equity_history || [];
-      if (hist.length === 0) {
+      if (hist.length === 0 || (hist.length === 1 && hist[0].source === 'initial')) {
         var ew = document.getElementById('port-equity-wrap');
         if (ew) ew.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:12px;gap:10px;"><i class="fa-solid fa-chart-area" style="opacity:0.3;font-size:28px;"></i><div><div style="font-weight:600;margin-bottom:2px;">No Equity Data Yet</div><div style="font-size:10.5px;opacity:0.7;">Trades will build the equity curve.</div></div></div>';
         return;
@@ -771,14 +776,13 @@ var SettingsRenderer = (function () {
   function _renderGeneral() {
     var s = _settings;
     var fields = [
-      { key: 'refresh_interval', label: 'Dashboard Refresh Interval', type: 'number', unit: 'seconds', min: 1, max: 60 },
-      { key: 'default_symbol', label: 'Default Symbol', type: 'text', placeholder: 'e.g. XAUUSD' },
-      { key: 'default_bar_size', label: 'Default Bar Size', type: 'number', unit: 'points', min: 1 },
-      { key: 'default_lot_size', label: 'Default Lot Size', type: 'number', step: '0.01', min: 0.01 },
-      { key: 'starting_capital', label: 'Starting Capital', type: 'number', unit: '$', min: 100 },
-      { key: 'worker_timeout_seconds', label: 'Worker Offline Timeout', type: 'number', unit: 'seconds', min: 10 },
-      { key: 'log_verbosity', label: 'Log Verbosity', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'] },
-      { key: 'debug_mode', label: 'Debug Mode', type: 'toggle' }
+      { key: 'refresh_interval', label: 'Dashboard Refresh Interval', type: 'number', unit: 'seconds', min: 1, max: 60, help: 'How often the UI polls for updates.' },
+      { key: 'default_symbol', label: 'Default Symbol', type: 'text', placeholder: 'e.g. XAUUSD', help: 'Pre-filled when creating deployments.' },
+      { key: 'default_bar_size', label: 'Default Bar Size', type: 'number', unit: 'points', min: 1, help: 'Default range bar size for new deployments.' },
+      { key: 'default_lot_size', label: 'Default Lot Size', type: 'number', step: '0.01', min: 0.01, help: 'Default lot size for new deployments.' },
+      { key: 'worker_timeout_seconds', label: 'Worker Offline Timeout', type: 'number', unit: 'seconds', min: 10, help: 'Workers not seen for this long are marked offline.' },
+      { key: 'log_verbosity', label: 'Log Verbosity', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'], help: 'Minimum event level to display.' },
+      { key: 'debug_mode', label: 'Debug Mode', type: 'toggle', help: 'Enable verbose logging on workers.' }
     ];
 
     var html = '<div class="wd-panel"><div class="wd-panel-header">General Settings</div><div class="wd-panel-body">';
@@ -806,6 +810,9 @@ var SettingsRenderer = (function () {
         if (f.placeholder) attrs += ' placeholder="' + f.placeholder + '"';
         html += '<input ' + attrs + ' />';
       }
+      if (f.help) {
+        html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;opacity:0.7;">' + f.help + '</div>';
+      }
       html += '</div>';
     });
 
@@ -824,7 +831,7 @@ var SettingsRenderer = (function () {
     // System Stats
     html += '<div class="wd-panel"><div class="wd-panel-header" style="display:flex;justify-content:space-between;align-items:center;">System Overview';
     html += '<button class="wd-btn wd-btn-ghost" id="refresh-stats-btn" style="font-size:11px;padding:4px 10px;"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button></div><div class="wd-panel-body">';
-    html += '<div class="wd-status-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
     var statCards = [
       { label: 'Database Size', value: _fmtBytes(_stats.db_size_bytes || 0) },
       { label: 'Strategies', value: _stats.strategies_count || 0 },
@@ -931,7 +938,7 @@ var SettingsRenderer = (function () {
       resetBtn.addEventListener('click', function () {
         var defaults = {
           refresh_interval: '5', default_symbol: 'XAUUSD', default_bar_size: '100',
-          default_lot_size: '0.01', starting_capital: '10000', worker_timeout_seconds: '90',
+          default_lot_size: '0.01', worker_timeout_seconds: '90',
           log_verbosity: 'INFO', debug_mode: 'true'
         };
         ApiClient.saveSettings(defaults).then(function (data) {
@@ -945,9 +952,7 @@ var SettingsRenderer = (function () {
 
   function _attachAdminEvents() {
     var refreshBtn = document.getElementById('refresh-stats-btn');
-    if (refreshBtn) {
-      refreshBtn.addEventListener('click', function () { _loadData(); });
-    }
+    if (refreshBtn) refreshBtn.addEventListener('click', function () { _loadData(); });
 
     document.querySelectorAll('.admin-delete-strategy').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -1092,7 +1097,6 @@ var SettingsRenderer = (function () {
   function render() {
     var el = document.getElementById('main-content');
     el.innerHTML = _buildPage();
-
     document.querySelectorAll('#settings-tabs .port-tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
         _activeTab = tab.getAttribute('data-tab');
@@ -1101,7 +1105,6 @@ var SettingsRenderer = (function () {
         _renderTab();
       });
     });
-
     _loadData();
   }
 
