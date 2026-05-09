@@ -843,10 +843,6 @@ class StrategyRunner:
         self._refresh_position()
 
     def _handle_broker_close(self, bar: dict):
-        """
-        Handle position closed by broker (SL/TP hit at tick level).
-        The position disappeared from MT5 — we must record the trade.
-        """
         meta = self._active_trade_meta
         if not meta:
             return
@@ -855,13 +851,15 @@ class StrategyRunner:
         direction = meta.get("direction", "long")
         entry_price = meta.get("entry_price", 0)
 
-        # Try to get exact profit from MT5 deal history
+        # Try MT5 deal history first (exact profit)
         deal_info = {}
         if self._executor and ticket:
             deal_info = self._executor.get_closed_deal_profit(ticket)
 
         profit = deal_info.get("profit")
         close_price = deal_info.get("close_price")
+        commission = deal_info.get("commission", 0) or 0
+        swap = deal_info.get("swap", 0) or 0
 
         # Determine exit reason
         exit_reason = "broker_close"
@@ -882,14 +880,26 @@ class StrategyRunner:
         if close_price is None:
             close_price = self._current_price or float(bar.get("close", 0))
 
+        # ★ FIX: Use MT5 symbol_info for correct contract size
         if profit is None:
+            contract_size = 100000  # forex default
+            try:
+                mt5 = _import_mt5()
+                if mt5:
+                    sym_info = mt5.symbol_info(self.symbol)
+                    if sym_info and sym_info.trade_contract_size:
+                        contract_size = sym_info.trade_contract_size
+            except Exception:
+                pass
+
             if direction == "long":
                 points_pnl = close_price - entry_price
             else:
                 points_pnl = entry_price - close_price
-            profit = round(points_pnl * self.lot_size * 100000, 2)
-            print(f"[RUNNER] WARNING: Estimated profit from price diff "
-                  f"(no deal history). Estimate may be inaccurate.")
+
+            profit = round(points_pnl * self.lot_size * contract_size, 2)
+            print(f"[RUNNER] WARNING: Estimated profit (contract_size="
+                  f"{contract_size}). May be inaccurate.")
 
         self._trade_counter += 1
         record = build_trade_record(
@@ -908,6 +918,9 @@ class StrategyRunner:
             ticket=ticket,
             profit=round(profit, 2) if profit is not None else 0,
         )
+        # Add commission/swap from deal history
+        record["commission"] = round(commission, 2)
+        record["swap"] = round(swap, 2)
 
         self._ctx._trades.append(record)
         self._report_trade(record)
@@ -915,7 +928,7 @@ class StrategyRunner:
         print(f"[TRADE #{self._trade_counter}] BROKER CLOSE | "
               f"{direction.upper()} entry={entry_price:.5f} "
               f"exit={close_price:.5f} reason={exit_reason} "
-              f"profit={profit:.2f}")
+              f"profit={profit:.2f} comm={commission:.2f}")
 
         self._active_trade_meta = None
         self._exec_log.closes_filled += 1
