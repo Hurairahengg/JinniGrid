@@ -590,27 +590,30 @@ def delete_trades_by_worker_db(worker_id: str) -> int:
     return count
 
 
-def delete_strategy_full_db(strategy_id: str) -> dict:
-    """Delete strategy from DB + file on disk."""
+def full_system_reset_db() -> dict:
+    """Factory reset — delete ALL data including strategies."""
     conn = _get_conn()
-    rec = conn.execute(
-        "SELECT file_path FROM strategies WHERE strategy_id = ?", (strategy_id,)
-    ).fetchone()
-    file_path = rec["file_path"] if rec else None
-
-    conn.execute("DELETE FROM strategies WHERE strategy_id = ?", (strategy_id,))
-    conn.execute("DELETE FROM deployments WHERE strategy_id = ?", (strategy_id,))
+    counts = {}
+    for table in ["trades", "events", "deployments", "equity_snapshots",
+                   "workers", "strategies"]:
+        try:
+            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+            counts[f"{table}_deleted"] = c
+        except Exception:
+            counts[f"{table}_deleted"] = 0
+    # Keep settings — don't delete
     conn.commit()
 
-    file_deleted = False
-    if file_path and os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-            file_deleted = True
-        except OSError:
-            pass
+    # Delete strategy files from disk
+    try:
+        import glob, os
+        for path in glob.glob("strategies/*.py"):
+            os.remove(path)
+    except Exception:
+        pass
 
-    return {"strategy_id": strategy_id, "file_deleted": file_deleted}
+    return counts
 
 
 def remove_worker_db(worker_id: str) -> dict:

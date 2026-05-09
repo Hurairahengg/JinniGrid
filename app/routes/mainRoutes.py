@@ -222,6 +222,35 @@ async def get_strategy_detail(strategy_id: str):
     rec["validation_status"] = "validated" if rec.get("is_valid") else "invalid"
     return {"ok": True, "strategy": rec}
 
+from fastapi import Body
+
+@router.post("/api/portfolio/trades/report", tags=["Portfolio"])
+async def report_trade(payload: dict = Body(...)):
+    from app.persistence import save_trade_db
+    from app.persistence import log_event_db
+    save_trade_db(payload)
+    log_event_db("execution", "trade_closed",
+                 f"{payload.get('direction', '?')} {payload.get('symbol', '?')} "
+                 f"profit={payload.get('profit', 0)}",
+                 worker_id=payload.get("worker_id"),
+                 strategy_id=payload.get("strategy_id"),
+                 symbol=payload.get("symbol"),
+                 data=payload, level="INFO")
+    return {"ok": True}
+
+@router.get("/api/portfolio/summary", tags=["Portfolio"])
+async def portfolio_summary(strategy_id: str = None, worker_id: str = None,
+                            symbol: str = None):
+    from app.services.mainServices import get_portfolio_summary
+    portfolio = get_portfolio_summary(strategy_id=strategy_id,
+                                      worker_id=worker_id, symbol=symbol)
+    return {"portfolio": portfolio}
+
+@router.post("/api/admin/emergency-stop", tags=["Admin"])
+async def emergency_stop():
+    from app.services.mainServices import emergency_stop_all
+    result = emergency_stop_all()
+    return result
 
 @router.get("/api/grid/strategies/{strategy_id}/file", tags=["Strategies"])
 async def get_strategy_file(strategy_id: str):
