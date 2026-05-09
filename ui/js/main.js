@@ -117,6 +117,25 @@ var ApiClient = (function () {
   };
 })();
 
+/* ── DEPLOYMENT CONFIG ──────────────────────────────────────── */
+var DeploymentConfig = (function () {
+  'use strict';
+  return {
+    runtimeDefaults: {
+      symbol: 'EURUSD',
+      lot_size: 0.01,
+      tick_lookback_value: 30,
+      tick_lookback_unit: 'minutes',
+      bar_size_points: 100,
+      max_bars_memory: 500
+    },
+    symbolOptions: [
+      'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF',
+      'NZDUSD', 'XAUUSD', 'BTCUSD', 'USTEC', 'SPX500', 'DOW30', 'FTSE100'
+    ],
+    tickLookbackUnits: ['minutes', 'hours', 'days']
+  };
+})();
 
 /* ================================================================
    2. MODAL / TOAST / THEME MANAGERS
@@ -440,8 +459,8 @@ var DashboardRenderer = (function () {
 
     /* ── Trades + Deployments Row ─────────────────────────────── */
     html += '<div class="dash-dual-row">';
-    html += '<section>' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades">' + _spinner() + '</div></section>';
-    html += '<section>' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys">' + _spinner() + '</div></section>';
+    html += '<section style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades">' + _spinner() + '</div></section>';
+    html += '<section style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys">' + _spinner() + '</div></section>';
     html += '</div>';
 
     html += '</div>';
@@ -1987,8 +2006,12 @@ var App = (function () {
       DashboardRenderer.render();
     } else if (page === 'fleet') {
       FleetRenderer.render();
-    } else if (page === 'workerDetail' && _selectedWorker && typeof WorkerDetailRenderer !== 'undefined') {
-      WorkerDetailRenderer.render(_selectedWorker);
+    } else if (page === 'workerDetail' && _selectedWorker) {
+      if (typeof WorkerDetailRenderer !== 'undefined') {
+        WorkerDetailRenderer.render(_selectedWorker);
+      } else {
+        document.getElementById('main-content').innerHTML = _emptyState('fa-circle-exclamation', 'Worker Detail Unavailable', 'workerDetailRenderer.js may not be loaded. Check your HTML script tags.');
+      }
     } else if (page === 'strategies') {
       StrategiesRenderer.render();
     } else if (page === 'portfolio') {
