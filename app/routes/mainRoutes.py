@@ -248,6 +248,9 @@ async def upload_strategy_file(file: UploadFile = File(...)):
 @router.get("/api/grid/strategies", tags=["Strategies"])
 async def list_strategies():
     strategies = get_all_strategies()
+    for s in strategies:
+        s['is_valid'] = bool(s.get('class_name'))
+        s['validation_status'] = 'validated' if s['is_valid'] else 'invalid'
     return {
         "ok": True,
         "strategies": strategies,
@@ -272,7 +275,8 @@ async def get_strategy_detail(strategy_id: str):
     rec["parameters"] = params
     rec["parameter_count"] = len(params)
     rec["strategy_name"] = rec.get("name", rec.get("strategy_id", ""))
-    rec["validation_status"] = "validated" if rec.get("is_valid") else "invalid"
+    rec["is_valid"] = bool(rec.get("class_name"))
+    rec["validation_status"] = "validated" if rec["is_valid"] else "invalid"
     return {"ok": True, "strategy": rec}
 
 
