@@ -769,23 +769,7 @@ class StrategyRunner:
         self._deployment_id: str = self.deployment_id
         self._strategy_id: str = self.strategy_id
         self._worker_id: str = self.worker_id
-        # ★ FIX: Get mother_url from deployment config OR worker's own config file
-        self._mother_url: str = deployment_config.get("mother_url", "")
-        if not self._mother_url:
-            # Fallback: read from worker config file (same one agent uses for heartbeat)
-            try:
-                import json as _json
-                for cfg_path in ["config.json", "worker_config.json", "worker/config.json"]:
-                    if os.path.exists(cfg_path):
-                        with open(cfg_path, "r") as f:
-                            wcfg = _json.load(f)
-                        self._mother_url = wcfg.get("mother_url") or wcfg.get("mother_server_url") or wcfg.get("server_url") or ""
-                        if self._mother_url:
-                            break
-            except Exception:
-                pass
-        if not self._mother_url:
-            print("[RUNNER] WARNING: No mother_url found — trade reporting disabled")
+        self._mother_url = __import__("yaml").safe_load(open("config.yaml"))["mother_server"]["url"]
         self._unreported_trades: list = []
 
         self._strategy = None
