@@ -688,7 +688,26 @@ class StrategyRunner:
                 print(f"[RUNNER] Status report attempt {attempt + 1}/3 failed: {exc}")
                 if attempt < 2:
                     time.sleep(1.0)
-
+    def _report_error(self, message: str, severity: str = "ERROR"):
+        """Send error event to Mother server so it appears in Logs UI."""
+        import requests
+        mother_url = self._mother_url
+        if not mother_url:
+            return
+        url = f"{mother_url}/api/worker/error"
+        payload = {
+            "worker_id": self._worker_id,
+            "deployment_id": self._deployment_id,
+            "strategy_id": self._strategy_id,
+            "symbol": self.symbol,
+            "severity": severity,
+            "message": message,
+        }
+        try:
+            requests.post(url, json=payload, timeout=5)
+        except Exception as e:
+            print(f"[RUNNER] Failed to report error to mother: {e}")
+            
     def _report_trade(self, record: dict):
         """Send completed trade record to mother server."""
         import requests
@@ -891,8 +910,12 @@ class StrategyRunner:
         )
 
         if mt5_record is None:
-            print(f"[RUNNER] CRITICAL: Could not fetch MT5 history for "
-                  f"ticket {ticket}. Trade will NOT be recorded.")
+            error_msg = (
+                f"CRITICAL: Could not fetch MT5 history for "
+                f"ticket {ticket} ({self.symbol}). Trade NOT recorded."
+            )
+            print(f"[RUNNER] {error_msg}")
+            self._report_error(error_msg, severity="CRITICAL")
             self._active_trade_meta = None
             self._exec_log.closes_filled += 1
             return

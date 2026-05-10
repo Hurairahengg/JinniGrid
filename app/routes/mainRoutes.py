@@ -182,6 +182,39 @@ async def portfolio_performance(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+@router.post("/api/worker/error", tags=["Worker Commands"])
+async def worker_error_report(payload: dict = Body(...)):
+    """Receive error reports from workers. Logs as event visible in UI."""
+    severity = payload.get("severity", "ERROR")
+    message = payload.get("message", "Unknown error")
+    worker_id = payload.get("worker_id")
+    strategy_id = payload.get("strategy_id")
+    deployment_id = payload.get("deployment_id")
+    symbol = payload.get("symbol")
+
+    level = "ERROR"
+    if severity == "CRITICAL":
+        level = "ERROR"  # highest level in our event system
+
+    log_event_db(
+        category="execution",
+        event_type="worker_error",
+        message=f"[{severity}] {message}",
+        worker_id=worker_id,
+        strategy_id=strategy_id,
+        deployment_id=deployment_id,
+        symbol=symbol,
+        data=payload,
+        level=level,
+    )
+
+    import logging
+    logging.getLogger("jinni.worker").error(
+        f"[WORKER-ERROR] [{severity}] worker={worker_id} "
+        f"dep={deployment_id}: {message}"
+    )
+
+    return {"ok": True, "received": True}
 
 @router.post("/api/portfolio/trades/report", tags=["Portfolio"])
 async def report_trade(payload: dict = Body(...)):
