@@ -186,20 +186,50 @@ async def portfolio_performance(
 @router.post("/api/portfolio/trades/report", tags=["Portfolio"])
 async def report_trade(payload: dict = Body(...)):
     """Receive trade report from worker VM. Saves immediately to DB."""
+    import logging
+    _log = logging.getLogger("jinni.trades")
+
+    mt5_ticket = payload.get("mt5_ticket") or payload.get("ticket")
+    is_mt5 = payload.get("mt5_source", False)
+    net_pnl = payload.get("net_pnl") or payload.get("profit", 0)
+    reason = payload.get("exit_reason", "UNKNOWN")
+
+    _log.info(
+        f"[TRADE-IN] {'MT5' if is_mt5 else 'EST'} | "
+        f"ticket={mt5_ticket} "
+        f"{payload.get('direction', '?')} {payload.get('symbol', '?')} "
+        f"pnl={net_pnl} reason={reason} "
+        f"worker={payload.get('worker_id', '?')} "
+        f"dep={payload.get('deployment_id', '?')}"
+    )
+
     ok = save_trade_db(payload)
+
     if ok:
         log_event_db(
             "execution", "trade_closed",
+            f"{'[MT5]' if is_mt5 else '[EST]'} "
             f"{payload.get('direction', '?')} {payload.get('symbol', '?')} "
-            f"profit={payload.get('profit', 0)}",
+            f"ticket={mt5_ticket} pnl={net_pnl} reason={reason}",
             worker_id=payload.get("worker_id"),
             strategy_id=payload.get("strategy_id"),
             deployment_id=payload.get("deployment_id"),
             symbol=payload.get("symbol"),
-            data=payload, level="INFO",
+            data={
+                "mt5_ticket": mt5_ticket,
+                "profit": payload.get("profit"),
+                "commission": payload.get("commission"),
+                "swap": payload.get("swap"),
+                "net_pnl": net_pnl,
+                "exit_reason": reason,
+                "mt5_source": is_mt5,
+            },
+            level="INFO",
         )
-    return {"ok": ok, "timestamp": datetime.now(timezone.utc).isoformat()}
+    else:
+        _log.warning(f"[TRADE-IN] SAVE FAILED for ticket={mt5_ticket}")
 
+    return {"ok": ok, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 # =============================================================================
 # Events / Logs

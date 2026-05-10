@@ -690,19 +690,38 @@ class StrategyRunner:
                     time.sleep(1.0)
 
     def _report_trade(self, record: dict):
-        if not self._trade_callback:
+        """Send completed trade record to mother server."""
+        import requests
+        import json
+
+        mother_url = self._mother_url
+        if not mother_url:
+            print("[RUNNER] No mother URL configured — trade not reported")
             return
-        report = {
-            **record,
-            "deployment_id": self.deployment_id,
-            "strategy_id": self.strategy_id,
-            "worker_id": self.worker_id,
-            "symbol": self.symbol,
-        }
+
+        url = f"{mother_url}/api/portfolio/trades/report"
+
+        # Clean the record for JSON serialization
+        payload = {}
+        for k, v in record.items():
+            if v is None:
+                payload[k] = None
+            elif isinstance(v, (list, dict)):
+                payload[k] = v
+            else:
+                try:
+                    payload[k] = float(v) if isinstance(v, (int, float)) else str(v)
+                except (ValueError, TypeError):
+                    payload[k] = str(v)
+
         try:
-            self._trade_callback(report)
-        except Exception as exc:
-            print(f"[RUNNER] Trade report callback failed: {exc}")
+            resp = requests.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                print(f"[RUNNER] Trade reported to mother: ticket={record.get('mt5_ticket')}")
+            else:
+                print(f"[RUNNER] Trade report failed: HTTP {resp.status_code} — {resp.text[:200]}")
+        except Exception as e:
+            print(f"[RUNNER] Trade report failed: {e}")
 
     def _set_state(self, state: str, error: str = None):
         self._runner_state = state
@@ -843,93 +862,110 @@ class StrategyRunner:
         self._refresh_position()
 
     def _handle_broker_close(self, bar: dict):
+        """
+        Detect that a tracked position has been closed by the broker/MT5.
+        Fetch ACTUAL trade data from MT5 history — no estimation.
+        """
         meta = self._active_trade_meta
         if not meta:
             return
 
         ticket = meta.get("ticket")
-        direction = meta.get("direction", "long")
-        entry_price = meta.get("entry_price", 0)
+        if not ticket:
+            print(f"[RUNNER] WARNING: No MT5 ticket for active trade — "
+                  f"cannot fetch history. Skipping.")
+            self._active_trade_meta = None
+            return
 
-        # Try MT5 deal history first (exact profit)
-        deal_info = {}
-        if self._executor and ticket:
-            deal_info = self._executor.get_closed_deal_profit(ticket)
+        print(f"[RUNNER] Position {ticket} closed — fetching MT5 history...")
 
-        profit = deal_info.get("profit")
-        close_price = deal_info.get("close_price")
-        commission = deal_info.get("commission", 0) or 0
-        swap = deal_info.get("swap", 0) or 0
+        # Import the MT5 history module
+        from mt5_history import fetch_closed_position
 
-        # Determine exit reason
-        exit_reason = "broker_close"
-        if close_price is not None:
-            sl = meta.get("sl")
-            tp = meta.get("tp")
-            if tp is not None:
-                if direction == "long" and close_price >= tp:
-                    exit_reason = "TP_HIT"
-                elif direction == "short" and close_price <= tp:
-                    exit_reason = "TP_HIT"
-            if sl is not None:
-                if direction == "long" and close_price <= sl:
-                    exit_reason = "SL_HIT"
-                elif direction == "short" and close_price >= sl:
-                    exit_reason = "SL_HIT"
-
-        if close_price is None:
-            close_price = self._current_price or float(bar.get("close", 0))
-
-        # ★ FIX: Use MT5 symbol_info for correct contract size
-        if profit is None:
-            contract_size = 100000  # forex default
-            try:
-                mt5 = _import_mt5()
-                if mt5:
-                    sym_info = mt5.symbol_info(self.symbol)
-                    if sym_info and sym_info.trade_contract_size:
-                        contract_size = sym_info.trade_contract_size
-            except Exception:
-                pass
-
-            if direction == "long":
-                points_pnl = close_price - entry_price
-            else:
-                points_pnl = entry_price - close_price
-
-            profit = round(points_pnl * self.lot_size * contract_size, 2)
-            print(f"[RUNNER] WARNING: Estimated profit (contract_size="
-                  f"{contract_size}). May be inaccurate.")
-
-        self._trade_counter += 1
-        record = build_trade_record(
-            trade_id=self._trade_counter,
-            direction=direction,
-            entry_price=entry_price,
-            entry_bar=meta.get("entry_bar", 0),
-            entry_time=meta.get("entry_time", 0),
-            exit_price=close_price,
-            exit_bar=self._bar_index,
-            exit_time=bar.get("time", 0),
-            exit_reason=exit_reason,
-            sl=meta.get("sl"),
-            tp=meta.get("tp"),
-            lot_size=self.lot_size,
-            ticket=ticket,
-            profit=round(profit, 2) if profit is not None else 0,
+        # Fetch with retry (MT5 needs time to update history)
+        mt5_record = fetch_closed_position(
+            position_ticket=ticket,
+            symbol=self.symbol,
+            max_retries=5,
+            retry_delay_ms=300,
         )
-        # Add commission/swap from deal history
-        record["commission"] = round(commission, 2)
-        record["swap"] = round(swap, 2)
 
+        if mt5_record is None:
+            print(f"[RUNNER] CRITICAL: Could not fetch MT5 history for "
+                  f"ticket {ticket}. Trade will NOT be recorded.")
+            self._active_trade_meta = None
+            self._exec_log.closes_filled += 1
+            return
+
+        # Increment our counter (for internal tracking only, NOT for uniqueness)
+        self._trade_counter += 1
+
+        # Build the trade record using MT5 data as source of truth
+        record = {
+            # Unique ID from MT5 (globally unique per account)
+            "mt5_ticket": ticket,
+            "trade_id": self._trade_counter,
+
+            # Context
+            "deployment_id": self._deployment_id,
+            "strategy_id": self._strategy_id,
+            "worker_id": self._worker_id,
+
+            # From MT5 history (source of truth)
+            "symbol": mt5_record["symbol"],
+            "direction": mt5_record["direction"],
+            "lot_size": mt5_record["lot_size"],
+            "entry_price": mt5_record["entry_price"],
+            "exit_price": mt5_record["exit_price"],
+            "entry_time": mt5_record["entry_time"],
+            "exit_time": mt5_record["exit_time"],
+
+            # PnL from MT5 (NOT estimated)
+            "profit": mt5_record["profit"],
+            "commission": mt5_record["commission"],
+            "swap": mt5_record["swap"],
+            "fee": mt5_record.get("fee", 0),
+            "net_pnl": mt5_record["net_pnl"],
+
+            # Close reason from MT5 deal reason enum
+            "exit_reason": mt5_record["exit_reason"],
+            "mt5_source": True,
+
+            # Bar context (from our engine)
+            "entry_bar": meta.get("entry_bar", 0),
+            "exit_bar": self._bar_index,
+            "bars_held": max(0, self._bar_index - meta.get("entry_bar", 0)),
+
+            # MT5 deal references (for audit trail)
+            "mt5_deal_tickets": mt5_record.get("mt5_deal_tickets", []),
+            "mt5_comment": mt5_record.get("mt5_comment", ""),
+
+            # SL/TP levels from our strategy (for reference)
+            "sl": meta.get("sl"),
+            "tp": meta.get("tp"),
+        }
+
+        # Store locally
         self._ctx._trades.append(record)
+
+        # Report to mother server
         self._report_trade(record)
 
-        print(f"[TRADE #{self._trade_counter}] BROKER CLOSE | "
-              f"{direction.upper()} entry={entry_price:.5f} "
-              f"exit={close_price:.5f} reason={exit_reason} "
-              f"profit={profit:.2f} comm={commission:.2f}")
+        print(
+            f"[TRADE #{self._trade_counter}] MT5 CONFIRMED | "
+            f"ticket={ticket} {mt5_record['direction'].upper()} "
+            f"{mt5_record['symbol']} "
+            f"entry={mt5_record['entry_price']:.5f} "
+            f"exit={mt5_record['exit_price']:.5f} "
+            f"profit={mt5_record['profit']:.2f} "
+            f"comm={mt5_record['commission']:.2f} "
+            f"swap={mt5_record['swap']:.2f} "
+            f"net={mt5_record['net_pnl']:.2f} "
+            f"reason={mt5_record['exit_reason']} "
+            f"deals={mt5_record.get('mt5_deal_tickets', [])}"
+        )
 
+        # Clear active trade
         self._active_trade_meta = None
         self._exec_log.closes_filled += 1
 

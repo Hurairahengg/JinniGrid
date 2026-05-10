@@ -352,17 +352,18 @@ def _compute_equity_snapshot():
         total_balance = realized
         total_equity = realized + total_floating
 
-    try:
-        save_equity_snapshot_db(
-            balance=_r2(total_balance),
-            equity=_r2(total_equity),
-            floating_pnl=_r2(total_floating),
-            open_positions=open_pos,
-            cumulative_pnl=_r2(realized),
-        )
-    except Exception as e:
-        print(f"[PORTFOLIO] Snapshot save failed: {e}")
-
+    # Only save if we have meaningful data (avoid 0-equity pollution)
+    if _r2(total_equity) != 0 or _r2(total_balance) != 0 or open_pos > 0:
+        try:
+            save_equity_snapshot_db(
+                balance=_r2(total_balance),
+                equity=_r2(total_equity),
+                floating_pnl=_r2(total_floating),
+                open_positions=open_pos,
+                cumulative_pnl=_r2(realized),
+            )
+        except Exception as e:
+            print(f"[PORTFOLIO] Snapshot save failed: {e}")
 
 # =============================================================================
 # Portfolio Engine (correct date handling + extended stats)
@@ -395,16 +396,18 @@ def _compute_trade_stats(trades: list) -> dict:
     gl = _r2(sum(loss_p))
     net = _r2(gp + gl)
 
-    # Max drawdown
+    # Max drawdown (peak-to-trough, capped at 100%)
     cum, peak, dd_usd, dd_pct = 0.0, 0.0, 0.0, 0.0
     for p in profits:
         cum += p
         if cum > peak:
             peak = cum
-        d = peak - cum
-        dp = (d / peak * 100) if peak > 0 else 0
+        d = peak - cum  # always >= 0
         dd_usd = max(dd_usd, d)
-        dd_pct = max(dd_pct, dp)
+        # Only compute % when peak is meaningfully positive
+        if peak > 0.01:
+            dp = min((d / peak) * 100, 100.0)  # cap at 100%
+            dd_pct = max(dd_pct, dp)
 
     # Sharpe
     mean = net / n
@@ -504,6 +507,39 @@ def get_portfolio_summary(strategy_id=None, worker_id=None,
         tb = stats["net_pnl"]
         te = stats["net_pnl"] + tf
 
+    # Compute drawdown from equity snapshots if available (more accurate)
+    snapshots = get_equity_snapshots_db(limit=5000)
+    snap_dd_usd = 0.0
+    snap_dd_pct = 0.0
+    if snapshots:
+        eq_vals = [s.get("equity", 0) for s in snapshots if (s.get("equity") or 0) > 0]
+        if eq_vals:
+            pk = 0.0
+            for v in eq_vals:
+                if v > pk:
+                    pk = v
+                d = pk - v
+                if d > snap_dd_usd:
+                    snap_dd_usd = d
+                if pk > 0.01:
+                    dp = min((d / pk) * 100, 100.0)
+                    if dp > snap_dd_pct:
+                        snap_dd_pct = dp
+
+    # Use snapshot-based DD if available and meaningful, else trade-based
+    final_dd_usd = snap_dd_usd if snap_dd_usd > 0 else stats["max_drawdown_usd"]
+    final_dd_pct = snap_dd_pct if snap_dd_pct > 0 else stats["max_drawdown_pct"]
+
+    # Current drawdown
+    current_dd_pct = 0.0
+    if snapshots:
+        eq_vals = [s.get("equity", 0) for s in snapshots if (s.get("equity") or 0) > 0]
+        if eq_vals:
+            peak_eq = max(eq_vals)
+            current_eq = eq_vals[-1]
+            if peak_eq > 0.01:
+                current_dd_pct = min(((peak_eq - current_eq) / peak_eq) * 100, 100.0)
+
     return {
         "total_balance": _r2(tb),
         "total_equity": _r2(te),
@@ -513,7 +549,34 @@ def get_portfolio_summary(strategy_id=None, worker_id=None,
         "active_workers": len([w for w in workers
                                if w.get("state") in
                                ("online", "running")]),
-        **stats,
+        "max_drawdown_usd": _r2(final_dd_usd),
+        "max_drawdown_pct": _r2(final_dd_pct),
+        "current_drawdown_pct": _r2(current_dd_pct),
+        "peak_equity": _r2(max(eq_vals) if snapshots and eq_vals else te),
+        # All other stats from _compute_trade_stats (except DD which we override)
+        "total_trades": stats["total_trades"],
+        "wins": stats["wins"],
+        "losses": stats["losses"],
+        "gross_profit": stats["gross_profit"],
+        "gross_loss": stats["gross_loss"],
+        "net_pnl": stats["net_pnl"],
+        "win_rate": stats["win_rate"],
+        "profit_factor": stats["profit_factor"],
+        "expectancy": stats["expectancy"],
+        "avg_trade": stats["avg_trade"],
+        "avg_winner": stats["avg_winner"],
+        "avg_loser": stats["avg_loser"],
+        "best_trade": stats["best_trade"],
+        "worst_trade": stats["worst_trade"],
+        "recovery_factor": _r2(stats["net_pnl"] / final_dd_usd) if final_dd_usd > 0 else 0,
+        "sharpe_estimate": stats["sharpe_estimate"],
+        "sortino_estimate": stats["sortino_estimate"],
+        "avg_bars_held": stats["avg_bars_held"],
+        "max_consec_wins": stats["max_consec_wins"],
+        "max_consec_losses": stats["max_consec_losses"],
+        "best_day": stats["best_day"],
+        "worst_day": stats["worst_day"],
+        "trades_per_day": stats["trades_per_day"],
     }
 
 
@@ -521,12 +584,10 @@ def get_equity_history() -> list:
     trades = get_all_trades_db(limit=50000)
     trade_curve = []
     if trades:
-        # Sort by DB auto-increment id (insertion order)
         sorted_t = sorted(trades, key=lambda t: t.get("id", 0))
         cum = 0.0
         for t in sorted_t:
             cum += _r2(t.get("profit"))
-            # Use ISO exit_time for label
             ts = t.get("exit_time") or t.get("created_at") or ""
             label = str(ts)[-8:] if len(str(ts)) >= 8 else str(ts)
             trade_curve.append({
@@ -543,12 +604,17 @@ def get_equity_history() -> list:
     snapshots = get_equity_snapshots_db(limit=2000)
     snap_curve = []
     for s in snapshots:
+        eq = _r2(s.get("equity", 0))
+        bal = _r2(s.get("balance", 0))
+        # Skip zero-equity snapshots (worker not initialized yet)
+        if eq <= 0 and bal <= 0:
+            continue
         ts = s.get("timestamp", "")
         label = ts[-8:] if len(ts) >= 8 else ts
         snap_curve.append({
             "timestamp": ts,
-            "equity": _r2(s.get("equity", 0)),
-            "balance": _r2(s.get("balance", 0)),
+            "equity": eq,
+            "balance": bal,
             "floating_pnl": _r2(s.get("floating_pnl", 0)),
             "realized_pnl": _r2(s.get("cumulative_pnl", 0)),
             "label": label,
@@ -568,10 +634,8 @@ def get_equity_history() -> list:
     if trade_curve:
         return trade_curve
 
-    return [{"timestamp": datetime.now(timezone.utc).isoformat(),
-             "equity": 0, "balance": 0, "floating_pnl": 0,
-             "realized_pnl": 0, "label": "start", "source": "initial"}]
-
+    # No data at all — return empty (UI handles gracefully)
+    return []
 
 def get_portfolio_trades(strategy_id=None, worker_id=None,
                           symbol=None, limit=500) -> list:

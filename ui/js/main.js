@@ -335,8 +335,10 @@ function _fmtMoney(v) {
   if (v === null || v === undefined) return '\u2014';
   var n = Math.round(Number(v) * 100) / 100;
   if (isNaN(n)) return '\u2014';
-  var sign = n >= 0 ? '+' : '';
-  return sign + '$' + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  var abs = Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (n > 0) return '+$' + abs;
+  if (n < 0) return '-$' + abs;
+  return '$0.00';
 }
 
 function _fmtPct(v) {
@@ -532,42 +534,53 @@ var DashboardRenderer = (function () {
   function _fetchKPIs() {
     Promise.all([
       ApiClient.getFleetWorkers().catch(function () { return { workers: [], summary: {} }; }),
-      ApiClient.getDeployments().catch(function () { return { deployments: [] }; })
+      ApiClient.getDeployments().catch(function () { return { deployments: [] }; }),
+      ApiClient.getEvents({ limit: 1, level: 'ERROR' }).catch(function () { return { events: [] }; })
     ]).then(function (r) {
       var workers = r[0].workers || [];
       var fleet = r[0].summary || {};
       var deps = r[1].deployments || [];
+      var lastErrors = r[2].events || [];
       var el = document.getElementById('dash-kpi');
       if (!el) return;
 
       var running = deps.filter(function (d) { return d.state === 'running'; }).length;
-      var failed = deps.filter(function (d) { return d.state === 'failed'; }).length;
+      var totalDeps = deps.length;
       var totalPositions = 0;
       var totalTicks = 0;
       var totalBars = 0;
       var totalSignals = 0;
+      var totalOnBar = 0;
+      var mt5Connected = 0;
+      var freshestHb = Infinity;
       var errorWorkers = 0;
-      var oldestHb = 0;
 
       workers.forEach(function (w) {
         totalPositions += (w.open_positions_count || 0);
         totalTicks += (w.total_ticks || 0);
         totalBars += (w.total_bars || 0);
         totalSignals += (w.signal_count || 0);
+        totalOnBar += (w.on_bar_calls || 0);
+        if (w.mt5_state === 'connected') mt5Connected++;
         if (w.errors && w.errors.length > 0) errorWorkers++;
-        var age = w.heartbeat_age_seconds || 0;
-        if (age > oldestHb) oldestHb = age;
+        var age = w.heartbeat_age_seconds || 999;
+        if (age < freshestHb) freshestHb = age;
       });
 
+      var hbLabel = workers.length === 0 ? 'N/A' : (freshestHb < 60 ? Math.round(freshestHb) + 's' : Math.round(freshestHb / 60) + 'm');
+      var lastErrLabel = lastErrors.length > 0 ? lastErrors[0].timestamp.replace('T', ' ').substring(11, 19) : 'None';
+
       el.innerHTML =
-        _metricItem('Online', String(fleet.online_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
-        _metricItem('Stale', String(fleet.stale_workers || 0), (fleet.stale_workers || 0) > 0 ? 'text-warning' : '') +
-        _metricItem('Offline', String(fleet.offline_workers || 0), (fleet.offline_workers || 0) > 0 ? 'text-danger' : '') +
-        _metricItem('Running', String(running), running > 0 ? 'text-success' : '') +
-        _metricItem('Failed', String(failed), failed > 0 ? 'text-danger' : '') +
-        _metricItem('Open Pos', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
-        _metricItem('Throughput', _fmtNum(totalTicks) + ' tks') +
-        _metricItem('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '');
+        _metricItem('Workers', (fleet.online_workers || 0) + '/' + (fleet.total_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
+        _metricItem('MT5', mt5Connected + '/' + workers.length, mt5Connected === workers.length && workers.length > 0 ? 'text-success' : mt5Connected > 0 ? 'text-warning' : '') +
+        _metricItem('Strategies', running + ' running', running > 0 ? 'text-success' : '') +
+        _metricItem('Deploys', totalDeps + ' total') +
+        _metricItem('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
+        _metricItem('Ticks', _fmtNum(totalTicks)) +
+        _metricItem('Bars', _fmtNum(totalBars)) +
+        _metricItem('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
+        _metricItem('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
+        _metricItem('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
     });
   }
 
@@ -575,7 +588,7 @@ var DashboardRenderer = (function () {
   function _fetchEquity() {
     ApiClient.getEquityHistory().then(function (data) {
       var hist = data.equity_history || [];
-      if (hist.length === 0 || (hist.length === 1 && hist[0].source === 'initial')) {
+      if (hist.length === 0) {
         var wrap = document.getElementById('dash-equity-wrap');
         if (wrap) wrap.innerHTML = _emptyState('fa-chart-area', 'No Equity Data Yet', 'Trades will build the equity curve as strategies execute.');
         return;
@@ -1111,6 +1124,8 @@ var PortfolioRenderer = (function () {
       html += _metricItem('Trades', String(p.total_trades || 0));
       html += _metricItem('Wins/Losses', (p.wins || 0) + '/' + (p.losses || 0));
       html += _metricItem('Trades/Day', String(p.trades_per_day || 0));
+      html += _metricItem('Current DD', _fmtPct(p.current_drawdown_pct), (p.current_drawdown_pct || 0) > 5 ? 'text-danger' : '');
+      html += _metricItem('Peak Equity', p.peak_equity ? ('$' + _fmtNum(p.peak_equity)) : '\u2014');
       html += '</div>';
 
       /* Extended metrics row */
@@ -1224,6 +1239,8 @@ var PortfolioRenderer = (function () {
       html += _metricItem('Recovery Factor', String(p.recovery_factor || 0));
       html += _metricItem('Sharpe', String(p.sharpe_estimate || 0));
       html += _metricItem('Sortino', String(p.sortino_estimate || 0));
+      html += _metricItem('Current DD', _fmtPct(p.current_drawdown_pct), (p.current_drawdown_pct || 0) > 5 ? 'text-danger' : '');
+      html += _metricItem('Peak Equity', p.peak_equity ? ('$' + _fmtNum(p.peak_equity)) : '\u2014');
       html += _metricItem('Consec Wins', String(p.max_consec_wins || 0), 'text-success');
       html += _metricItem('Consec Losses', String(p.max_consec_losses || 0), 'text-danger');
       html += _metricItem('Avg Bars Held', String(p.avg_bars_held || 0));

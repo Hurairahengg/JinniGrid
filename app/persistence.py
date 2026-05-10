@@ -203,7 +203,7 @@ def init_db(db_path: str = "jinni_grid.db"):
         "CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id)",
         "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)",
         "CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_time)",
-        "CREATE INDEX IF NOT EXISTS idx_trades_uid ON trades(trade_uid)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_ticket ON trades(ticket)",
         "CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(timestamp)",
         "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)",
         "CREATE INDEX IF NOT EXISTS idx_events_cat ON events(category)",
@@ -406,30 +406,43 @@ def update_deployment_state_db(deployment_id: str, state: str,
 
 def save_trade_db(data: dict) -> bool:
     """
-    Save a closed trade. Uses trade_uid for global uniqueness.
-    trade_uid = {deployment_id}_{worker_id}_{trade_id}
-    This prevents overwrites between deployments.
+    Save a closed trade. Uses MT5 position ticket as the unique ID
+    (globally unique per MT5 account, never reused).
+
+    Uniqueness: trade_uid = {worker_id}_{mt5_ticket}
+    Fallback:   trade_uid = {deployment_id}_{worker_id}_{trade_id}_{exit_time}
     """
     conn = _get_conn()
 
     # Build globally unique trade ID
-    dep_id = data.get("deployment_id", "none")
+    mt5_ticket = data.get("mt5_ticket") or data.get("ticket")
     wk_id = data.get("worker_id", "none")
+    dep_id = data.get("deployment_id", "none")
     t_id = data.get("trade_id", 0)
-    trade_uid = f"{dep_id}_{wk_id}_{t_id}"
+    exit_ts = data.get("exit_time", "0")
 
-    # Convert Unix timestamps to ISO strings for date grouping
+    if mt5_ticket:
+        # Best case: MT5 ticket is globally unique per account
+        trade_uid = f"{wk_id}_{mt5_ticket}"
+    else:
+        # Fallback: include exit_time to prevent restart collisions
+        trade_uid = f"{dep_id}_{wk_id}_{t_id}_{exit_ts}"
+
+    # Convert timestamps
     entry_ts = data.get("entry_time")
-    exit_ts = data.get("exit_time")
+    exit_ts_raw = data.get("exit_time")
     entry_iso = _unix_to_iso(entry_ts)
-    exit_iso = _unix_to_iso(exit_ts)
+    exit_iso = _unix_to_iso(exit_ts_raw)
 
-    # Compute bars_held
+    # Bars held
     bars_held = data.get("bars_held")
     if bars_held is None or bars_held == 0:
         eb = int(data.get("entry_bar", 0) or 0)
         xb = int(data.get("exit_bar", 0) or 0)
         bars_held = max(0, xb - eb)
+
+    # Use net_pnl if available (MT5 source), else fall back to profit
+    profit = data.get("net_pnl") or data.get("profit") or 0
 
     try:
         conn.execute("""
@@ -452,28 +465,30 @@ def save_trade_db(data: dict) -> bool:
             _r2(data.get("entry_price")),
             _r2(data.get("exit_price")),
             int(entry_ts) if entry_ts and str(entry_ts).isdigit() else None,
-            int(exit_ts) if exit_ts and str(exit_ts).isdigit() else None,
+            int(exit_ts_raw) if exit_ts_raw and str(exit_ts_raw).isdigit() else None,
             entry_iso,
             exit_iso,
             data.get("entry_bar"),
             data.get("exit_bar"),
             bars_held,
             data.get("lot_size"),
-            data.get("ticket"),
+            mt5_ticket or data.get("ticket"),
             data.get("sl"),
             data.get("tp"),
-            _r2(data.get("profit")),
+            _r2(profit),
             _r2(data.get("commission")),
             _r2(data.get("swap")),
             data.get("exit_reason"),
         ))
         conn.commit()
-        inserted = conn.execute(
-            "SELECT changes()").fetchone()[0]
-        if inserted == 0:
+        changes = conn.execute("SELECT changes()").fetchone()[0]
+        if changes == 0:
             print(f"[DB] Trade {trade_uid} already exists (skipped duplicate)")
         else:
-            print(f"[DB] Trade {trade_uid} saved: profit={_r2(data.get('profit'))}")
+            src = "MT5" if data.get("mt5_source") else "EST"
+            print(f"[DB] Trade SAVED [{src}]: uid={trade_uid} "
+                  f"{data.get('direction','')} {data.get('symbol','')} "
+                  f"profit={_r2(profit)} reason={data.get('exit_reason','')}")
         return True
     except Exception as e:
         print(f"[DB] save_trade_db FAILED: {e}")
