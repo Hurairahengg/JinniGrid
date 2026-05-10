@@ -18,6 +18,8 @@ from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import requests
+
 from worker.indicators import IndicatorEngine, precompute_indicator_series
 from worker.execution import (
     SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
@@ -496,6 +498,196 @@ mt5_connector = _MT5ConnectorFacade()
 
 
 # =============================================================================
+# ★ FIX: MT5 Deal History Fetcher (inline, no external module needed)
+# =============================================================================
+
+def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
+                                    max_retries: int = 5,
+                                    retry_delay_ms: int = 300) -> Optional[dict]:
+    """
+    Fetch closed position data from MT5 deal history.
+    Retries because MT5 takes time to update history after close.
+    Returns dict with all trade data or None if not found.
+    """
+    mt5 = _import_mt5()
+    if mt5 is None:
+        print("[MT5] MetaTrader5 not installed — cannot fetch deal history")
+        return None
+
+    # MT5 deal entry types
+    DEAL_ENTRY_IN = 0
+    DEAL_ENTRY_OUT = 1
+    DEAL_ENTRY_INOUT = 2
+
+    # MT5 deal types
+    DEAL_TYPE_BUY = 0
+    DEAL_TYPE_SELL = 1
+
+    # MT5 deal reason enum
+    DEAL_REASON_CLIENT = 0
+    DEAL_REASON_MOBILE = 1
+    DEAL_REASON_WEB = 2
+    DEAL_REASON_EXPERT = 3
+    DEAL_REASON_SL = 4
+    DEAL_REASON_TP = 5
+    DEAL_REASON_SO = 6
+
+    for attempt in range(max_retries):
+        try:
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(hours=24)
+            deals = mt5.history_deals_get(start, now, position=position_ticket)
+
+            if deals is None or len(deals) == 0:
+                if attempt < max_retries - 1:
+                    delay = retry_delay_ms / 1000.0
+                    print(f"[MT5] Deal history empty for ticket {position_ticket}, "
+                          f"retry {attempt + 2}/{max_retries} in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    print(f"[MT5] No deals found for ticket {position_ticket} "
+                          f"after {max_retries} attempts")
+                    return None
+
+            # Separate entry and exit deals
+            entry_deal = None
+            exit_deal = None
+            all_deals = list(deals)
+
+            for deal in all_deals:
+                if deal.entry == DEAL_ENTRY_IN:
+                    entry_deal = deal
+                elif deal.entry == DEAL_ENTRY_OUT:
+                    exit_deal = deal
+                elif deal.entry == DEAL_ENTRY_INOUT:
+                    # Close-and-open in one deal (rare)
+                    exit_deal = deal
+
+            # Fallback: if no explicit OUT deal, find the one with profit != 0
+            if exit_deal is None:
+                for deal in all_deals:
+                    if deal.profit != 0 and deal != entry_deal:
+                        exit_deal = deal
+                        break
+
+            if exit_deal is None:
+                if attempt < max_retries - 1:
+                    delay = retry_delay_ms / 1000.0
+                    print(f"[MT5] No exit deal yet for ticket {position_ticket}, "
+                          f"retry {attempt + 2}/{max_retries} in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    print(f"[MT5] No exit deal found for ticket {position_ticket} "
+                          f"after {max_retries} attempts. Deals found: {len(all_deals)}")
+                    return None
+
+            # Determine direction from entry deal
+            if entry_deal is not None:
+                direction = "long" if entry_deal.type == DEAL_TYPE_BUY else "short"
+                entry_price = entry_deal.price
+                entry_time_unix = entry_deal.time
+            else:
+                # Infer from exit deal (opposite direction)
+                direction = "short" if exit_deal.type == DEAL_TYPE_BUY else "long"
+                entry_price = 0.0
+                entry_time_unix = exit_deal.time
+
+            exit_price = exit_deal.price
+            exit_time_unix = exit_deal.time
+
+            # PnL from MT5 (source of truth)
+            profit = round(exit_deal.profit, 2)
+            commission_total = 0.0
+            swap_total = 0.0
+            fee_total = 0.0
+            deal_tickets = []
+
+            for deal in all_deals:
+                commission_total += deal.commission
+                swap_total += deal.swap
+                if hasattr(deal, 'fee'):
+                    fee_total += deal.fee
+                deal_tickets.append(deal.ticket)
+
+            commission_total = round(commission_total, 2)
+            swap_total = round(swap_total, 2)
+            fee_total = round(fee_total, 2)
+            net_pnl = round(profit + commission_total + swap_total + fee_total, 2)
+
+            # Determine close reason from MT5 deal reason
+            exit_reason = "UNKNOWN"
+            if hasattr(exit_deal, 'reason'):
+                reason_code = exit_deal.reason
+                if reason_code == DEAL_REASON_SL:
+                    exit_reason = "SL_HIT"
+                elif reason_code == DEAL_REASON_TP:
+                    exit_reason = "TP_HIT"
+                elif reason_code == DEAL_REASON_SO:
+                    exit_reason = "STOP_OUT"
+                elif reason_code == DEAL_REASON_EXPERT:
+                    exit_reason = "EA_CLOSE"
+                elif reason_code in (DEAL_REASON_CLIENT, DEAL_REASON_MOBILE,
+                                      DEAL_REASON_WEB):
+                    exit_reason = "MANUAL_CLOSE"
+                else:
+                    exit_reason = f"REASON_{reason_code}"
+
+            # Convert Unix timestamps to ISO strings
+            entry_time_iso = datetime.fromtimestamp(
+                entry_time_unix, tz=timezone.utc
+            ).isoformat() if entry_time_unix else None
+            exit_time_iso = datetime.fromtimestamp(
+                exit_time_unix, tz=timezone.utc
+            ).isoformat() if exit_time_unix else None
+
+            # Get lot size
+            lot_size = exit_deal.volume if exit_deal.volume > 0 else (
+                entry_deal.volume if entry_deal and entry_deal.volume > 0 else 0
+            )
+
+            # Comment from deal
+            mt5_comment = ""
+            if hasattr(exit_deal, 'comment') and exit_deal.comment:
+                mt5_comment = str(exit_deal.comment)
+
+            print(f"[MT5] Deal history fetched for ticket {position_ticket}: "
+                  f"profit={profit} comm={commission_total} swap={swap_total} "
+                  f"net={net_pnl} reason={exit_reason} deals={len(all_deals)}")
+
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "lot_size": lot_size,
+                "entry_price": round(entry_price, 5),
+                "exit_price": round(exit_price, 5),
+                "entry_time": entry_time_iso,
+                "exit_time": exit_time_iso,
+                "entry_time_unix": entry_time_unix,
+                "exit_time_unix": exit_time_unix,
+                "profit": profit,
+                "commission": commission_total,
+                "swap": swap_total,
+                "fee": fee_total,
+                "net_pnl": net_pnl,
+                "exit_reason": exit_reason,
+                "mt5_deal_tickets": deal_tickets,
+                "mt5_comment": mt5_comment,
+            }
+
+        except Exception as e:
+            print(f"[MT5] Error fetching deal history for ticket {position_ticket}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay_ms / 1000.0)
+            else:
+                traceback.print_exc()
+                return None
+
+    return None
+
+
+# =============================================================================
 # Strategy Loader
 # =============================================================================
 
@@ -572,6 +764,13 @@ class StrategyRunner:
         self.lot_size: float = deployment_config.get("lot_size", 0.01)
         self.strategy_parameters: dict = deployment_config.get("strategy_parameters") or {}
         self.worker_id: str = deployment_config.get("worker_id", "")
+
+        # ★ FIX: Canonical attribute names for trade reporting
+        self._deployment_id: str = self.deployment_id
+        self._strategy_id: str = self.strategy_id
+        self._worker_id: str = self.worker_id
+        self._mother_url: str = deployment_config.get("mother_url", "http://localhost:8000")
+        self._unreported_trades: list = []
 
         self._strategy = None
         self._ctx: Optional[StrategyContext] = None
@@ -656,7 +855,6 @@ class StrategyRunner:
             "floating_pnl": floating,
             "trade_count": self._trade_counter,
             **{f"exec_{k}": v for k, v in exec_stats.items()},
-            # ★ FIX: Use REAL MT5 account data (was hardcoded None before)
             "account_balance": self._mt5_balance,
             "account_equity": self._mt5_equity,
         }
@@ -688,31 +886,11 @@ class StrategyRunner:
                 print(f"[RUNNER] Status report attempt {attempt + 1}/3 failed: {exc}")
                 if attempt < 2:
                     time.sleep(1.0)
-    def _report_error(self, message: str, severity: str = "ERROR"):
-        """Send error event to Mother server so it appears in Logs UI."""
-        import requests
-        mother_url = self._mother_url
-        if not mother_url:
-            return
-        url = f"{mother_url}/api/worker/error"
-        payload = {
-            "worker_id": self._worker_id,
-            "deployment_id": self._deployment_id,
-            "strategy_id": self._strategy_id,
-            "symbol": self.symbol,
-            "severity": severity,
-            "message": message,
-        }
-        try:
-            requests.post(url, json=payload, timeout=5)
-        except Exception as e:
-            print(f"[RUNNER] Failed to report error to mother: {e}")
-            
-    def _report_trade(self, record: dict):
-        """Send completed trade record to mother server."""
-        import requests
-        import json
 
+    # ── ★ FIX: Trade Reporting (retry + background thread) ──
+
+    def _report_trade(self, record: dict):
+        """Send closed trade to mother server immediately with retry."""
         mother_url = self._mother_url
         if not mother_url:
             print("[RUNNER] No mother URL configured — trade not reported")
@@ -720,7 +898,7 @@ class StrategyRunner:
 
         url = f"{mother_url}/api/portfolio/trades/report"
 
-        # Clean the record for JSON serialization
+        # Build payload with safe attribute access
         payload = {}
         for k, v in record.items():
             if v is None:
@@ -733,14 +911,70 @@ class StrategyRunner:
                 except (ValueError, TypeError):
                     payload[k] = str(v)
 
-        try:
-            resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code == 200:
-                print(f"[RUNNER] Trade reported to mother: ticket={record.get('mt5_ticket')}")
-            else:
-                print(f"[RUNNER] Trade report failed: HTTP {resp.status_code} — {resp.text[:200]}")
-        except Exception as e:
-            print(f"[RUNNER] Trade report failed: {e}")
+        # Ensure context fields are present
+        payload.setdefault("deployment_id", self._deployment_id)
+        payload.setdefault("strategy_id", self._strategy_id)
+        payload.setdefault("worker_id", self._worker_id)
+        payload.setdefault("symbol", self.symbol)
+
+        def _send():
+            last_err = None
+            for attempt in range(5):
+                try:
+                    resp = requests.post(url, json=payload, timeout=8)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("ok"):
+                            print(f"[RUNNER] Trade #{record.get('trade_id', '?')} "
+                                  f"reported to mother (attempt {attempt + 1})")
+                            return
+                        else:
+                            last_err = f"Server returned ok=false: {data}"
+                    else:
+                        last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                except requests.exceptions.ConnectionError as e:
+                    last_err = f"Connection error: {e}"
+                except requests.exceptions.Timeout:
+                    last_err = "Timeout"
+                except Exception as e:
+                    last_err = str(e)
+
+                wait = 0.5 * (attempt + 1)
+                print(f"[RUNNER] Trade report attempt {attempt + 1} failed: "
+                      f"{last_err}. Retry in {wait}s...")
+                time.sleep(wait)
+
+            print(f"[RUNNER] CRITICAL: Failed to report trade after 5 attempts: "
+                  f"{last_err}")
+            # Store locally as fallback — will retry on next heartbeat
+            self._unreported_trades.append(payload)
+
+        # Fire in background thread so bar loop isn't blocked
+        t = threading.Thread(target=_send, daemon=True)
+        t.start()
+
+    # ── ★ FIX: Retry unreported trades on heartbeat ─────────
+
+    def retry_unreported_trades(self):
+        """Called from agent heartbeat loop to retry any failed trade reports."""
+        if not self._unreported_trades:
+            return
+        mother_url = self._mother_url
+        if not mother_url:
+            return
+        url = f"{mother_url}/api/portfolio/trades/report"
+        remaining = []
+        for payload in self._unreported_trades:
+            try:
+                resp = requests.post(url, json=payload, timeout=5)
+                if resp.status_code == 200 and resp.json().get("ok"):
+                    print(f"[RUNNER] Retried trade #{payload.get('trade_id', '?')} "
+                          f"reported successfully")
+                else:
+                    remaining.append(payload)
+            except Exception:
+                remaining.append(payload)
+        self._unreported_trades = remaining
 
     def _set_state(self, state: str, error: str = None):
         self._runner_state = state
@@ -871,6 +1105,11 @@ class StrategyRunner:
                     ticket=r.get("ticket"),
                     profit=r.get("profit", 0),
                 )
+                # ★ FIX: Add context fields
+                record["deployment_id"] = self._deployment_id
+                record["strategy_id"] = self._strategy_id
+                record["worker_id"] = self._worker_id
+
                 self._ctx._trades.append(record)
                 print(f"[TRADE #{self._trade_counter}] {record['direction'].upper()} "
                       f"entry={record['entry_price']} exit={record['exit_price']} "
@@ -879,6 +1118,8 @@ class StrategyRunner:
 
         self._active_trade_meta = None
         self._refresh_position()
+
+    # ── ★ FIX: Broker Close — Uses MT5 deal history (not estimation) ──
 
     def _handle_broker_close(self, bar: dict):
         """
@@ -892,17 +1133,38 @@ class StrategyRunner:
         ticket = meta.get("ticket")
         if not ticket:
             print(f"[RUNNER] WARNING: No MT5 ticket for active trade — "
-                  f"cannot fetch history. Skipping.")
+                  f"cannot fetch history. Recording with estimates.")
+            # Fallback: record with what we know
+            self._trade_counter += 1
+            record = build_trade_record(
+                trade_id=self._trade_counter,
+                direction=meta.get("direction", "long"),
+                entry_price=meta.get("entry_price", 0),
+                entry_bar=meta.get("entry_bar", self._bar_index),
+                entry_time=meta.get("entry_time", bar.get("time", 0)),
+                exit_price=self._current_price or float(bar.get("close", 0)),
+                exit_bar=self._bar_index,
+                exit_time=bar.get("time", 0),
+                exit_reason="BROKER_CLOSE_NO_TICKET",
+                sl=meta.get("sl"),
+                tp=meta.get("tp"),
+                lot_size=self.lot_size,
+                ticket=None,
+                profit=0,
+            )
+            record["deployment_id"] = self._deployment_id
+            record["strategy_id"] = self._strategy_id
+            record["worker_id"] = self._worker_id
+            self._ctx._trades.append(record)
+            self._report_trade(record)
             self._active_trade_meta = None
+            self._exec_log.closes_filled += 1
             return
 
         print(f"[RUNNER] Position {ticket} closed — fetching MT5 history...")
 
-        # Import the MT5 history module
-        from mt5_history import fetch_closed_position
-
-        # Fetch with retry (MT5 needs time to update history)
-        mt5_record = fetch_closed_position(
+        # ★ FIX: Use inline fetcher (no external module)
+        mt5_record = fetch_closed_position_from_mt5(
             position_ticket=ticket,
             symbol=self.symbol,
             max_retries=5,
@@ -910,26 +1172,71 @@ class StrategyRunner:
         )
 
         if mt5_record is None:
-            error_msg = (
-                f"CRITICAL: Could not fetch MT5 history for "
-                f"ticket {ticket} ({self.symbol}). Trade NOT recorded."
+            # ★ FIX: Fallback to estimation instead of dropping the trade
+            print(f"[RUNNER] WARNING: MT5 history unavailable for ticket {ticket}. "
+                  f"Using estimation fallback.")
+            self._trade_counter += 1
+            entry_price = meta.get("entry_price", 0)
+            exit_price = self._current_price or float(bar.get("close", 0))
+            direction = meta.get("direction", "long")
+
+            # Estimate profit using symbol contract size
+            mt5 = _import_mt5()
+            contract_size = 100000  # forex default
+            if mt5:
+                try:
+                    sym_info = mt5.symbol_info(self.symbol)
+                    if sym_info and sym_info.trade_contract_size:
+                        contract_size = sym_info.trade_contract_size
+                except Exception:
+                    pass
+
+            if direction == "long":
+                points_pnl = exit_price - entry_price
+            else:
+                points_pnl = entry_price - exit_price
+
+            estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
+
+            record = build_trade_record(
+                trade_id=self._trade_counter,
+                direction=direction,
+                entry_price=entry_price,
+                entry_bar=meta.get("entry_bar", self._bar_index),
+                entry_time=meta.get("entry_time", bar.get("time", 0)),
+                exit_price=exit_price,
+                exit_bar=self._bar_index,
+                exit_time=bar.get("time", 0),
+                exit_reason="BROKER_CLOSE_ESTIMATED",
+                sl=meta.get("sl"),
+                tp=meta.get("tp"),
+                lot_size=self.lot_size,
+                ticket=ticket,
+                profit=estimated_profit,
             )
-            print(f"[RUNNER] {error_msg}")
-            self._report_error(error_msg, severity="CRITICAL")
+            record["deployment_id"] = self._deployment_id
+            record["strategy_id"] = self._strategy_id
+            record["worker_id"] = self._worker_id
+            record["mt5_source"] = False
+
+            self._ctx._trades.append(record)
+            self._report_trade(record)
+
+            print(f"[TRADE #{self._trade_counter}] ESTIMATED | "
+                  f"ticket={ticket} {direction.upper()} "
+                  f"entry={entry_price:.5f} exit={exit_price:.5f} "
+                  f"profit={estimated_profit:.2f} (contract_size={contract_size})")
+
             self._active_trade_meta = None
             self._exec_log.closes_filled += 1
             return
 
-        # Increment our counter (for internal tracking only, NOT for uniqueness)
+        # ★ MT5 history found — use it as source of truth
         self._trade_counter += 1
 
-        # Build the trade record using MT5 data as source of truth
         record = {
-            # Unique ID from MT5 (globally unique per account)
             "mt5_ticket": ticket,
             "trade_id": self._trade_counter,
-
-            # Context
             "deployment_id": self._deployment_id,
             "strategy_id": self._strategy_id,
             "worker_id": self._worker_id,
@@ -968,10 +1275,7 @@ class StrategyRunner:
             "tp": meta.get("tp"),
         }
 
-        # Store locally
         self._ctx._trades.append(record)
-
-        # Report to mother server
         self._report_trade(record)
 
         print(
@@ -988,7 +1292,6 @@ class StrategyRunner:
             f"deals={mt5_record.get('mt5_deal_tickets', [])}"
         )
 
-        # Clear active trade
         self._active_trade_meta = None
         self._exec_log.closes_filled += 1
 
