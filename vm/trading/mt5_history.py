@@ -203,14 +203,28 @@ def _build_trade_record(
     """
     reason_map = _get_reason_map()
 
-    # Separate IN (entry=0) and OUT (entry=1,2,3) deals
-    in_deals = [d for d in deals if d["entry"] == 0]
-    out_deals = [d for d in deals if d["entry"] in (1, 2, 3)]
+    # ── Filter: only actual trade deals (BUY=0, SELL=1) ─────────
+    # Excludes DEAL_TYPE_BALANCE(2), CREDIT(3), CHARGE(4),
+    # CORRECTION(5), BONUS(6), COMMISSION(7), COMMISSION_DAILY(8),
+    # COMMISSION_MONTHLY(9), etc. — these pollute financial totals.
+    trade_deals = [d for d in deals if d["type"] in (0, 1)]
+    non_trade   = [d for d in deals if d["type"] not in (0, 1)]
+
+    if non_trade:
+        log.warning(
+        f"[MT5-HIST] Excluded {len(non_trade)} non-trade deal(s) "
+        f"for position {position_ticket}: "
+        f"{[(d['ticket'], f'type={d['type']}', f'profit={d['profit']}', f'comm={d['commission']}') for d in non_trade]}"
+    )
+
+    # Separate IN (entry=0) and OUT (entry=1,2,3) from trade deals only
+    in_deals  = [d for d in trade_deals if d["entry"] == 0]
+    out_deals = [d for d in trade_deals if d["entry"] in (1, 2, 3)]
 
     if not in_deals:
         log.warning(
             f"[MT5-HIST] No IN deal for position {position_ticket}. "
-            f"Deal entries: {[d['entry'] for d in deals]}"
+            f"Deal entries: {[d['entry'] for d in trade_deals]}"
         )
     if not out_deals:
         log.warning(
@@ -219,42 +233,53 @@ def _build_trade_record(
         )
         return None
 
-    in_deal = in_deals[0] if in_deals else None
+    in_deal  = in_deals[0] if in_deals else None
     out_deal = out_deals[-1]
 
-    # Aggregate financials across ALL deals for this position
-    total_profit = round(sum(d["profit"] for d in deals), 2)
-    total_commission = round(sum(d["commission"] for d in deals), 2)
-    total_swap = round(sum(d["swap"] for d in deals), 2)
-    total_fee = round(sum(d["fee"] for d in deals), 2)
+    # ── Aggregate financials ONLY from actual BUY/SELL deals ────
+    matched_deals = in_deals + out_deals
+    total_profit     = round(sum(d["profit"]     for d in matched_deals), 2)
+    total_commission = round(sum(d["commission"] for d in matched_deals), 2)
+    total_swap       = round(sum(d["swap"]       for d in matched_deals), 2)
+    total_fee        = round(sum(d["fee"]        for d in matched_deals), 2)
+
+    # Some brokers book commission as a separate DEAL_TYPE_COMMISSION (type=7)
+    # deal, where the charge lives in the 'profit' field. Include those.
+    for d in non_trade:
+        if d["type"] in (7, 8, 9):          # COMMISSION / DAILY / MONTHLY
+            broker_comm = round(d["profit"] + d["commission"], 2)
+            if broker_comm != 0.0:
+                total_commission = round(total_commission + broker_comm, 2)
+                log.info(
+                    f"[MT5-HIST] Added broker commission deal {d['ticket']}: "
+                    f"{broker_comm:.2f}"
+                )
+
     net_pnl = round(total_profit + total_commission + total_swap + total_fee, 2)
 
     # Entry info
     entry_price = in_deal["price"] if in_deal else out_deal["price"]
-    entry_time = in_deal["time"] if in_deal else out_deal["time"]
+    entry_time  = in_deal["time"]  if in_deal else out_deal["time"]
 
     # Exit info
     exit_price = out_deal["price"]
-    exit_time = out_deal["time"]
+    exit_time  = out_deal["time"]
 
     # Direction: IN deal type 0=BUY→long, 1=SELL→short
     if in_deal:
         direction = "long" if in_deal["type"] == 0 else "short"
     else:
-        # OUT deal type is opposite of position direction
         direction = "short" if out_deal["type"] == 0 else "long"
 
-    volume = in_deal["volume"] if in_deal else out_deal["volume"]
+    volume       = in_deal["volume"] if in_deal else out_deal["volume"]
     trade_symbol = (in_deal or out_deal)["symbol"] or symbol
 
     # Close reason from MT5 reason enum
-    close_reason = "UNKNOWN"
+    close_reason    = "UNKNOWN"
     out_reason_code = out_deal["reason"]
     if out_reason_code >= 0:
         close_reason = reason_map.get(out_reason_code, "UNKNOWN")
-        log.info(
-            f"[MT5-HIST] Reason code={out_reason_code} -> {close_reason}"
-        )
+        log.info(f"[MT5-HIST] Reason code={out_reason_code} -> {close_reason}")
 
     # Fallback: check deal comment
     if close_reason in ("UNKNOWN", "STRATEGY_CLOSE"):
@@ -266,29 +291,29 @@ def _build_trade_record(
         elif "so" in comment:
             close_reason = "STOP_OUT"
 
-    all_tickets = [d["ticket"] for d in in_deals + out_deals]
+    all_tickets = [d["ticket"] for d in matched_deals]
 
     record = {
         "mt5_position_ticket": position_ticket,
-        "mt5_deal_tickets": all_tickets,
-        "mt5_entry_deal": in_deal["ticket"] if in_deal else None,
-        "mt5_exit_deal": out_deal["ticket"],
-        "symbol": trade_symbol,
-        "direction": direction,
-        "volume": volume,
-        "lot_size": volume,
-        "entry_price": round(entry_price, 8),
-        "exit_price": round(exit_price, 8),
-        "entry_time": entry_time,
-        "exit_time": exit_time,
-        "profit": total_profit,
-        "commission": total_commission,
-        "swap": total_swap,
-        "fee": total_fee,
-        "net_pnl": net_pnl,
-        "exit_reason": close_reason,
-        "mt5_comment": out_deal["comment"],
-        "mt5_source": True,
+        "mt5_deal_tickets":    all_tickets,
+        "mt5_entry_deal":      in_deal["ticket"] if in_deal else None,
+        "mt5_exit_deal":       out_deal["ticket"],
+        "symbol":              trade_symbol,
+        "direction":           direction,
+        "volume":              volume,
+        "lot_size":            volume,
+        "entry_price":         round(entry_price, 8),
+        "exit_price":          round(exit_price, 8),
+        "entry_time":          entry_time,
+        "exit_time":           exit_time,
+        "profit":              total_profit,
+        "commission":          total_commission,
+        "swap":                total_swap,
+        "fee":                 total_fee,
+        "net_pnl":             net_pnl,
+        "exit_reason":         close_reason,
+        "mt5_comment":         out_deal["comment"],
+        "mt5_source":          True,
     }
 
     log.info(
