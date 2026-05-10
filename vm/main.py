@@ -1,6 +1,6 @@
 
 
-from vm.core.worker_agent import WorkerAgent, load_config
+from core.worker_agent import WorkerAgent, load_config
 
 def main():
     config = load_config()

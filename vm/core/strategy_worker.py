@@ -20,8 +20,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from vm.trading.indicators import IndicatorEngine, precompute_indicator_series
-from vm.trading.execution import (
+from trading.indicators import IndicatorEngine, precompute_indicator_series
+from trading.execution import (
     SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
     SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, VALID_SIGNALS,
     PositionState, ExecutionLogger, MT5Executor,

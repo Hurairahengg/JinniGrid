@@ -18,8 +18,8 @@ if _worker_dir not in sys.path:
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from vm.core.strategy_worker import StrategyRunner
-from vm.trading.portfolio import TradeLedger
+from core.strategy_worker import StrategyRunner
+from trading.portfolio import TradeLedger
 
 
 def load_config():
