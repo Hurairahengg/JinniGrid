@@ -279,3 +279,11 @@ class WorkerAgent:
                     self._runner.stop()
             sys.exit(0)
 
+def main():
+    config = load_config()
+    agent = WorkerAgent(config)
+    agent.run()
+
+
+if __name__ == "__main__":
+    main()
