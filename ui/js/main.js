@@ -390,6 +390,13 @@ function _metricItem(label, value, colorClass) {
     '</div>';
 }
 
+function _metricPill(label, value, colorClass) {
+  return '<div class="metric-pill">' +
+    '<div class="metric-pill-value mono' + (colorClass ? ' ' + colorClass : '') + '">' + value + '</div>' +
+    '<div class="metric-pill-label">' + label + '</div>' +
+    '</div>';
+}
+
 function _statPill(text, type) {
   return '<span class="state-pill ' + (type || '') + '">' + text + '</span>';
 }
@@ -425,7 +432,7 @@ var DashboardRenderer = (function () {
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;" id="dash-top-strip">';
 
     /* Left: Portfolio */
-    html += '<div style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">';
+    html += '<div class="dash-panel">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
     html += '<div style="display:flex;align-items:center;gap:8px;"><i class="fa-solid fa-briefcase" style="color:var(--accent);font-size:13px;"></i><span style="font-weight:600;font-size:13px;">Portfolio</span><span class="section-badge">LIVE</span></div>';
     html += '<button class="wd-btn wd-btn-ghost" onclick="App.navigateTo(\'portfolio\')" style="font-size:10px;padding:3px 8px;">Analytics <i class="fa-solid fa-arrow-right" style="margin-left:3px;"></i></button>';
@@ -434,7 +441,7 @@ var DashboardRenderer = (function () {
     html += '</div>';
 
     /* Right: System Health */
-    html += '<div style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">';
+    html += '<div class="dash-panel">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
     html += '<div style="display:flex;align-items:center;gap:8px;"><i class="fa-solid fa-gauge-high" style="color:var(--accent);font-size:13px;"></i><span style="font-weight:600;font-size:13px;">System Health</span><span class="section-badge">LIVE</span></div>';
     html += '<button class="wd-btn" id="dash-emergency-stop" style="background:rgba(239,68,68,0.1);color:var(--danger);font-size:10px;padding:3px 8px;border:1px solid rgba(239,68,68,0.3);font-weight:600;"><i class="fa-solid fa-circle-stop"></i> STOP</button>';
@@ -446,23 +453,23 @@ var DashboardRenderer = (function () {
 
     /* ── Charts Row ──────────────────────────────────────────── */
     html += '<div class="dash-split-row">';
-    html += '<section class="dash-chart-section">' + _sectionHeader('fa-chart-area', 'Equity Curve');
-    html += '<div class="chart-container"><div class="chart-wrapper" id="dash-equity-wrap"><canvas id="dash-equity-chart"></canvas></div></div></section>';
-    html += '<section class="dash-stats-section">' + _sectionHeader('fa-chart-pie', 'Portfolio Stats');
+    html += '<section class="dash-chart-section dash-panel">' + _sectionHeader('fa-chart-area', 'Equity Curve');
+    html += '<div style="margin-top:12px;"><div class="chart-wrapper" id="dash-equity-wrap"><canvas id="dash-equity-chart"></canvas></div></div></section>';
+    html += '<section class="dash-stats-section dash-panel">' + _sectionHeader('fa-chart-pie', 'Portfolio Stats');
     html += '<div id="dash-port-stats" class="dash-stats-grid">' + _spinner(200) + '</div></section>';
     html += '</div>';
 
     /* ── Fleet + Pipeline + Strategies Row ────────────────────── */
     html += '<div class="dash-triple-row">';
-    html += '<section>' + _sectionHeader('fa-server', 'Fleet Health', 'LIVE') + '<div id="dash-fleet" class="dash-panel-body">' + _spinner() + '</div></section>';
-    html += '<section>' + _sectionHeader('fa-diagram-project', 'Pipeline') + '<div id="dash-pipeline" class="dash-panel-body">' + _spinner() + '</div></section>';
-    html += '<section>' + _sectionHeader('fa-crosshairs', 'Active Strategies') + '<div id="dash-strategies" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-server', 'Fleet Health', 'LIVE') + '<div id="dash-fleet" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-diagram-project', 'Pipeline') + '<div id="dash-pipeline" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-crosshairs', 'Active Strategies') + '<div id="dash-strategies" class="dash-panel-body">' + _spinner() + '</div></section>';
     html += '</div>';
 
     /* ── Trades + Deployments Row ─────────────────────────────── */
     html += '<div class="dash-dual-row">';
-    html += '<section style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades">' + _spinner() + '</div></section>';
-    html += '<section style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys" class="dash-panel-body">' + _spinner() + '</div></section>';
     html += '</div>';
 
     html += '</div>';
@@ -519,18 +526,17 @@ var DashboardRenderer = (function () {
       if (!el) return;
       var hasAcc = p.has_account_data;
       el.innerHTML =
-        _metricItem('Equity', hasAcc ? ('$' + _fmtNum(p.total_equity || 0)) : (p.net_pnl ? _fmtMoney(p.net_pnl) : 'N/A'), hasAcc ? '' : ((p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger')) +
-        _metricItem('Balance', hasAcc ? ('$' + _fmtNum(p.total_balance || 0)) : '\u2014') +
-        _metricItem('Realized', _fmtMoney(p.net_pnl), (p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Floating', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
-        _metricItem('PF', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
-        _metricItem('Expectancy', _fmtMoney(p.expectancy), (p.expectancy || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Trades', String(p.total_trades || 0));
+        _metricPill('Equity', hasAcc ? ('$' + _fmtNum(p.total_equity || 0)) : (p.net_pnl ? _fmtMoney(p.net_pnl) : 'N/A'), hasAcc ? '' : ((p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger')) +
+        _metricPill('Balance', hasAcc ? ('$' + _fmtNum(p.total_balance || 0)) : '\u2014') +
+        _metricPill('Realized', _fmtMoney(p.net_pnl), (p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Floating', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
+        _metricPill('PF', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
+        _metricPill('Expectancy', _fmtMoney(p.expectancy), (p.expectancy || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Trades', String(p.total_trades || 0));
     });
   }
 
-  /* ── System KPIs ──────────────────────────────────────────── */
   function _fetchKPIs() {
     Promise.all([
       ApiClient.getFleetWorkers().catch(function () { return { workers: [], summary: {} }; }),
@@ -549,6 +555,7 @@ var DashboardRenderer = (function () {
       var totalPositions = 0;
       var totalTicks = 0;
       var totalBars = 0;
+      var totalBarsInMem = 0;
       var totalSignals = 0;
       var totalOnBar = 0;
       var mt5Connected = 0;
@@ -559,6 +566,7 @@ var DashboardRenderer = (function () {
         totalPositions += (w.open_positions_count || 0);
         totalTicks += (w.total_ticks || 0);
         totalBars += (w.total_bars || 0);
+        totalBarsInMem += (w.current_bars_in_memory || 0);
         totalSignals += (w.signal_count || 0);
         totalOnBar += (w.on_bar_calls || 0);
         if (w.mt5_state === 'connected') mt5Connected++;
@@ -568,19 +576,28 @@ var DashboardRenderer = (function () {
       });
 
       var hbLabel = workers.length === 0 ? 'N/A' : (freshestHb < 60 ? Math.round(freshestHb) + 's' : Math.round(freshestHb / 60) + 'm');
-      var lastErrLabel = lastErrors.length > 0 ? lastErrors[0].timestamp.replace('T', ' ').substring(11, 19) : 'None';
+      var lastErrLabel = 'None';
+      if (lastErrors.length > 0 && lastErrors[0].timestamp) {
+        try { lastErrLabel = lastErrors[0].timestamp.replace('T', ' ').substring(11, 19); } catch (e) { lastErrLabel = 'Error'; }
+      }
+
+      var barsLabel = _fmtNum(totalBars) + (totalBarsInMem > 0 ? ' (' + totalBarsInMem + ')' : '');
 
       el.innerHTML =
-        _metricItem('Workers', (fleet.online_workers || 0) + '/' + (fleet.total_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
-        _metricItem('MT5', mt5Connected + '/' + workers.length, mt5Connected === workers.length && workers.length > 0 ? 'text-success' : mt5Connected > 0 ? 'text-warning' : '') +
-        _metricItem('Strategies', running + ' running', running > 0 ? 'text-success' : '') +
-        _metricItem('Deploys', totalDeps + ' total') +
-        _metricItem('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
-        _metricItem('Ticks', _fmtNum(totalTicks)) +
-        _metricItem('Bars', _fmtNum(totalBars) + (totalBarsInMem > 0 ? ' (' + totalBarsInMem + ' mem)' : '')) +
-        _metricItem('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
-        _metricItem('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
-        _metricItem('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
+        _metricPill('Workers', (fleet.online_workers || 0) + '/' + (fleet.total_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
+        _metricPill('MT5', mt5Connected + '/' + workers.length, mt5Connected === workers.length && workers.length > 0 ? 'text-success' : mt5Connected > 0 ? 'text-warning' : '') +
+        _metricPill('Strategies', running + ' running', running > 0 ? 'text-success' : '') +
+        _metricPill('Deploys', totalDeps + ' total') +
+        _metricPill('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
+        _metricPill('Ticks', _fmtNum(totalTicks)) +
+        _metricPill('Bars', barsLabel) +
+        _metricPill('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
+        _metricPill('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
+        _metricPill('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
+    }).catch(function (err) {
+      console.error('[DASHBOARD] System Health KPIs failed:', err);
+      var el = document.getElementById('dash-kpi');
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:11px;padding:8px;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Failed to load system health.</div>';
     });
   }
 
@@ -617,19 +634,19 @@ var DashboardRenderer = (function () {
       var el = document.getElementById('dash-port-stats');
       if (!el) return;
       el.innerHTML =
-        _metricItem('Trades', p.total_trades || 0) +
-        _metricItem('Win Rate', _fmtPct(p.win_rate)) +
-        _metricItem('PF', p.profit_factor || 0, (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
-        _metricItem('Sharpe', p.sharpe_estimate || 0) +
-        _metricItem('Sortino', p.sortino_estimate || 0) +
-        _metricItem('Avg Trade', _fmtMoney(p.avg_trade), (p.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Avg Winner', _fmtMoney(p.avg_winner), 'text-success') +
-        _metricItem('Avg Loser', _fmtMoney(p.avg_loser), 'text-danger') +
-        _metricItem('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
-        _metricItem('Best', _fmtMoney(p.best_trade), 'text-success') +
-        _metricItem('Worst', _fmtMoney(p.worst_trade), 'text-danger') +
-        _metricItem('Open Pos', p.open_positions || 0);
-    }).catch(function (err) { console.error('[DASHBOARD] Portfolio stats fetch failed:', err); });
+        _metricPill('Trades', p.total_trades || 0) +
+        _metricPill('Win Rate', _fmtPct(p.win_rate)) +
+        _metricPill('PF', p.profit_factor || 0, (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
+        _metricPill('Sharpe', p.sharpe_estimate || 0) +
+        _metricPill('Sortino', p.sortino_estimate || 0) +
+        _metricPill('Avg Trade', _fmtMoney(p.avg_trade), (p.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Avg Winner', _fmtMoney(p.avg_winner), 'text-success') +
+        _metricPill('Avg Loser', _fmtMoney(p.avg_loser), 'text-danger') +
+        _metricPill('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
+        _metricPill('Best', _fmtMoney(p.best_trade), 'text-success') +
+        _metricPill('Worst', _fmtMoney(p.worst_trade), 'text-danger') +
+        _metricPill('Open Pos', p.open_positions || 0);
+    }).catch(function (err) { console.error('[DASHBOARD] Portfolio stats failed:', err); });
   }
 
   /* ── Fleet Panel ──────────────────────────────────────────── */
@@ -652,7 +669,7 @@ var DashboardRenderer = (function () {
       html += _fleetBadge(s.offline_workers || 0, 'Offline', 'offline');
       html += '</div>';
 
-      html += '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Worker</th><th>State</th><th>Balance</th><th>Heartbeat</th></tr></thead><tbody>';
+      html += '<table class="compact-fleet-table" style="margin-top:8px;"><thead><tr><th>Worker</th><th>State</th><th>Balance</th><th>Heartbeat</th></tr></thead><tbody>';
       workers.slice(0, 6).forEach(function (w) {
         var name = w.worker_name || w.worker_id;
         var state = w.state || 'unknown';
@@ -663,8 +680,8 @@ var DashboardRenderer = (function () {
           '<td class="mono">' + bal + '</td>' +
           '<td class="mono" style="font-size:10px;">' + _fmtAge(w.heartbeat_age_seconds) + '</td></tr>';
       });
-      html += '</tbody></table></div>';
-      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';
+      html += '</tbody></table>';
+      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';''
       el.innerHTML = html;
     }).catch(function (err) { console.error('[DASHBOARD] Fleet fetch failed:', err); });
   }
@@ -742,7 +759,7 @@ var DashboardRenderer = (function () {
         el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No trades yet.</div>';
         return;
       }
-      var html = '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Symbol</th><th>Dir</th><th>P&L</th><th>Reason</th></tr></thead><tbody>';
+      var html = '<table class="compact-fleet-table"><thead><tr><th>Symbol</th><th>Dir</th><th>P&L</th><th>Reason</th></tr></thead><tbody>';
       trades.slice(0, 8).forEach(function (t) {
         var pnlClass = t.profit >= 0 ? 'text-success' : 'text-danger';
         html += '<tr>' +
@@ -751,7 +768,7 @@ var DashboardRenderer = (function () {
           '<td class="mono ' + pnlClass + '">' + _fmtMoney(t.profit) + '</td>' +
           '<td class="mono" style="font-size:10px;">' + (t.exit_reason || '\u2014') + '</td></tr>';
       });
-      html += '</tbody></table></div>';
+      html += '</tbody></table>';
       html += '<span class="view-fleet-link" onclick="App.navigateTo(\'portfolio\')">View Portfolio <i class="fa-solid fa-arrow-right"></i></span>';
       el.innerHTML = html;
     }).catch(function (err) { console.error('[DASHBOARD] Trades fetch failed:', err); });
@@ -769,7 +786,7 @@ var DashboardRenderer = (function () {
       }
       /* API returns DESC by created_at — take newest 6 directly */
       deps = deps.slice(0, 6);
-      var html = '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th><th>Created</th></tr></thead><tbody>';
+      var html = '<table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th><th>Created</th></tr></thead><tbody>';
       deps.forEach(function (d) {
         var state = d.state || 'unknown';
         var sc = state === 'running' ? 'online' : state === 'failed' ? 'error' : state === 'stopped' ? 'offline' : 'stale';
@@ -783,7 +800,7 @@ var DashboardRenderer = (function () {
           '<td>' + _statPill(state.toUpperCase().replace(/_/g, ' '), sc) + '</td>' +
           '<td class="mono" style="font-size:10px;">' + created + '</td></tr>';
       });
-      html += '</tbody></table></div>';
+      html += '</tbody></table>';
       el.innerHTML = html;
     }).catch(function (err) {
       console.error('[DASHBOARD] Failed to load deployments:', err);

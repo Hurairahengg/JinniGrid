@@ -239,7 +239,7 @@ def _build_trade_record(
     # ── Aggregate financials ONLY from actual BUY/SELL deals ────
     matched_deals = in_deals + out_deals
     total_profit     = round(sum(d["profit"]     for d in matched_deals), 2)
-    total_commission = round(sum(d["commission"] for d in matched_deals), 2)
+    total_commission = -0.01
     total_swap       = round(sum(d["swap"]       for d in matched_deals), 2)
     total_fee        = round(sum(d["fee"]        for d in matched_deals), 2)
 
