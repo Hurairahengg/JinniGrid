@@ -145,9 +145,11 @@ var WorkerDetailRenderer = (function () {
     var signals = w.signal_count || 0;
     var onBarCalls = w.on_bar_calls || 0;
 
+    var barsInMem = w.current_bars_in_memory || 0;
+    var barsText = _fmtNum(bars) + ' gen\u2019d' + (barsInMem > 0 ? ' (' + barsInMem + ' mem)' : '');
     var pipelineVal =
       '<span style="color:var(--accent);">' + _fmtNum(ticks) + '</span> ticks \u2192 ' +
-      '<span style="color:var(--warning);">' + _fmtNum(bars) + '</span> bars \u2192 ' +
+      '<span style="color:var(--warning);">' + barsText + '</span> bars \u2192 ' +
       '<span style="color:var(--success);">' + signals + '</span> signals';
 
     /* ── Current price ───────────────────────────────── */
@@ -400,7 +402,7 @@ var WorkerDetailRenderer = (function () {
           '<span class="state-pill ' + stateClass + '">' + d.state.toUpperCase().replace(/_/g, ' ') + '</span>' +
         '</div>' +
         '<div style="display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--text-muted);">' +
-          '<span>Strategy: <strong class="mono">' + d.strategy_id + '</strong></span>' +
+          '<span>Strategy: <strong class="mono">' + (d.strategy_name || d.strategy_id) + '</strong></span>' +
           '<span>Symbol: <strong class="mono">' + d.symbol + '</strong></span>' +
           '<span>Bars: <strong class="mono">' + d.bar_size_points + 'pt / ' + d.max_bars_in_memory + '</strong></span>' +
         '</div>' +

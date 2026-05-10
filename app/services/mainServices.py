@@ -293,6 +293,7 @@ def get_all_workers() -> list:
                 "errors": rec.get("errors") or [],
                 "total_ticks": rec.get("total_ticks", 0),
                 "total_bars": rec.get("total_bars", 0),
+                "current_bars_in_memory": rec.get("current_bars_in_memory", 0),
                 "on_bar_calls": rec.get("on_bar_calls", 0),
                 "signal_count": rec.get("signal_count", 0),
                 "last_bar_time": rec.get("last_bar_time"),

@@ -18,8 +18,8 @@ if _worker_dir not in sys.path:
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from strategyWorker import StrategyRunner
-from portfolio import TradeLedger
+from vm.core.strategy_worker import StrategyRunner
+from vm.trading.portfolio import TradeLedger
 
 
 def load_config():
@@ -96,6 +96,7 @@ class WorkerAgent:
             # Pipeline
             "total_ticks": diag.get("total_ticks", 0),
             "total_bars": diag.get("total_bars", 0),
+            "current_bars_in_memory": diag.get("current_bars_in_memory", 0),
             "on_bar_calls": diag.get("on_bar_calls", 0),
             "signal_count": diag.get("signal_count", 0),
             "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
@@ -278,12 +279,3 @@ class WorkerAgent:
                     self._runner.stop()
             sys.exit(0)
 
-
-def main():
-    config = load_config()
-    agent = WorkerAgent(config)
-    agent.run()
-
-
-if __name__ == "__main__":
-    main()

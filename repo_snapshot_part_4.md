@@ -1,9 +1,7 @@
 # Repository Snapshot - Part 4 of 4
 
-- Root folder: `/home/hurairahengg/Documents/JinniGrid`
-- you knwo my whole jinni grid systeM/ basically it is thereliek a kubernetes server setup what it does is basically a mother server with ui and bunch of lank state VMs. the vms run a speacial typa of renko style bars not normal timeframe u will get more context in the codes but yeha and we can uipload strategy codes though mother ui and it wiill run strategy mt5 report and ecetra ecetra. currently im done coding the strategy system but its not tested yet an have confrimed bugs. so firm i wil ldrop u my whole project codebases from my readme. understand each code its role and keep in ur context i will give u big promtps to update code later duinerstood
-- Total files indexed: `26`
-- Files in this chunk: `9`
+- Total files indexed: `33`
+- Files in this chunk: `6`
 ## Full Project Tree
 
 ```text
@@ -24,29 +22,33 @@ ui/css/style.css
 ui/index.html
 ui/js/main.js
 ui/js/workerDetailRenderer.js
-worker/config.yaml
-worker/event_log.py
-worker/execution.py
-worker/indicators.py
-worker/portfolio.py
-worker/README.md
-worker/requirements.txt
-worker/strategyWorker.py
-worker/worker_agent.py
+vm/__init__.py
+vm/config/__init__.py
+vm/config/config.yaml
+vm/core/__init__.py
+vm/core/strategy_worker.py
+vm/core/worker_agent.py
+vm/logging/__init__.py
+vm/logging/event_log.py
+vm/main.py
+vm/README.md
+vm/requirements.txt
+vm/trading/__init__.py
+vm/trading/execution.py
+vm/trading/indicators.py
+vm/trading/mt5_history.py
+vm/trading/portfolio.py
 ```
 
 ## Files In This Chunk - Part 4
 
 ```text
 app/persistence.py
-ui/index.html
-worker/config.yaml
-worker/event_log.py
-worker/execution.py
-worker/indicators.py
-worker/portfolio.py
-worker/README.md
-worker/worker_agent.py
+ui/js/workerDetailRenderer.js
+vm/core/worker_agent.py
+vm/trading/indicators.py
+vm/trading/mt5_history.py
+vm/trading/portfolio.py
 ```
 
 ## File Contents
@@ -58,25 +60,19 @@ worker/worker_agent.py
 
 - Relative path: `app/persistence.py`
 - Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/app/persistence.py`
-- Size bytes: `17080`
-- SHA256: `1ac4f666a957a3d59fa1aa645fe2934d852df8237751d24a63940d155d385354`
+- Size bytes: `27118`
+- SHA256: `ed250499267854275500277608cdb27b74558fdd6cfb86640801e4879b19c8ca`
 - Guessed MIME type: `text/x-python`
 - Guessed encoding: `unknown`
 
 ```python
 """
-JINNI GRID — SQLite Persistence Layer
+JINNI GRID — Database Persistence Layer
 app/persistence.py
 
-Single database: data/jinni_grid.db
-WAL mode for concurrent reads during writes.
-All tables created on init if not exist.
-
-Stores:
-  - strategies (metadata, not source code — source stays on disk)
-  - workers (last heartbeat, machine info, state)
-  - deployments (config, state, error)
-  - events (structured audit trail)
+All raw data storage. Every monetary value rounded to 2 decimals at write time.
+Trade UIDs are globally unique (deployment_id + trade_counter).
+Timestamps stored as both Unix int AND ISO string for correct date grouping.
 """
 
 import json
@@ -84,1275 +80,2025 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 
-DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-DB_PATH = os.path.join(DB_DIR, "jinni_grid.db")
-
+_DB_PATH = None
 _local = threading.local()
 
+_DEFAULT_SETTINGS = {
+    "refresh_interval": "5",
+    "default_symbol": "XAUUSD",
+    "default_bar_size": "100",
+    "default_lot_size": "0.01",
+    "debug_mode": "true",
+    "worker_timeout_seconds": "90",
+    "log_verbosity": "INFO",
+}
+
+
+# ── Connection ──────────────────────────────────────────────
 
 def _get_conn() -> sqlite3.Connection:
-    """Thread-local connection with WAL mode."""
     if not hasattr(_local, "conn") or _local.conn is None:
-        os.makedirs(DB_DIR, exist_ok=True)
-        conn = sqlite3.connect(DB_PATH, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.row_factory = sqlite3.Row
-        _local.conn = conn
+        _local.conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _local.conn.row_factory = sqlite3.Row
+        _local.conn.execute("PRAGMA journal_mode=WAL")
+        _local.conn.execute("PRAGMA busy_timeout=5000")
     return _local.conn
 
 
-def init_db():
-    """Create all tables. Safe to call multiple times."""
-    conn = _get_conn()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS strategies (
-            strategy_id TEXT PRIMARY KEY,
-            filename TEXT NOT NULL,
-            class_name TEXT,
-            name TEXT,
-            description TEXT,
-            version TEXT,
-            min_lookback INTEGER DEFAULT 0,
-            file_hash TEXT,
-            file_path TEXT,
-            parameters_json TEXT DEFAULT '{}',
-            uploaded_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            is_valid INTEGER DEFAULT 1
-        );
+def _r2(v):
+    if v is None:
+        return 0.0
+    try:
+        return round(float(v), 2)
+    except (ValueError, TypeError):
+        return 0.0
 
+
+def _unix_to_iso(ts):
+    """Convert Unix timestamp (int/float) to ISO 8601 UTC string."""
+    if ts is None:
+        return None
+    try:
+        v = int(ts)
+        if v > 946684800:  # after year 2000
+            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+    except (ValueError, TypeError, OSError):
+        pass
+    s = str(ts)
+    if "T" in s or (len(s) >= 10 and s[4] == "-"):
+        return s
+    return None
+
+
+def _unix_to_date(ts):
+    """Convert Unix timestamp to YYYY-MM-DD."""
+    if ts is None:
+        return None
+    try:
+        v = int(ts)
+        if v > 946684800:
+            return datetime.fromtimestamp(v, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (ValueError, TypeError, OSError):
+        pass
+    s = str(ts)
+    if len(s) >= 10 and s[4] == "-":
+        return s[:10]
+    return None
+
+
+# ── Schema ──────────────────────────────────────────────────
+
+def init_db(db_path: str = "jinni_grid.db"):
+    global _DB_PATH
+    _DB_PATH = db_path
+    conn = _get_conn()
+
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS workers (
             worker_id TEXT PRIMARY KEY,
             worker_name TEXT,
             host TEXT,
-            reported_state TEXT DEFAULT 'offline',
-            last_heartbeat_at TEXT,
-            agent_version TEXT,
+            state TEXT DEFAULT 'unknown',
             mt5_state TEXT,
-            account_id TEXT,
             broker TEXT,
-            active_strategies_json TEXT DEFAULT '[]',
-            open_positions_count INTEGER DEFAULT 0,
-            floating_pnl REAL DEFAULT 0.0,
-            errors_json TEXT DEFAULT '[]',
-            total_ticks INTEGER DEFAULT 0,
-            total_bars INTEGER DEFAULT 0,
-            on_bar_calls INTEGER DEFAULT 0,
-            signal_count INTEGER DEFAULT 0,
-            last_bar_time TEXT,
-            current_price REAL,
-            first_seen_at TEXT,
-            updated_at TEXT
+            account_id TEXT,
+            mt5_server TEXT,
+            account_balance REAL DEFAULT 0.0,
+            account_equity REAL DEFAULT 0.0,
+            agent_version TEXT,
+            last_heartbeat_at TEXT,
+            data_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS strategies (
+            strategy_id TEXT PRIMARY KEY,
+            name TEXT,
+            description TEXT,
+            version TEXT,
+            class_name TEXT,
+            file_hash TEXT,
+            file_content TEXT,
+            min_lookback INTEGER DEFAULT 0,
+            parameters_json TEXT,
+            uploaded_at TEXT DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS deployments (
             deployment_id TEXT PRIMARY KEY,
-            strategy_id TEXT NOT NULL,
-            worker_id TEXT NOT NULL,
-            symbol TEXT NOT NULL,
+            strategy_id TEXT,
+            worker_id TEXT,
+            symbol TEXT,
+            state TEXT DEFAULT 'queued',
             tick_lookback_value INTEGER DEFAULT 30,
             tick_lookback_unit TEXT DEFAULT 'minutes',
-            bar_size_points REAL NOT NULL,
+            bar_size_points REAL DEFAULT 100,
             max_bars_in_memory INTEGER DEFAULT 500,
             lot_size REAL DEFAULT 0.01,
-            strategy_parameters_json TEXT DEFAULT '{}',
-            state TEXT DEFAULT 'queued',
+            strategy_parameters_json TEXT,
             last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
         );
 
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            category TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            worker_id TEXT,
-            strategy_id TEXT,
-            deployment_id TEXT,
-            symbol TEXT,
-            message TEXT,
-            data_json TEXT,
-            level TEXT DEFAULT 'INFO'
-        );
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_uid TEXT UNIQUE,
             trade_id INTEGER,
             deployment_id TEXT,
             strategy_id TEXT,
             worker_id TEXT,
-            symbol TEXT NOT NULL,
-            direction TEXT NOT NULL,
-            entry_price REAL NOT NULL,
+            symbol TEXT,
+            direction TEXT,
+            entry_price REAL,
             exit_price REAL,
+            entry_time_unix INTEGER,
+            exit_time_unix INTEGER,
             entry_time TEXT,
             exit_time TEXT,
-            exit_reason TEXT,
-            sl_level REAL,
-            tp_level REAL,
-            lot_size REAL DEFAULT 0.01,
-            ticket INTEGER,
-            points_pnl REAL DEFAULT 0.0,
-            profit REAL DEFAULT 0.0,
+            entry_bar INTEGER,
+            exit_bar INTEGER,
             bars_held INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'closed',
-            created_at TEXT NOT NULL
+            lot_size REAL,
+            ticket INTEGER,
+            sl REAL,
+            tp REAL,
+            profit REAL DEFAULT 0.0,
+            commission REAL DEFAULT 0.0,
+            swap REAL DEFAULT 0.0,
+            exit_reason TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
         );
 
-        CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
-        CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id);
-        CREATE INDEX IF NOT EXISTS idx_trades_worker ON trades(worker_id);
+        CREATE TABLE IF NOT EXISTS equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            worker_id TEXT,
+            balance REAL DEFAULT 0.0,
+            equity REAL DEFAULT 0.0,
+            floating_pnl REAL DEFAULT 0.0,
+            open_positions INTEGER DEFAULT 0,
+            cumulative_pnl REAL DEFAULT 0.0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
 
-        CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
-        CREATE INDEX IF NOT EXISTS idx_events_worker ON events(worker_id);
-        CREATE INDEX IF NOT EXISTS idx_events_deployment ON events(deployment_id);
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            category TEXT,
+            event_type TEXT,
+            message TEXT,
+            level TEXT DEFAULT 'INFO',
+            worker_id TEXT,
+            strategy_id TEXT,
+            deployment_id TEXT,
+            symbol TEXT,
+            data_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
     """)
+
+    # Indexes
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS idx_trades_worker ON trades(worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_time)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_ticket ON trades(ticket)",
+        "CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_events_cat ON events(category)",
+    ]:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass
+
+    # Migrations for older DBs
+    _mig = [
+        ("workers", "account_balance", "REAL DEFAULT 0.0"),
+        ("workers", "account_equity", "REAL DEFAULT 0.0"),
+        ("trades", "trade_uid", "TEXT"),
+        ("trades", "commission", "REAL DEFAULT 0.0"),
+        ("trades", "swap", "REAL DEFAULT 0.0"),
+        ("trades", "entry_time", "TEXT"),
+        ("trades", "exit_time", "TEXT"),
+        ("trades", "entry_time_unix", "INTEGER"),
+        ("trades", "exit_time_unix", "INTEGER"),
+        ("equity_snapshots", "worker_id", "TEXT"),
+    ]
+    for table, col, col_type in _mig:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
+    # Seed defaults
+    for k, v in _DEFAULT_SETTINGS.items():
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
     conn.commit()
+    print(f"[DB] Initialized: {db_path}")
 
 
-# =============================================================================
-# Strategy Persistence
-# =============================================================================
-
-def save_strategy(strategy_id: str, data: dict):
-    conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("""
-        INSERT INTO strategies (strategy_id, filename, class_name, name, description,
-            version, min_lookback, file_hash, file_path, parameters_json,
-            uploaded_at, updated_at, is_valid)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(strategy_id) DO UPDATE SET
-            filename=excluded.filename, class_name=excluded.class_name,
-            name=excluded.name, description=excluded.description,
-            version=excluded.version, min_lookback=excluded.min_lookback,
-            file_hash=excluded.file_hash, file_path=excluded.file_path,
-            parameters_json=excluded.parameters_json,
-            updated_at=excluded.updated_at, is_valid=excluded.is_valid
-    """, (
-        strategy_id, data.get("filename", ""), data.get("class_name", ""),
-        data.get("name", ""), data.get("description", ""),
-        data.get("version", ""), data.get("min_lookback", 0),
-        data.get("file_hash", ""), data.get("file_path", ""),
-        json.dumps(data.get("parameters", {})),
-        data.get("uploaded_at", now), now,
-        1 if data.get("is_valid", True) else 0,
-    ))
-    conn.commit()
-
-
-def get_all_strategies_db() -> List[dict]:
-    conn = _get_conn()
-    rows = conn.execute("SELECT * FROM strategies WHERE is_valid = 1 ORDER BY uploaded_at DESC").fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["parameters"] = json.loads(d.pop("parameters_json", "{}"))
-        d["active_strategies"] = json.loads(d.get("active_strategies_json", "[]")) if "active_strategies_json" in d.keys() else []
-        result.append(d)
-    return result
-
-
-def get_strategy_db(strategy_id: str) -> Optional[dict]:
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM strategies WHERE strategy_id = ?", (strategy_id,)).fetchone()
-    if row is None:
-        return None
-    d = dict(row)
-    d["parameters"] = json.loads(d.pop("parameters_json", "{}"))
-    return d
-
-
-def delete_strategy_db(strategy_id: str):
-    conn = _get_conn()
-    conn.execute("UPDATE strategies SET is_valid = 0, updated_at = ? WHERE strategy_id = ?",
-                 (datetime.now(timezone.utc).isoformat(), strategy_id))
-    conn.commit()
-
-
-# =============================================================================
-# Worker Persistence
-# =============================================================================
+# ── Workers ─────────────────────────────────────────────────
 
 def save_worker(worker_id: str, data: dict):
     conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
-    existing = conn.execute("SELECT first_seen_at FROM workers WHERE worker_id = ?",
-                            (worker_id,)).fetchone()
-    first_seen = existing["first_seen_at"] if existing else now
-
     conn.execute("""
-        INSERT INTO workers (worker_id, worker_name, host, reported_state,
-            last_heartbeat_at, agent_version, mt5_state, account_id, broker,
-            active_strategies_json, open_positions_count, floating_pnl,
-            errors_json, total_ticks, total_bars, on_bar_calls, signal_count,
-            last_bar_time, current_price, first_seen_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO workers (worker_id, worker_name, host, state, mt5_state,
+            broker, account_id, mt5_server, account_balance, account_equity,
+            agent_version, last_heartbeat_at, data_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(worker_id) DO UPDATE SET
             worker_name=excluded.worker_name, host=excluded.host,
-            reported_state=excluded.reported_state,
+            state=excluded.state, mt5_state=excluded.mt5_state,
+            broker=excluded.broker, account_id=excluded.account_id,
+            mt5_server=excluded.mt5_server,
+            account_balance=excluded.account_balance,
+            account_equity=excluded.account_equity,
+            agent_version=excluded.agent_version,
             last_heartbeat_at=excluded.last_heartbeat_at,
-            agent_version=excluded.agent_version, mt5_state=excluded.mt5_state,
-            account_id=excluded.account_id, broker=excluded.broker,
-            active_strategies_json=excluded.active_strategies_json,
-            open_positions_count=excluded.open_positions_count,
-            floating_pnl=excluded.floating_pnl, errors_json=excluded.errors_json,
-            total_ticks=excluded.total_ticks, total_bars=excluded.total_bars,
-            on_bar_calls=excluded.on_bar_calls, signal_count=excluded.signal_count,
-            last_bar_time=excluded.last_bar_time, current_price=excluded.current_price,
-            updated_at=excluded.updated_at
+            data_json=excluded.data_json,
+            updated_at=datetime('now')
     """, (
-        worker_id, data.get("worker_name"), data.get("host"),
-        data.get("state", "online"), data.get("last_heartbeat_at", now),
-        data.get("agent_version"), data.get("mt5_state"),
-        data.get("account_id"), data.get("broker"),
-        json.dumps(data.get("active_strategies") or []),
-        data.get("open_positions_count", 0),
-        data.get("floating_pnl", 0.0),
-        json.dumps(data.get("errors") or []),
-        data.get("total_ticks", 0), data.get("total_bars", 0),
-        data.get("on_bar_calls", 0), data.get("signal_count", 0),
-        data.get("last_bar_time"), data.get("current_price"),
-        first_seen, now,
+        worker_id,
+        data.get("worker_name"),
+        data.get("host"),
+        data.get("reported_state", data.get("state", "online")),
+        data.get("mt5_state"),
+        data.get("broker"),
+        data.get("account_id"),
+        data.get("mt5_server"),
+        _r2(data.get("account_balance")),
+        _r2(data.get("account_equity")),
+        data.get("agent_version"),
+        data.get("last_heartbeat_at"),
+        json.dumps({k: v for k, v in data.items()
+                     if k not in ("_last_heartbeat_dt",)}, default=str),
     ))
     conn.commit()
 
 
-def get_all_workers_db() -> List[dict]:
+def get_all_workers_db() -> list:
     conn = _get_conn()
-    rows = conn.execute("SELECT * FROM workers ORDER BY last_heartbeat_at DESC").fetchall()
+    rows = conn.execute("SELECT * FROM workers ORDER BY worker_id").fetchall()
     result = []
     for r in rows:
         d = dict(r)
-        d["active_strategies"] = json.loads(d.pop("active_strategies_json", "[]"))
-        d["errors"] = json.loads(d.pop("errors_json", "[]"))
+        # Merge extra data from data_json
+        if d.get("data_json"):
+            try:
+                extra = json.loads(d["data_json"])
+                for k, v in extra.items():
+                    if k not in d or d[k] is None:
+                        d[k] = v
+            except (json.JSONDecodeError, TypeError):
+                pass
         result.append(d)
     return result
 
 
-def get_worker_db(worker_id: str) -> Optional[dict]:
+def get_worker_db(worker_id: str):
     conn = _get_conn()
-    row = conn.execute("SELECT * FROM workers WHERE worker_id = ?", (worker_id,)).fetchone()
-    if row is None:
-        return None
-    d = dict(row)
-    d["active_strategies"] = json.loads(d.pop("active_strategies_json", "[]"))
-    d["errors"] = json.loads(d.pop("errors_json", "[]"))
-    return d
+    row = conn.execute("SELECT * FROM workers WHERE worker_id=?",
+                       (worker_id,)).fetchone()
+    return dict(row) if row else None
 
 
-# =============================================================================
-# Deployment Persistence
-# =============================================================================
+# ── Strategies ──────────────────────────────────────────────
+
+def save_strategy(strategy_id: str, data: dict):
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO strategies (strategy_id, name, description, version,
+            class_name, file_hash, file_content, min_lookback, parameters_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(strategy_id) DO UPDATE SET
+            name=excluded.name, description=excluded.description,
+            version=excluded.version, class_name=excluded.class_name,
+            file_hash=excluded.file_hash, file_content=excluded.file_content,
+            min_lookback=excluded.min_lookback,
+            parameters_json=excluded.parameters_json
+    """, (
+        strategy_id,
+        data.get("name", strategy_id),
+        data.get("description", ""),
+        data.get("version", "1.0"),
+        data.get("class_name", ""),
+        data.get("file_hash", ""),
+        data.get("file_content", ""),
+        data.get("min_lookback", 0),
+        json.dumps(data.get("parameters", {})),
+    ))
+    conn.commit()
+
+
+def get_all_strategies_db() -> list:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM strategies ORDER BY uploaded_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_strategy_db(strategy_id: str):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM strategies WHERE strategy_id=?",
+                       (strategy_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── Deployments ─────────────────────────────────────────────
 
 def save_deployment(deployment_id: str, data: dict):
     conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
     conn.execute("""
         INSERT INTO deployments (deployment_id, strategy_id, worker_id, symbol,
-            tick_lookback_value, tick_lookback_unit, bar_size_points,
-            max_bars_in_memory, lot_size, strategy_parameters_json,
-            state, last_error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            state, tick_lookback_value, tick_lookback_unit, bar_size_points,
+            max_bars_in_memory, lot_size, strategy_parameters_json, last_error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(deployment_id) DO UPDATE SET
             state=excluded.state, last_error=excluded.last_error,
-            updated_at=excluded.updated_at
+            updated_at=datetime('now')
     """, (
-        deployment_id, data["strategy_id"], data["worker_id"], data["symbol"],
-        data.get("tick_lookback_value", 30), data.get("tick_lookback_unit", "minutes"),
-        data["bar_size_points"], data.get("max_bars_in_memory", 500),
+        deployment_id,
+        data.get("strategy_id"),
+        data.get("worker_id"),
+        data.get("symbol"),
+        data.get("state", "queued"),
+        data.get("tick_lookback_value", 30),
+        data.get("tick_lookback_unit", "minutes"),
+        data.get("bar_size_points", 100),
+        data.get("max_bars_in_memory", 500),
         data.get("lot_size", 0.01),
-        json.dumps(data.get("strategy_parameters") or {}),
-        data.get("state", "queued"), data.get("last_error"),
-        data.get("created_at", now), now,
+        json.dumps(data.get("strategy_parameters", {})),
+        data.get("last_error"),
     ))
     conn.commit()
 
 
-def update_deployment_state_db(deployment_id: str, state: str, error: str = None):
+def get_all_deployments_db() -> list:
     conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
-    if error is not None:
-        conn.execute("UPDATE deployments SET state=?, last_error=?, updated_at=? WHERE deployment_id=?",
-                     (state, error, now, deployment_id))
-    else:
-        if state == "running":
-            conn.execute("UPDATE deployments SET state=?, last_error=NULL, updated_at=? WHERE deployment_id=?",
-                         (state, now, deployment_id))
-        else:
-            conn.execute("UPDATE deployments SET state=?, updated_at=? WHERE deployment_id=?",
-                         (state, now, deployment_id))
+    rows = conn.execute(
+        "SELECT * FROM deployments ORDER BY created_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_deployment_db(deployment_id: str):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM deployments WHERE deployment_id=?",
+                       (deployment_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_deployment_state_db(deployment_id: str, state: str,
+                                error: str = None):
+    conn = _get_conn()
+    conn.execute("""
+        UPDATE deployments SET state=?, last_error=?, updated_at=datetime('now')
+        WHERE deployment_id=?
+    """, (state, error, deployment_id))
     conn.commit()
 
 
-def get_all_deployments_db() -> List[dict]:
+# ── Trades (THE CRITICAL FIX) ──────────────────────────────
+
+def save_trade_db(data: dict) -> bool:
+    """
+    Save a closed trade. Uses MT5 position ticket as the unique ID
+    (globally unique per MT5 account, never reused).
+
+    Uniqueness: trade_uid = {worker_id}_{mt5_ticket}
+    Fallback:   trade_uid = {deployment_id}_{worker_id}_{trade_id}_{exit_time}
+    """
     conn = _get_conn()
-    rows = conn.execute("SELECT * FROM deployments ORDER BY created_at DESC").fetchall()
+
+    # Build globally unique trade ID
+    mt5_ticket = data.get("mt5_ticket") or data.get("ticket")
+    wk_id = data.get("worker_id", "none")
+    dep_id = data.get("deployment_id", "none")
+    t_id = data.get("trade_id", 0)
+    exit_ts = data.get("exit_time", "0")
+
+    if mt5_ticket:
+        # Best case: MT5 ticket is globally unique per account
+        trade_uid = f"{wk_id}_{mt5_ticket}"
+    else:
+        # Fallback: include exit_time to prevent restart collisions
+        trade_uid = f"{dep_id}_{wk_id}_{t_id}_{exit_ts}"
+
+    # Convert timestamps
+    entry_ts = data.get("entry_time")
+    exit_ts_raw = data.get("exit_time")
+    entry_iso = _unix_to_iso(entry_ts)
+    exit_iso = _unix_to_iso(exit_ts_raw)
+
+    # Bars held
+    bars_held = data.get("bars_held")
+    if bars_held is None or bars_held == 0:
+        eb = int(data.get("entry_bar", 0) or 0)
+        xb = int(data.get("exit_bar", 0) or 0)
+        bars_held = max(0, xb - eb)
+
+    # Use net_pnl if available (MT5 source), else fall back to profit
+    profit = data.get("net_pnl") or data.get("profit") or 0
+
+    try:
+        conn.execute("""
+            INSERT OR IGNORE INTO trades (
+                trade_uid, trade_id, deployment_id, strategy_id, worker_id,
+                symbol, direction, entry_price, exit_price,
+                entry_time_unix, exit_time_unix, entry_time, exit_time,
+                entry_bar, exit_bar, bars_held,
+                lot_size, ticket, sl, tp,
+                profit, commission, swap, exit_reason
+            ) VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?)
+        """, (
+            trade_uid,
+            t_id,
+            dep_id,
+            data.get("strategy_id"),
+            wk_id,
+            data.get("symbol"),
+            data.get("direction"),
+            _r2(data.get("entry_price")),
+            _r2(data.get("exit_price")),
+            int(entry_ts) if entry_ts and str(entry_ts).isdigit() else None,
+            int(exit_ts_raw) if exit_ts_raw and str(exit_ts_raw).isdigit() else None,
+            entry_iso,
+            exit_iso,
+            data.get("entry_bar"),
+            data.get("exit_bar"),
+            bars_held,
+            data.get("lot_size"),
+            mt5_ticket or data.get("ticket"),
+            data.get("sl"),
+            data.get("tp"),
+            _r2(profit),
+            _r2(data.get("commission")),
+            _r2(data.get("swap")),
+            data.get("exit_reason"),
+        ))
+        conn.commit()
+        changes = conn.execute("SELECT changes()").fetchone()[0]
+        if changes == 0:
+            print(f"[DB] Trade {trade_uid} already exists (skipped duplicate)")
+        else:
+            src = "MT5" if data.get("mt5_source") else "EST"
+            print(f"[DB] Trade SAVED [{src}]: uid={trade_uid} "
+                  f"{data.get('direction','')} {data.get('symbol','')} "
+                  f"profit={_r2(profit)} reason={data.get('exit_reason','')}")
+        return True
+    except Exception as e:
+        print(f"[DB] save_trade_db FAILED: {e}")
+        return False
+
+
+def get_all_trades_db(limit: int = 10000, strategy_id: str = None,
+                       worker_id: str = None, symbol: str = None) -> list:
+    conn = _get_conn()
+    query = "SELECT * FROM trades"
+    params = []
+    wheres = []
+    if strategy_id:
+        wheres.append("strategy_id = ?")
+        params.append(strategy_id)
+    if worker_id:
+        wheres.append("worker_id = ?")
+        params.append(worker_id)
+    if symbol:
+        wheres.append("symbol = ?")
+        params.append(symbol)
+    if wheres:
+        query += " WHERE " + " AND ".join(wheres)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
     result = []
     for r in rows:
         d = dict(r)
-        d["strategy_parameters"] = json.loads(d.pop("strategy_parameters_json", "{}"))
+        # Ensure exit_time is always an ISO string for portfolio computation
+        if not d.get("exit_time") and d.get("exit_time_unix"):
+            d["exit_time"] = _unix_to_iso(d["exit_time_unix"])
+        if not d.get("entry_time") and d.get("entry_time_unix"):
+            d["entry_time"] = _unix_to_iso(d["entry_time_unix"])
         result.append(d)
     return result
 
 
-def get_deployment_db(deployment_id: str) -> Optional[dict]:
+# ── Equity Snapshots ────────────────────────────────────────
+
+def save_equity_snapshot_db(balance: float = 0, equity: float = 0,
+                             floating_pnl: float = 0, open_positions: int = 0,
+                             cumulative_pnl: float = 0,
+                             worker_id: str = None):
     conn = _get_conn()
-    row = conn.execute("SELECT * FROM deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
-    if row is None:
-        return None
-    d = dict(row)
-    d["strategy_parameters"] = json.loads(d.pop("strategy_parameters_json", "{}"))
-    return d
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("""
+        INSERT INTO equity_snapshots (timestamp, worker_id, balance, equity,
+            floating_pnl, open_positions, cumulative_pnl)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (now, worker_id, _r2(balance), _r2(equity),
+          _r2(floating_pnl), open_positions, _r2(cumulative_pnl)))
+    conn.commit()
 
 
-# =============================================================================
-# Event Log Persistence
-# =============================================================================
+def get_equity_snapshots_db(limit: int = 2000,
+                             worker_id: str = None) -> list:
+    conn = _get_conn()
+    if worker_id:
+        rows = conn.execute(
+            "SELECT * FROM equity_snapshots WHERE worker_id=? "
+            "ORDER BY id DESC LIMIT ?", (worker_id, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM equity_snapshots ORDER BY id DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    result = [dict(r) for r in rows]
+    result.reverse()
+    return result
+
+
+def clear_equity_snapshots_db():
+    conn = _get_conn()
+    conn.execute("DELETE FROM equity_snapshots")
+    conn.commit()
+
+
+# ── Events ──────────────────────────────────────────────────
 
 def log_event_db(category: str, event_type: str, message: str,
-                 worker_id: str = None, strategy_id: str = None,
-                 deployment_id: str = None, symbol: str = None,
-                 data: dict = None, level: str = "INFO"):
+                  worker_id: str = None, strategy_id: str = None,
+                  deployment_id: str = None, symbol: str = None,
+                  data: dict = None, level: str = "INFO"):
     conn = _get_conn()
     now = datetime.now(timezone.utc).isoformat()
-    conn.execute("""
-        INSERT INTO events (timestamp, category, event_type, worker_id,
-            strategy_id, deployment_id, symbol, message, data_json, level)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        now, category, event_type, worker_id, strategy_id,
-        deployment_id, symbol, message,
-        json.dumps(data, default=str) if data else None, level,
-    ))
-    conn.commit()
+    data_json = json.dumps(data, default=str) if data else None
+    try:
+        conn.execute("""
+            INSERT INTO events (timestamp, category, event_type, message, level,
+                worker_id, strategy_id, deployment_id, symbol, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (now, category, event_type, message, level,
+              worker_id, strategy_id, deployment_id, symbol, data_json))
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] log_event error: {e}")
 
 
-def get_events_db(limit: int = 100, category: str = None,
-                  worker_id: str = None, deployment_id: str = None) -> List[dict]:
+def get_events_db(limit: int = 200, category: str = None,
+                   worker_id: str = None,
+                   deployment_id: str = None) -> list:
     conn = _get_conn()
-    query = "SELECT * FROM events WHERE 1=1"
+    query = "SELECT * FROM events"
     params = []
+    wheres = []
     if category:
-        query += " AND category = ?"
+        wheres.append("category = ?")
         params.append(category)
     if worker_id:
-        query += " AND worker_id = ?"
+        wheres.append("worker_id = ?")
         params.append(worker_id)
     if deployment_id:
-        query += " AND deployment_id = ?"
+        wheres.append("deployment_id = ?")
         params.append(deployment_id)
+    if wheres:
+        query += " WHERE " + " AND ".join(wheres)
     query += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
     rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
-# =============================================================================
-# Trade Persistence
-# =============================================================================
 
-def save_trade_db(data: dict):
+# ── Settings ────────────────────────────────────────────────
+
+def get_setting(key: str):
     conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("""
-        INSERT INTO trades (trade_id, deployment_id, strategy_id, worker_id,
-            symbol, direction, entry_price, exit_price, entry_time, exit_time,
-            exit_reason, sl_level, tp_level, lot_size, ticket,
-            points_pnl, profit, bars_held, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data.get("trade_id"), data.get("deployment_id"), data.get("strategy_id"),
-        data.get("worker_id"), data.get("symbol", ""), data.get("direction", ""),
-        data.get("entry_price", 0), data.get("exit_price"),
-        data.get("entry_time"), data.get("exit_time"),
-        data.get("exit_reason"), data.get("sl_level"), data.get("tp_level"),
-        data.get("lot_size", 0.01), data.get("ticket"),
-        data.get("points_pnl", 0), data.get("profit", 0),
-        data.get("bars_held", 0), data.get("status", "closed"), now,
-    ))
+    row = conn.execute("SELECT value FROM settings WHERE key=?",
+                       (key,)).fetchone()
+    return row[0] if row else None
+
+
+def get_all_settings() -> dict:
+    conn = _get_conn()
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def save_setting(key: str, value: str):
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (key, value)
+    )
     conn.commit()
 
 
-def get_all_trades_db(limit: int = 500, strategy_id: str = None,
-                      worker_id: str = None, symbol: str = None) -> List[dict]:
+def save_settings_bulk(settings: dict):
     conn = _get_conn()
-    query = "SELECT * FROM trades WHERE 1=1"
-    params: list = []
-    if strategy_id:
-        query += " AND strategy_id = ?"
-        params.append(strategy_id)
-    if worker_id:
-        query += " AND worker_id = ?"
-        params.append(worker_id)
-    if symbol:
-        query += " AND symbol = ?"
-        params.append(symbol)
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
-    rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
-```
-
----
-
-## FILE: `ui/index.html`
-
-- Relative path: `ui/index.html`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/index.html`
-- Size bytes: `2851`
-- SHA256: `f2022f065a078e84d49798b3903e042f035ad228f5a66eb8a1ce6d19b38b59f7`
-- Guessed MIME type: `text/html`
-- Guessed encoding: `unknown`
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>JINNI GRID — Mother Server Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-    rel="stylesheet"
-  />
-  <link
-    rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
-  />
-  <link rel="stylesheet" href="/css/style.css" />
-</head>
-<body data-theme="dark">
-
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-      <div class="brand-mark">JG</div>
-      <div class="brand-text">
-        <span class="brand-name">JINNI GRID</span>
-        <span class="brand-sub">Mother Server</span>
-      </div>
-    </div>
-    <nav class="sidebar-nav" id="sidebar-nav">
-      <a href="#" class="nav-item active" data-page="dashboard">
-        <i class="fa-solid fa-grip"></i><span>Dashboard</span>
-      </a>
-      <a href="#" class="nav-item" data-page="fleet">
-        <i class="fa-solid fa-server"></i><span>Fleet</span>
-      </a>
-      <a href="#" class="nav-item" data-page="portfolio">
-        <i class="fa-solid fa-chart-line"></i><span>Portfolio</span>
-      </a>
-      <a href="#" class="nav-item" data-page="strategies">
-        <i class="fa-solid fa-crosshairs"></i><span>Strategies</span>
-      </a>
-      <a href="#" class="nav-item" data-page="logs">
-        <i class="fa-solid fa-scroll"></i><span>Logs</span>
-      </a>
-      <a href="#" class="nav-item" data-page="settings">
-        <i class="fa-solid fa-gear"></i><span>Settings</span>
-      </a>
-    </nav>
-    <div class="sidebar-footer">
-      <button class="theme-toggle" id="theme-toggle" title="Toggle Theme">
-        <i class="fa-solid fa-sun"></i><span>Light Mode</span>
-      </button>
-    </div>
-  </aside>
-
-  <div class="main-wrapper">
-    <header class="topbar" id="topbar">
-      <div class="topbar-left">
-        <h1 class="topbar-title" id="topbar-title">Dashboard</h1>
-        <span class="topbar-subtitle">Mother Server Control Panel</span>
-      </div>
-      <div class="topbar-right">
-        <div class="topbar-status">
-          <span class="status-dot status-dot--online pulse"></span>
-          <span class="status-label">System Online</span>
-        </div>
-        <div class="topbar-clock" id="topbar-clock">00:00:00</div>
-      </div>
-    </header>
-    <main class="content" id="main-content"></main>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="/js/main.js"></script>
-  <script src="/js/workerDetailRenderer.js"></script>
-</body>
-</html>
-```
-
----
-
-## FILE: `worker/config.yaml`
-
-- Relative path: `worker/config.yaml`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/config.yaml`
-- Size bytes: `176`
-- SHA256: `b6a616e396af64890e55c695fd7cce35828353dfea90fdd1179b08d4642e63b9`
-- Guessed MIME type: `application/yaml`
-- Guessed encoding: `unknown`
-
-```yaml
-worker:
-  worker_id: "vm-worker-01"
-  worker_name: "Worker 01"
-
-mother_server:
-  url: "http://192.168.3.232:5100"
-
-heartbeat:
-  interval_seconds: 10
-
-agent:
-  version: "0.1.0"
-```
-
----
-
-## FILE: `worker/event_log.py`
-
-- Relative path: `worker/event_log.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/event_log.py`
-- Size bytes: `3457`
-- SHA256: `df8ec517a77b4d6762a2911bb760f6b2873b1f23a3029a0ad1eac449f9e7bf3d`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI GRID — Worker-Side Structured Event Logger
-worker/event_log.py
-
-Writes structured events to a local SQLite DB on the worker machine.
-Events are also forwarded to Mother via heartbeat/status reports.
-
-Categories: SYSTEM, EXECUTION, STRATEGY, PIPELINE, ERROR
-"""
-
-import json
-import os
-import sqlite3
-import threading
-from datetime import datetime, timezone
-from typing import Optional
-
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-
-
-class WorkerEventLog:
-    """Per-worker persistent event log."""
-
-    def __init__(self, worker_id: str):
-        self.worker_id = worker_id
-        self._lock = threading.Lock()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        self._db_path = os.path.join(DATA_DIR, f"events_{worker_id}.db")
-        self._init_db()
-
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=15)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=3000")
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_db(self):
-        conn = self._get_conn()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                category TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                deployment_id TEXT,
-                strategy_id TEXT,
-                symbol TEXT,
-                message TEXT,
-                data_json TEXT,
-                level TEXT DEFAULT 'INFO'
-            );
-            CREATE INDEX IF NOT EXISTS idx_wevents_ts ON events(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_wevents_cat ON events(category);
-        """)
-        conn.commit()
-        conn.close()
-
-    def log(self, category: str, event_type: str, message: str,
-            deployment_id: str = None, strategy_id: str = None,
-            symbol: str = None, data: dict = None, level: str = "INFO"):
-        """Write a structured event."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                conn.execute("""
-                    INSERT INTO events (timestamp, category, event_type,
-                        deployment_id, strategy_id, symbol, message,
-                        data_json, level)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    now, category, event_type, deployment_id, strategy_id,
-                    symbol, message,
-                    json.dumps(data, default=str) if data else None, level,
-                ))
-                conn.commit()
-            finally:
-                conn.close()
-
-        # Also print for console visibility
-        print(f"[EVENT:{category}] {event_type} | {message}")
-
-    def get_recent(self, limit: int = 100, category: str = None) -> list:
-        conn = self._get_conn()
-        try:
-            if category:
-                rows = conn.execute(
-                    "SELECT * FROM events WHERE category=? ORDER BY id DESC LIMIT ?",
-                    (category, limit)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-```
-
----
-
-## FILE: `worker/execution.py`
-
-- Relative path: `worker/execution.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/execution.py`
-- Size bytes: `20490`
-- SHA256: `e563527cf0418b617746d365cbaeab54da0dcf787b3d38beb0a1accbba39e7bb`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI GRID — Trade Execution Layer + Logger
-worker/execution.py
-
-Handles:
-  - Real MT5 order execution (BUY/SELL/CLOSE)
-  - Position querying (filtered by magic number)
-  - SL/TP modification
-  - R-multiple TP computation from fill price
-  - MA-snapshot SL computation
-  - MA-cross exit monitoring
-  - Dedicated [EXEC] execution logger
-  - Trade record building for ctx._trades
-  - Signal validation (ported from JINNI ZERO engine_core.py)
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
-
-
-# =============================================================================
-# Signal Constants
-# =============================================================================
-
-SIGNAL_BUY = "BUY"
-SIGNAL_SELL = "SELL"
-SIGNAL_HOLD = "HOLD"
-SIGNAL_CLOSE = "CLOSE"
-SIGNAL_CLOSE_LONG = "CLOSE_LONG"
-SIGNAL_CLOSE_SHORT = "CLOSE_SHORT"
-VALID_SIGNALS = {
-    SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
-    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, None,
-}
-
-
-# =============================================================================
-# Signal Validation (ported from JINNI ZERO engine_core.py)
-# =============================================================================
-
-def validate_signal(raw, bar_index: int) -> dict:
-    """
-    Validate and normalize a raw signal dict from strategy.on_bar().
-    Matches JINNI ZERO backtester validate_signal() exactly.
-    """
-    if raw is None:
-        return {"signal": "HOLD"}
-    if not isinstance(raw, dict):
-        print(f"[EXEC] WARNING: Bar {bar_index}: strategy returned "
-              f"{type(raw).__name__}, expected dict or None")
-        return {"signal": "HOLD"}
-
-    sig = raw.get("signal")
-    if sig is not None:
-        sig = str(sig).upper()
-    if sig not in VALID_SIGNALS:
-        print(f"[EXEC] WARNING: Bar {bar_index}: invalid signal '{sig}'")
-        return {"signal": "HOLD"}
-
-    out = {"signal": sig or "HOLD"}
-
-    # Direct SL/TP
-    if raw.get("sl") is not None:
-        out["sl"] = float(raw["sl"])
-    if raw.get("tp") is not None:
-        out["tp"] = float(raw["tp"])
-
-    # Engine-computed SL/TP fields
-    for key in ("sl_mode", "sl_pts", "sl_ma_key", "sl_ma_val",
-                "tp_mode", "tp_r"):
-        if raw.get(key) is not None:
-            if key in ("sl_mode", "sl_ma_key", "tp_mode"):
-                out[key] = raw[key]
-            else:
-                out[key] = float(raw[key])
-
-    # Engine-level MA cross exit keys
-    if raw.get("engine_sl_ma_key") is not None:
-        out["engine_sl_ma_key"] = str(raw["engine_sl_ma_key"])
-    if raw.get("engine_tp_ma_key") is not None:
-        out["engine_tp_ma_key"] = str(raw["engine_tp_ma_key"])
-
-    # CLOSE signal
-    if out["signal"] == "CLOSE":
-        out["close"] = True
-        out["close_reason"] = str(raw.get("close_reason", "strategy_close"))
-    elif raw.get("close"):
-        out["close"] = True
-        out["close_reason"] = str(raw.get("close_reason", "strategy_close"))
-
-    # Dynamic SL/TP updates
-    if raw.get("update_sl") is not None:
-        out["update_sl"] = float(raw["update_sl"])
-    if raw.get("update_tp") is not None:
-        out["update_tp"] = float(raw["update_tp"])
-
-    # Comment
-    if raw.get("comment"):
-        out["comment"] = str(raw["comment"])
-
-    return out
-
-
-# =============================================================================
-# SL/TP Computation Helpers
-# =============================================================================
-
-def compute_sl(signal: dict, entry_price: float, direction: str) -> Optional[float]:
-    """
-    Compute SL price from signal fields.
-    Supports: direct sl, sl_mode=ma_snapshot, sl_mode=fixed.
-    """
-    sl_mode = signal.get("sl_mode")
-
-    if sl_mode == "ma_snapshot":
-        ma_val = signal.get("sl_ma_val")
-        if ma_val is not None:
-            ma_val = float(ma_val)
-            if direction == "long" and ma_val < entry_price:
-                return round(ma_val, 5)
-            elif direction == "short" and ma_val > entry_price:
-                return round(ma_val, 5)
-        return None
-
-    if sl_mode == "fixed":
-        pts = float(signal.get("sl_pts", 0))
-        if pts > 0:
-            if direction == "long":
-                return round(entry_price - pts, 5)
-            else:
-                return round(entry_price + pts, 5)
-        return None
-
-    # Direct SL
-    if signal.get("sl") is not None:
-        return float(signal["sl"])
-
-    return None
-
-
-def compute_tp(signal: dict, entry_price: float, sl_price: Optional[float],
-               direction: str) -> Optional[float]:
-    """
-    Compute TP price from signal fields.
-    Supports: direct tp, tp_mode=r_multiple.
-    """
-    tp_mode = signal.get("tp_mode")
-
-    if tp_mode == "r_multiple":
-        r = float(signal.get("tp_r", 1.0))
-        if sl_price is not None:
-            risk = abs(entry_price - sl_price)
-            if risk > 0:
-                if direction == "long":
-                    return round(entry_price + risk * r, 5)
-                else:
-                    return round(entry_price - risk * r, 5)
-        return None
-
-    # Direct TP
-    if signal.get("tp") is not None:
-        return float(signal["tp"])
-
-    return None
-
-
-# =============================================================================
-# Position State
-# =============================================================================
-
-@dataclass
-class PositionState:
-    has_position: bool = False
-    direction: Optional[str] = None
-    entry_price: Optional[float] = None
-    sl: Optional[float] = None
-    tp: Optional[float] = None
-    size: Optional[float] = None
-    ticket: Optional[int] = None
-    profit: Optional[float] = None
-    entry_bar: Optional[int] = None
-
-
-# =============================================================================
-# Execution Logger
-# =============================================================================
-
-class ExecutionLogger:
-    """Dedicated [EXEC] logger for all trade decisions."""
-
-    def __init__(self, deployment_id: str, symbol: str):
-        self.deployment_id = deployment_id
-        self.symbol = symbol
-        self.buys_attempted = 0
-        self.buys_filled = 0
-        self.sells_attempted = 0
-        self.sells_filled = 0
-        self.closes_attempted = 0
-        self.closes_filled = 0
-        self.holds = 0
-        self.skips = 0
-        self.rejections = 0
-        self.modifications = 0
-        self.ma_cross_exits = 0
-
-    def _ts(self) -> str:
-        return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-
-    def _pos_str(self, pos: PositionState) -> str:
-        if not pos or not pos.has_position:
-            return "FLAT"
-        d = (pos.direction or "?").upper()
-        p = f"@{pos.entry_price:.5f}" if pos.entry_price else ""
-        s = f"x{pos.size}" if pos.size else ""
-        pnl = f" pnl={pos.profit:.2f}" if pos.profit is not None else ""
-        return f"{d}{p}{s}{pnl}"
-
-    def log_signal(self, action: str, bar_idx: int, bar_time, price,
-                   pos: PositionState):
-        print(
-            f"[EXEC] {self._ts()} | {action} | {self.symbol} | "
-            f"bar={bar_idx} t={bar_time} | price={price} | "
-            f"pos={self._pos_str(pos)}"
+    for k, v in settings.items():
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (k, str(v))
         )
-
-    def log_open(self, direction: str, result: dict, sl=None, tp=None):
-        if direction == "BUY":
-            self.buys_attempted += 1
-        else:
-            self.sells_attempted += 1
-
-        if result.get("success"):
-            if direction == "BUY":
-                self.buys_filled += 1
-            else:
-                self.sells_filled += 1
-            print(
-                f"[EXEC]   -> OPENED {direction} | "
-                f"ticket={result.get('ticket')} "
-                f"price={result.get('price', 0):.5f} "
-                f"vol={result.get('volume', 0)} "
-                f"sl={sl} tp={tp}"
-            )
-        else:
-            self.rejections += 1
-            print(
-                f"[EXEC]   -> REJECTED {direction} | "
-                f"error={result.get('error', 'unknown')}"
-            )
-
-    def log_close(self, results: list, reason: str = "signal"):
-        self.closes_attempted += 1
-        for r in results:
-            if r.get("success"):
-                self.closes_filled += 1
-                print(
-                    f"[EXEC]   -> CLOSED ticket={r.get('ticket')} "
-                    f"price={r.get('price', 0):.5f} "
-                    f"profit={r.get('profit', 0):.2f} "
-                    f"reason={reason}"
-                )
-            else:
-                self.rejections += 1
-                print(
-                    f"[EXEC]   -> CLOSE FAILED ticket={r.get('ticket', '?')} "
-                    f"error={r.get('error', 'unknown')}"
-                )
-
-    def log_skip(self, action: str, reason: str):
-        self.skips += 1
-        print(f"[EXEC]   -> SKIPPED {action} | reason={reason}")
-
-    def log_hold(self):
-        self.holds += 1
-
-    def log_modify(self, result: dict, sl=None, tp=None):
-        self.modifications += 1
-        if result.get("success"):
-            print(f"[EXEC]   -> MODIFIED sl={sl} tp={tp}")
-        else:
-            print(f"[EXEC]   -> MODIFY FAILED error={result.get('error')}")
-
-    def log_ma_cross_exit(self, ma_key: str, direction: str, ma_val: float,
-                          close_price: float):
-        self.ma_cross_exits += 1
-        print(
-            f"[EXEC]   -> MA CROSS EXIT | {ma_key}={ma_val:.5f} "
-            f"close={close_price:.5f} dir={direction}"
-        )
-
-    def get_stats(self) -> dict:
-        return {
-            "buys_attempted": self.buys_attempted,
-            "buys_filled": self.buys_filled,
-            "sells_attempted": self.sells_attempted,
-            "sells_filled": self.sells_filled,
-            "closes_attempted": self.closes_attempted,
-            "closes_filled": self.closes_filled,
-            "holds": self.holds,
-            "skips": self.skips,
-            "rejections": self.rejections,
-            "modifications": self.modifications,
-            "ma_cross_exits": self.ma_cross_exits,
-        }
+    conn.commit()
 
 
-# =============================================================================
-# MT5 Trade Executor
-# =============================================================================
+# ── Admin / Delete ──────────────────────────────────────────
 
-def _import_mt5():
+def delete_all_trades_db() -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    conn.execute("DELETE FROM trades")
+    conn.commit()
+    return c
+
+
+def delete_trades_by_strategy_db(strategy_id: str) -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM trades WHERE strategy_id=?",
+                     (strategy_id,)).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
+    conn.commit()
+    return c
+
+
+def delete_trades_by_worker_db(worker_id: str) -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM trades WHERE worker_id=?",
+                     (worker_id,)).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE worker_id=?", (worker_id,))
+    conn.commit()
+    return c
+
+
+def delete_strategy_full_db(strategy_id: str) -> dict:
+    conn = _get_conn()
+    dep_c = conn.execute(
+        "SELECT COUNT(*) FROM deployments WHERE strategy_id=?",
+        (strategy_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM deployments WHERE strategy_id=?",
+                 (strategy_id,))
+    trade_c = conn.execute(
+        "SELECT COUNT(*) FROM trades WHERE strategy_id=?",
+        (strategy_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
+    conn.execute("DELETE FROM strategies WHERE strategy_id=?",
+                 (strategy_id,))
+    conn.commit()
+    # Delete files
     try:
-        import MetaTrader5 as mt5
-        return mt5
-    except ImportError:
-        return None
+        import glob
+        for p in glob.glob(f"strategies/*{strategy_id}*"):
+            os.remove(p)
+    except Exception:
+        pass
+    return {"ok": True, "strategy_id": strategy_id,
+            "deployments_deleted": dep_c, "trades_deleted": trade_c}
 
 
-class MT5Executor:
-    """Handles all real MT5 order execution."""
-
-    def __init__(self, symbol: str, lot_size: float, deployment_id: str):
-        self.symbol = symbol
-        self.lot_size = lot_size
-        self.magic = self._make_magic(deployment_id)
-        self._mt5 = _import_mt5()
-        self._filling_mode = None
-
-        if self._mt5:
-            self._filling_mode = self._detect_filling()
-            print(
-                f"[EXECUTOR] Ready: symbol={symbol} lot={lot_size} "
-                f"magic={self.magic} filling={self._filling_mode}"
-            )
-        else:
-            print("[EXECUTOR] WARNING: MT5 not available. Execution disabled.")
-
-    @staticmethod
-    def _make_magic(deployment_id: str) -> int:
-        h = 0
-        for c in deployment_id:
-            h = (h * 31 + ord(c)) & 0xFFFFFFFF
-        return (h % 900000) + 100000
-
-    def _detect_filling(self) -> int:
-        mt5 = self._mt5
-        info = mt5.symbol_info(self.symbol)
-        if info is None:
-            return 1
-        fm = info.filling_mode
-        if fm & 2:
-            return 1  # IOC
-        elif fm & 1:
-            return 0  # FOK
-        else:
-            return 2  # RETURN
-
-    # ── Open Orders ─────────────────────────────────────────
-
-    def open_buy(self, sl=None, tp=None, comment="") -> dict:
-        return self._open_order("buy", sl, tp, comment)
-
-    def open_sell(self, sl=None, tp=None, comment="") -> dict:
-        return self._open_order("sell", sl, tp, comment)
-
-    def _open_order(self, direction: str, sl=None, tp=None,
-                    comment="") -> dict:
-        mt5 = self._mt5
-        if mt5 is None:
-            return {"success": False, "error": "MT5 not available"}
-
-        tick = mt5.symbol_info_tick(self.symbol)
-        if tick is None:
-            return {"success": False,
-                    "error": f"No tick data for {self.symbol}"}
-
-        is_buy = direction == "buy"
-        price = tick.ask if is_buy else tick.bid
-        order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": self.symbol,
-            "volume": self.lot_size,
-            "type": order_type,
-            "price": price,
-            "deviation": 30,
-            "magic": self.magic,
-            "comment": comment or f"JG_{direction}",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": self._filling_mode,
-        }
-
-        if sl is not None and sl > 0:
-            request["sl"] = round(float(sl), 5)
-        if tp is not None and tp > 0:
-            request["tp"] = round(float(tp), 5)
-
-        print(f"[EXECUTOR] Sending {direction.upper()}: {request}")
-        result = mt5.order_send(request)
-
-        if result is None:
-            err = mt5.last_error()
-            return {"success": False, "error": f"order_send returned None: {err}"}
-
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {
-                "success": False,
-                "error": f"retcode={result.retcode} comment={result.comment}",
-                "retcode": result.retcode,
-            }
-
-        return {
-            "success": True,
-            "ticket": result.order,
-            "price": result.price,
-            "volume": result.volume,
-        }
-
-    # ── Close Orders ────────────────────────────────────────
-
-    def close_position(self, ticket: int, pos_type: int,
-                       volume: float, profit: float) -> dict:
-        mt5 = self._mt5
-        if mt5 is None:
-            return {"success": False, "ticket": ticket,
-                    "error": "MT5 not available"}
-
-        tick = mt5.symbol_info_tick(self.symbol)
-        if tick is None:
-            return {"success": False, "ticket": ticket,
-                    "error": f"No tick for {self.symbol}"}
-
-        is_long = (pos_type == 0)
-        close_price = tick.bid if is_long else tick.ask
-        close_type = mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": self.symbol,
-            "volume": volume,
-            "type": close_type,
-            "position": ticket,
-            "price": close_price,
-            "deviation": 30,
-            "magic": self.magic,
-            "comment": "JG_close",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": self._filling_mode,
-        }
-
-        print(f"[EXECUTOR] Closing ticket={ticket}: {request}")
-        result = mt5.order_send(request)
-
-        if result is None:
-            err = mt5.last_error()
-            return {"success": False, "ticket": ticket,
-                    "error": f"order_send None: {err}"}
-
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {
-                "success": False, "ticket": ticket,
-                "error": f"retcode={result.retcode} comment={result.comment}",
-            }
-
-        return {
-            "success": True, "ticket": ticket,
-            "price": result.price, "volume": volume,
-            "profit": profit,
-        }
-
-    def close_all_positions(self) -> list:
-        return [self.close_position(p["ticket"], p["type"], p["volume"], p["profit"])
-                for p in self.get_positions()]
-
-    def close_long_positions(self) -> list:
-        return [self.close_position(p["ticket"], p["type"], p["volume"], p["profit"])
-                for p in self.get_positions() if p["type"] == 0]
-
-    def close_short_positions(self) -> list:
-        return [self.close_position(p["ticket"], p["type"], p["volume"], p["profit"])
-                for p in self.get_positions() if p["type"] == 1]
-
-    # ── Modify SL/TP ────────────────────────────────────────
-
-    def modify_sl_tp(self, ticket: int, sl=None, tp=None) -> dict:
-        mt5 = self._mt5
-        if mt5 is None:
-            return {"success": False, "error": "MT5 not available"}
-
-        positions = mt5.positions_get(ticket=ticket)
-        if positions is None or len(positions) == 0:
-            return {"success": False, "error": f"Position {ticket} not found"}
-
-        pos = positions[0]
-        new_sl = round(float(sl), 5) if sl is not None else pos.sl
-        new_tp = round(float(tp), 5) if tp is not None else pos.tp
-
-        request = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": self.symbol,
-            "position": ticket,
-            "sl": new_sl,
-            "tp": new_tp,
-        }
-
-        result = mt5.order_send(request)
-        if result is None:
-            return {"success": False, "error": "order_send returned None"}
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return {"success": False,
-                    "error": f"retcode={result.retcode} comment={result.comment}"}
-        return {"success": True, "sl": new_sl, "tp": new_tp}
-
-    # ── Query ───────────────────────────────────────────────
-
-    def get_positions(self) -> list:
-        mt5 = self._mt5
-        if mt5 is None:
-            return []
-        positions = mt5.positions_get(symbol=self.symbol)
-        if positions is None:
-            return []
-        result = []
-        for p in positions:
-            if p.magic != self.magic:
-                continue
-            result.append({
-                "ticket": p.ticket, "type": p.type,
-                "volume": p.volume, "price_open": p.price_open,
-                "sl": p.sl, "tp": p.tp, "profit": p.profit,
-                "symbol": p.symbol, "magic": p.magic,
-            })
-        return result
-
-    def get_floating_pnl(self) -> float:
-        return sum(p["profit"] for p in self.get_positions())
-
-    def get_open_count(self) -> int:
-        return len(self.get_positions())
-
-    def get_position_state(self) -> PositionState:
-        positions = self.get_positions()
-        if not positions:
-            return PositionState(has_position=False)
-        p = positions[0]
-        return PositionState(
-            has_position=True,
-            direction="long" if p["type"] == 0 else "short",
-            entry_price=p["price_open"],
-            sl=p["sl"] if p["sl"] != 0 else None,
-            tp=p["tp"] if p["tp"] != 0 else None,
-            size=p["volume"],
-            ticket=p["ticket"],
-            profit=p["profit"],
-        )
+def remove_worker_db(worker_id: str) -> dict:
+    conn = _get_conn()
+    conn.execute("DELETE FROM workers WHERE worker_id=?", (worker_id,))
+    conn.commit()
+    return {"ok": True, "worker_id": worker_id}
 
 
-# =============================================================================
-# Trade Record Builder (for ctx._trades)
-# =============================================================================
+def remove_stale_workers_db(threshold_seconds: int = 300) -> int:
+    conn = _get_conn()
+    cutoff = datetime.now(timezone.utc)
+    rows = conn.execute("SELECT worker_id, last_heartbeat_at FROM workers"
+                        ).fetchall()
+    removed = 0
+    for r in rows:
+        hb = r[1]
+        if not hb:
+            continue
+        try:
+            last = datetime.fromisoformat(hb)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (cutoff - last).total_seconds() > threshold_seconds:
+                conn.execute("DELETE FROM workers WHERE worker_id=?",
+                             (r[0],))
+                removed += 1
+        except (ValueError, TypeError):
+            pass
+    conn.commit()
+    return removed
 
-def build_trade_record(
-    trade_id: int,
-    direction: str,
-    entry_price: float,
-    entry_bar: int,
-    entry_time: int,
-    exit_price: float,
-    exit_bar: int,
-    exit_time: int,
-    exit_reason: str,
-    sl: Optional[float] = None,
-    tp: Optional[float] = None,
-    lot_size: float = 0.01,
-    ticket: Optional[int] = None,
-    profit: Optional[float] = None,
-) -> dict:
-    """
-    Build a trade record compatible with JINNI ZERO backtester format.
-    Strategies use ctx.trades for gating logic, no-reuse, etc.
-    """
-    points_pnl = (exit_price - entry_price) if direction == "long" \
-                 else (entry_price - exit_price)
 
-    return {
-        "id": trade_id,
-        "direction": direction,
-        "entry_bar": entry_bar,
-        "entry_time": entry_time,
-        "entry_price": round(entry_price, 5),
-        "exit_bar": exit_bar,
-        "exit_time": exit_time,
-        "exit_price": round(exit_price, 5),
-        "exit_reason": exit_reason,
-        "sl_level": sl,
-        "tp_level": tp,
-        "lot_size": lot_size,
-        "ticket": ticket,
-        "points_pnl": round(points_pnl, 5),
-        "profit": profit,
-        "bars_held": exit_bar - entry_bar,
-    }
+def clear_events_db() -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    conn.execute("DELETE FROM events")
+    conn.commit()
+    return c
+
+
+def get_system_stats_db() -> dict:
+    conn = _get_conn()
+    stats = {}
+    for table in ["strategies", "workers", "deployments", "trades",
+                   "events", "equity_snapshots", "settings"]:
+        try:
+            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            stats[f"{table}_count"] = c
+        except Exception:
+            stats[f"{table}_count"] = 0
+    # Active deployments
+    try:
+        stats["active_deployments"] = conn.execute(
+            "SELECT COUNT(*) FROM deployments WHERE state='running'"
+        ).fetchone()[0]
+    except Exception:
+        stats["active_deployments"] = 0
+    # DB size
+    try:
+        stats["db_size_bytes"] = os.path.getsize(_DB_PATH)
+    except Exception:
+        stats["db_size_bytes"] = 0
+    return stats
+
+
+def full_system_reset_db() -> dict:
+    conn = _get_conn()
+    counts = {}
+    for table in ["trades", "events", "deployments", "equity_snapshots",
+                   "workers", "strategies"]:
+        try:
+            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+            counts[f"{table}_deleted"] = c
+        except Exception:
+            counts[f"{table}_deleted"] = 0
+    conn.commit()
+    try:
+        import glob
+        for p in glob.glob("strategies/*.py"):
+            os.remove(p)
+    except Exception:
+        pass
+    return counts
 ```
 
 ---
 
-## FILE: `worker/indicators.py`
+## FILE: `ui/js/workerDetailRenderer.js`
 
-- Relative path: `worker/indicators.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/indicators.py`
+- Relative path: `ui/js/workerDetailRenderer.js`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/js/workerDetailRenderer.js`
+- Size bytes: `41599`
+- SHA256: `35243e2d40f8148ce397026d9248b6cd8bb31a492173b497480f1bd0ebdb5c1a`
+- Guessed MIME type: `text/javascript`
+- Guessed encoding: `unknown`
+
+```javascript
+/* workerDetailRenderer.js */
+
+var WorkerDetailRenderer = (function () {
+  'use strict';
+
+  var _currentWorker = null;
+  var _refreshInterval = null;
+  var _runtimeConfig = {};
+  var _parameterValues = {};
+  var _parameterDefaults = {};
+  var _activityLog = [];
+
+  // Backend-loaded data
+  var _strategies = [];
+  var _selectedStrategyId = null;
+  var _selectedStrategy = null;
+  var _deployments = [];
+
+  /* ── Helpers ──────────────────────────────────────────────── */
+
+  function _formatAge(seconds) {
+    if (seconds === null || seconds === undefined) return '<span class="value-null">\u2014</span>';
+    var s = Math.round(seconds);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
+    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
+  }
+
+  function _nullVal(val, fallback) {
+    if (val === null || val === undefined || val === '')
+      return '<span class="value-null">' + (fallback || '\u2014') + '</span>';
+    return String(val);
+  }
+
+  function _stateColor(state) {
+    var map = { online: 'green', running: 'green', idle: 'blue', warning: 'amber', stale: 'orange', error: 'red', offline: 'gray' };
+    return map[state] || 'gray';
+  }
+
+  function _stateLabel(state) {
+    if (!state) return 'Unknown';
+    return state.charAt(0).toUpperCase() + state.slice(1);
+  }
+
+  function _formatPnl(val) {
+    if (val === null || val === undefined) return '<span class="value-null">\u2014</span>';
+    var sign = val >= 0 ? '+' : '';
+    return sign + '$' + val.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  function _timeNow() {
+    var d = new Date();
+    return String(d.getHours()).padStart(2, '0') + ':' +
+           String(d.getMinutes()).padStart(2, '0') + ':' +
+           String(d.getSeconds()).padStart(2, '0');
+  }
+
+  function _getModifiedCount() {
+    var count = 0;
+    for (var k in _parameterValues) {
+      if (_parameterValues[k] !== _parameterDefaults[k]) count++;
+    }
+    return count;
+  }
+
+  function _deployStateClass(state) {
+    if (!state) return 'unknown';
+    if (state === 'running') return 'online';
+    if (state === 'failed') return 'error';
+    if (state === 'stopped') return 'offline';
+    if (state.indexOf('loading') !== -1 || state.indexOf('fetching') !== -1 ||
+        state.indexOf('generating') !== -1 || state.indexOf('warming') !== -1) return 'warning';
+    return 'stale';
+  }
+
+  /* ── State Init ──────────────────────────────────────────── */
+
+  function _initState() {
+    _activityLog = [];
+    _strategies = [];
+    _selectedStrategyId = null;
+    _selectedStrategy = null;
+    _deployments = [];
+
+    var defaults = DeploymentConfig.runtimeDefaults;
+    _runtimeConfig = {};
+    for (var k in defaults) _runtimeConfig[k] = defaults[k];
+
+    _parameterValues = {};
+    _parameterDefaults = {};
+  }
+
+  /* ── Activity Log ────────────────────────────────────────── */
+
+  function _addActivity(text) {
+    _activityLog.unshift({ time: _timeNow(), text: text });
+    if (_activityLog.length > 30) _activityLog.length = 30;
+    _renderTimeline();
+  }
+
+  function _renderTimeline() {
+    var el = document.getElementById('wd-timeline');
+    if (!el) return;
+    if (_activityLog.length === 0) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No activity yet.</div>';
+      return;
+    }
+    var html = '';
+    _activityLog.forEach(function (entry) {
+      html += '<div class="wd-timeline-item">' +
+        '<span class="wd-timeline-time">' + entry.time + '</span>' +
+        '<span class="wd-timeline-dot"></span>' +
+        '<span class="wd-timeline-text">' + entry.text + '</span></div>';
+    });
+    el.innerHTML = html;
+  }
+
+  /* ── Status Cards ────────────────────────────────────────── */
+
+  function _renderStatusCards() {
+    var w = _currentWorker;
+    var state = w.state || 'unknown';
+    var strats = (w.active_strategies && w.active_strategies.length > 0)
+      ? w.active_strategies.join(', ') : 'None';
+
+    /* ── MT5 info ────────────────────────────────────── */
+    var mt5Val = _nullVal(w.mt5_state, 'Not Connected');
+    var mt5Color = '';
+    if (w.mt5_state === 'connected') {
+      mt5Val = '<span style="color:var(--success);">Connected</span>';
+    } else if (w.mt5_state === 'disconnected') {
+      mt5Val = '<span style="color:var(--danger);">Disconnected</span>';
+    }
+
+    var brokerAcct = '';
+    if (w.broker || w.account_id) {
+      brokerAcct = (w.broker || '?') + ' / ' + (w.account_id || '?');
+    } else {
+      brokerAcct = '<span class="value-null">\u2014</span>';
+    }
+
+    /* ── Pipeline stats ──────────────────────────────── */
+    var ticks = w.total_ticks || 0;
+    var bars = w.total_bars || 0;
+    var signals = w.signal_count || 0;
+    var onBarCalls = w.on_bar_calls || 0;
+
+    var pipelineVal =
+      '<span style="color:var(--accent);">' + _fmtNum(ticks) + '</span> ticks \u2192 ' +
+      '<span style="color:var(--warning);">' + _fmtNum(bars) + '</span> bars \u2192 ' +
+      '<span style="color:var(--success);">' + signals + '</span> signals';
+
+    /* ── Current price ───────────────────────────────── */
+    var priceVal = (w.current_price !== null && w.current_price !== undefined)
+      ? '<span class="mono">' + w.current_price.toFixed(2) + '</span>'
+      : '<span class="value-null">\u2014</span>';
+
+    /* ── PnL ─────────────────────────────────────────── */
+    var pnl = _formatPnl(w.floating_pnl);
+    var pnlStyle = '';
+    if (w.floating_pnl !== null && w.floating_pnl !== undefined) {
+      pnlStyle = w.floating_pnl >= 0 ? 'color:var(--success)' : 'color:var(--danger)';
+    }
+
+    var cards = [
+      { label: 'Connection',       value: '<div class="status-indicator"><span class="wd-status-dot-sm ' + _stateColor(state) + '"></span>' + _stateLabel(state) + '</div>' },
+      { label: 'MT5',              value: mt5Val },
+      { label: 'Broker / Account', value: brokerAcct },
+      { label: 'Active Strategy',  value: strats },
+      { label: 'Pipeline',         value: pipelineVal },
+      { label: 'Current Price',    value: priceVal },
+      { label: 'Equity',           value: '<span style="' + pnlStyle + '">' + pnl + '</span>' },
+      { label: 'Last Heartbeat',   value: _formatAge(w.heartbeat_age_seconds) },
+    ];
+
+    var html = '';
+    cards.forEach(function (c) {
+      html += '<div class="wd-status-card"><span class="status-label">' + c.label + '</span><span class="status-value">' + c.value + '</span></div>';
+    });
+    return html;
+  }
+
+  function _fmtNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  /* ── Checklist ───────────────────────────────────────────── */
+
+  function _renderChecklist() {
+    var w = _currentWorker;
+    var onlineStates = ['online', 'running', 'idle'];
+    var isOnline = onlineStates.indexOf(w.state) !== -1;
+    var hasSid = !!_selectedStrategyId;
+    var hasSym = !!_runtimeConfig.symbol && /^[A-Z0-9._]{1,30}$/.test((_runtimeConfig.symbol || '').trim().toUpperCase());
+    var tlOk = _runtimeConfig.tick_lookback_value > 0;
+    var bsOk = _runtimeConfig.bar_size_points > 0;
+    var mbOk = _runtimeConfig.max_bars_memory > 0;
+
+    var items = [
+      { pass: isOnline, text: 'Worker connected', type: isOnline ? 'pass' : 'fail' },
+      { pass: hasSid, text: 'Strategy selected' + (hasSid ? ' (' + _selectedStrategyId + ')' : ''), type: hasSid ? 'pass' : 'fail' },
+      { pass: hasSym, text: 'Symbol selected', type: hasSym ? 'pass' : 'fail' },
+      { pass: tlOk, text: 'Tick lookback configured', type: tlOk ? 'pass' : 'fail' },
+      { pass: bsOk, text: 'Bar size points configured', type: bsOk ? 'pass' : 'fail' },
+      { pass: mbOk, text: 'Max bars memory configured', type: mbOk ? 'pass' : 'fail' },
+      { pass: true, text: 'Parameters configured', type: 'pass' },
+    ];
+
+    var iconMap = { pass: 'fa-check', fail: 'fa-xmark', warn: 'fa-exclamation', info: 'fa-info' };
+    var html = '';
+    items.forEach(function (item) {
+      var textClass = item.type === 'pass' ? 'wd-check-text pass' : 'wd-check-text';
+      html += '<div class="wd-check-item">' +
+        '<span class="wd-check-icon ' + item.type + '"><i class="fa-solid ' + iconMap[item.type] + '"></i></span>' +
+        '<span class="' + textClass + '">' + item.text + '</span></div>';
+    });
+    return html;
+  }
+
+  function _updateChecklist() {
+    var el = document.getElementById('wd-checklist');
+    if (el) el.innerHTML = _renderChecklist();
+  }
+
+  /* ── Build Strategy Selector ─────────────────────────────── */
+
+  function _renderStrategySelector() {
+    if (_strategies.length === 0) {
+      return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
+        '<i class="fa-solid fa-circle-info" style="margin-right:6px;opacity:0.5;"></i>' +
+        'No strategies registered. Go to Strategies page to upload one.</div>';
+    }
+
+    var html = '<div class="wd-form-grid" style="grid-template-columns:1fr;">' +
+      '<div class="wd-form-group"><label class="wd-form-label">Select Strategy</label>' +
+      '<select class="wd-form-select" id="wd-strategy-select">';
+    html += '<option value="">-- Choose a strategy --</option>';
+    _strategies.forEach(function (s) {
+      var disabled = s.validation_status !== 'validated' ? ' disabled' : '';
+      var label = (s.strategy_name || s.strategy_id) + ' v' + (s.version || '?');
+      if (s.validation_status !== 'validated') label += ' (invalid)';
+      var selected = (_selectedStrategyId === s.strategy_id) ? ' selected' : '';
+      html += '<option value="' + s.strategy_id + '"' + disabled + selected + '>' + label + '</option>';
+    });
+    html += '</select></div></div>';
+
+    // Metadata preview
+    html += '<div id="wd-strat-meta"></div>';
+    return html;
+  }
+
+  function _renderStrategyMeta() {
+    var el = document.getElementById('wd-strat-meta');
+    if (!el) return;
+    if (!_selectedStrategy) { el.innerHTML = ''; return; }
+
+    var s = _selectedStrategy;
+    el.innerHTML = '<div class="wd-metadata" style="margin-top:12px;"><div class="wd-metadata-grid">' +
+      '<div class="wd-metadata-item"><span class="wd-metadata-label">ID</span><span class="wd-metadata-value">' + s.strategy_id + '</span></div>' +
+      '<div class="wd-metadata-item"><span class="wd-metadata-label">Name</span><span class="wd-metadata-value">' + (s.strategy_name || s.strategy_id) + '</span></div>' +
+      '<div class="wd-metadata-item"><span class="wd-metadata-label">Version</span><span class="wd-metadata-value">' + (s.version || '\u2014') + '</span></div>' +
+      '<div class="wd-metadata-item"><span class="wd-metadata-label">Parameters</span><span class="wd-metadata-value">' + (s.parameter_count || 0) + '</span></div>' +
+      (s.description ? '<div class="wd-metadata-item" style="grid-column:1/-1;"><span class="wd-metadata-label">Description</span><span class="wd-metadata-value" style="font-family:Inter,sans-serif;">' + s.description + '</span></div>' : '') +
+      '<div class="wd-metadata-item"><span class="wd-metadata-label">Status</span><span class="wd-metadata-value" style="color:var(--success);">' + (s.validation_status || 'unknown') + '</span></div>' +
+      '</div></div>';
+  }
+
+  /* ── Build Strategy Parameters ───────────────────────────── */
+
+  function _renderParams() {
+    if (!_selectedStrategy || !_selectedStrategy.parameters ||
+        Object.keys(_selectedStrategy.parameters).length === 0) {
+      return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
+        'No editable parameters exposed by this strategy.</div>';
+    }
+
+    var schema = _selectedStrategy.parameters;
+    var html = '';
+
+    Object.keys(schema).forEach(function (key) {
+      var spec = schema[key];
+      if (typeof spec !== 'object') return;
+
+      var ptype = spec.type || 'number';
+      var label = spec.label || key;
+      var desc = spec.help || '';
+      var defVal = spec.default !== undefined ? spec.default : '';
+      var val = _parameterValues.hasOwnProperty(key) ? _parameterValues[key] : defVal;
+      var isModified = val !== defVal;
+      var modClass = isModified ? ' modified' : '';
+      var typeBadge = ptype === 'boolean' ? 'bool' : (ptype === 'number' ? (String(defVal).indexOf('.') !== -1 ? 'float' : 'int') : 'string');
+      var input = '';
+
+      if (ptype === 'boolean') {
+        input = '<input type="checkbox" class="wd-toggle wd-param-input-ctrl" data-key="' + key + '"' +
+          (val ? ' checked' : '') + ' />';
+      } else if (ptype === 'select' && spec.options) {
+        input = '<select class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" style="width:120px;text-align:left;">';
+        spec.options.forEach(function (opt) {
+          var optVal = typeof opt === 'object' ? opt.value : opt;
+          var optLabel = typeof opt === 'object' ? (opt.label || opt.value) : opt;
+          input += '<option value="' + optVal + '"' + (String(optVal) === String(val) ? ' selected' : '') + '>' + optLabel + '</option>';
+        });
+        input += '</select>';
+      } else if (ptype === 'string' || ptype === 'text') {
+        input = '<input type="text" class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" value="' + (val || '') + '" style="width:120px;text-align:left;" />';
+      } else {
+        var attrs = 'type="number" class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" value="' + val + '"';
+        if (spec.min !== undefined && spec.min !== null) attrs += ' min="' + spec.min + '"';
+        if (spec.max !== undefined && spec.max !== null) attrs += ' max="' + spec.max + '"';
+        if (spec.step !== undefined && spec.step !== null) attrs += ' step="' + spec.step + '"';
+        input = '<input ' + attrs + ' />';
+      }
+
+      html += '<div class="wd-param-row' + modClass + '" data-key="' + key + '">' +
+        '<div class="wd-param-info">' +
+          '<div class="wd-param-name">' + label +
+            '<span class="wd-param-type-badge type-' + typeBadge + '">' + typeBadge + '</span></div>' +
+          '<div class="wd-param-desc">' + desc + '</div>' +
+        '</div>' +
+        '<div class="wd-param-controls">' +
+          input +
+          '<button class="wd-param-reset" data-key="' + key + '" title="Reset to default"><i class="fa-solid fa-rotate-left"></i></button>' +
+        '</div></div>';
+    });
+
+    return html;
+  }
+
+  /* ── Build Runtime Config ────────────────────────────────── */
+
+  function _renderRuntimeConfig() {
+    var rc = _runtimeConfig;
+    var tlUnits = DeploymentConfig.tickLookbackUnits;
+
+    var tlUnitOpts = tlUnits.map(function (u) {
+      var label = u.charAt(0).toUpperCase() + u.slice(1);
+      return '<option value="' + u + '"' + (rc.tick_lookback_unit === u ? ' selected' : '') + '>' + label + '</option>';
+    }).join('');
+
+    return '<div class="wd-form-grid">' +
+
+      /* ── Symbol (free-text input) ─────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Symbol</label>' +
+        '<input type="text" class="wd-form-input rc-input" id="wd-symbol-input" data-key="symbol"' +
+          ' value="' + (rc.symbol || '') + '" placeholder="e.g. EURUSD, XAUUSD, BTCUSD"' +
+          ' autocomplete="off" spellcheck="false" />' +
+        '<div class="wd-symbol-hint">Letters, numbers, dots, underscores only — auto-uppercased</div>' +
+        '<div class="wd-field-error" id="wd-symbol-error"><i class="fa-solid fa-circle-xmark"></i><span></span></div>' +
+      '</div>' +
+
+      /* ── Lot Size ─────────────────────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Lot Size</label>' +
+        '<input type="number" class="wd-form-input rc-input" data-key="lot_size" value="' + rc.lot_size + '" step="0.01" min="0.01" />' +
+      '</div>' +
+
+      /* ── History Lookback (merged value + unit) ───────── */
+      '<div class="wd-form-group" style="grid-column:1/-1;">' +
+        '<label class="wd-form-label">History Lookback</label>' +
+        '<div class="wd-inline-row">' +
+          '<input type="number" class="wd-form-input rc-input" data-key="tick_lookback_value" value="' + rc.tick_lookback_value + '" step="1" min="1" placeholder="Amount" />' +
+          '<select class="wd-form-select rc-input" data-key="tick_lookback_unit">' + tlUnitOpts + '</select>' +
+        '</div>' +
+      '</div>' +
+
+      /* ── Bar Size Points ──────────────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Bar Size Points</label>' +
+        '<input type="number" class="wd-form-input rc-input" data-key="bar_size_points" value="' + rc.bar_size_points + '" step="1" min="1" />' +
+      '</div>' +
+
+      /* ── Max Bars in Memory ───────────────────────────── */
+      '<div class="wd-form-group">' +
+        '<label class="wd-form-label">Max Bars in Memory</label>' +
+        '<input type="number" class="wd-form-input rc-input" data-key="max_bars_memory" value="' + rc.max_bars_memory + '" step="10" min="10" />' +
+      '</div>' +
+
+    '</div>';
+  }
+
+  /* ── Deployments Panel ───────────────────────────────────── */
+
+  function _renderDeployments() {
+    if (_deployments.length === 0) {
+      return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
+        'No deployments for this worker.</div>';
+    }
+
+    var html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+    _deployments.forEach(function (d) {
+      var stateClass = _deployStateClass(d.state);
+      var updated = d.updated_at ? d.updated_at.replace('T', ' ').substring(0, 19) : '\u2014';
+      html += '<div style="background:var(--bg-secondary);border-radius:6px;padding:10px 14px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+          '<span class="mono" style="font-size:12px;color:var(--accent);">' + d.deployment_id + '</span>' +
+          '<span class="state-pill ' + stateClass + '">' + d.state.toUpperCase().replace(/_/g, ' ') + '</span>' +
+        '</div>' +
+        '<div style="display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--text-muted);">' +
+          '<span>Strategy: <strong class="mono">' + d.strategy_id + '</strong></span>' +
+          '<span>Symbol: <strong class="mono">' + d.symbol + '</strong></span>' +
+          '<span>Bars: <strong class="mono">' + d.bar_size_points + 'pt / ' + d.max_bars_in_memory + '</strong></span>' +
+        '</div>' +
+        '<div style="display:flex;gap:16px;margin-top:4px;font-size:10.5px;color:var(--text-muted);">' +
+          '<span>Updated: ' + updated + '</span>' +
+          (d.last_error ? '<span style="color:var(--danger);">Error: ' + d.last_error + '</span>' : '') +
+        '</div>';
+
+      // Stop button for active deployments
+      var activeStates = ['queued','sent_to_worker','acknowledged_by_worker','loading_strategy','fetching_ticks','generating_initial_bars','warming_up','running'];
+      if (activeStates.indexOf(d.state) !== -1) {
+        html += '<button class="wd-btn wd-btn-ghost dep-stop-btn" data-depid="' + d.deployment_id + '" style="margin-top:8px;font-size:10.5px;">' +
+          '<i class="fa-solid fa-stop"></i> Stop</button>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  /* ── Build Full Page ─────────────────────────────────────── */
+
+  function _buildPage() {
+    var w = _currentWorker;
+    var state = w.state || 'unknown';
+    var name = w.worker_name || w.worker_id;
+    var ip = w.host || '\u2014';
+
+    var html = '<div class="worker-detail">';
+
+    // Header
+    html += '<div class="wd-header">' +
+      '<div class="wd-header-left">' +
+        '<button class="wd-back-btn" id="wd-back-btn"><i class="fa-solid fa-arrow-left"></i> Back to Fleet</button>' +
+        '<div class="wd-header-info">' +
+          '<h2>' + name + '</h2>' +
+          '<div class="wd-header-meta">' +
+            '<span>' + w.worker_id + '</span><span class="meta-sep">\u00B7</span>' +
+            '<span>' + ip + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="wd-header-right">' +
+        '<span class="state-pill ' + state + '" id="wd-state-pill">' + _stateLabel(state) + '</span>' +
+        '<button class="wd-refresh-btn" id="wd-refresh-btn"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>' +
+        '<button class="wd-emergency-btn" id="wd-emergency-btn"><i class="fa-solid fa-circle-stop"></i> Emergency Stop</button>' +
+      '</div></div>';
+
+    // Status Cards
+    html += '<div class="wd-status-grid" id="wd-status-grid">' + _renderStatusCards() + '</div>';
+
+    // Content
+    html += '<div class="wd-content">';
+
+    // Main Column
+    html += '<div class="wd-main-col">';
+
+    // Strategy Selector
+    html += '<div class="wd-panel">' +
+      '<div class="wd-panel-header">Strategy Selection<span class="panel-badge">BACKEND</span></div>' +
+      '<div class="wd-panel-body" id="wd-strat-selector-body">' +
+        '<div class="loading-state" style="min-height:60px;"><div class="spinner"></div><p>Loading strategies\u2026</p></div>' +
+      '</div></div>';
+
+    // Runtime Config
+    html += '<div class="wd-panel">' +
+      '<div class="wd-panel-header">Runtime Configuration</div>' +
+      '<div class="wd-panel-body" id="wd-runtime-body">' + _renderRuntimeConfig() + '</div></div>';
+
+    // Strategy Parameters
+    html += '<div class="wd-panel">' +
+      '<div class="wd-panel-header">Strategy Parameters<span class="panel-badge" id="wd-param-count">0 PARAMS</span></div>' +
+      '<div class="wd-panel-body"><div class="wd-params-list" id="wd-params-list">' +
+        '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">Select a strategy to see parameters.</div>' +
+      '</div></div></div>';
+
+    html += '</div>'; // main-col
+
+    // Side Column
+    html += '<div class="wd-side-col">';
+
+    // Deployment Readiness
+    html += '<div class="wd-panel">' +
+      '<div class="wd-panel-header">Deployment Readiness</div>' +
+      '<div class="wd-panel-body"><div class="wd-checklist" id="wd-checklist">' + _renderChecklist() + '</div></div></div>';
+
+    // Deployments
+    html += '<div class="wd-panel">' +
+      '<div class="wd-panel-header">Deployments<span class="panel-badge" id="wd-dep-count">0</span></div>' +
+      '<div class="wd-panel-body" id="wd-deployments-body">' +
+        '<div class="loading-state" style="min-height:60px;"><div class="spinner"></div><p>Loading\u2026</p></div>' +
+      '</div></div>';
+
+    // Activity Timeline
+    html += '<div class="wd-panel">' +
+      '<div class="wd-panel-header">Activity<span class="panel-badge mock">LOCAL UI</span></div>' +
+      '<div class="wd-panel-body"><div class="wd-timeline" id="wd-timeline"></div></div></div>';
+
+    html += '</div>'; // side-col
+    html += '</div>'; // wd-content
+
+    // Action Bar
+    html += '<div class="wd-panel">' +
+      '<div class="wd-action-bar">' +
+        '<div class="wd-action-bar-left">' +
+          '<button class="wd-btn wd-btn-ghost" id="wd-reset-changes"><i class="fa-solid fa-rotate-left"></i> Reset</button>' +
+        '</div>' +
+        '<div class="wd-action-bar-right">' +
+          '<button class="wd-btn wd-btn-primary deploy" id="wd-deploy"><i class="fa-solid fa-rocket"></i> Deploy to Worker</button>' +
+        '</div>' +
+      '</div></div>';
+
+    html += '</div>'; // worker-detail
+    return html;
+  }
+
+  /* ── Attach Events ───────────────────────────────────────── */
+
+  function _attachEvents() {
+    document.getElementById('wd-back-btn').addEventListener('click', function () {
+      App.navigateTo('fleet');
+    });
+
+    document.getElementById('wd-refresh-btn').addEventListener('click', function () {
+      _refreshAll();
+      _addActivity('Refreshed');
+    });
+
+    document.getElementById('wd-emergency-btn').addEventListener('click', function () {
+      ModalManager.show({
+        title: 'Emergency Stop',
+        type: 'danger',
+        bodyHtml: '<p>This will send stop commands for all active deployments on this worker.</p>' +
+          '<div class="modal-warning"><i class="fa-solid fa-triangle-exclamation"></i>' +
+          '<span>All open positions will remain unmanaged. Use with extreme caution.</span></div>',
+        confirmText: 'Stop All',
+        onConfirm: function () {
+          _deployments.forEach(function (d) {
+            var activeStates = ['queued','sent_to_worker','acknowledged_by_worker','loading_strategy','fetching_ticks','generating_initial_bars','warming_up','running'];
+            if (activeStates.indexOf(d.state) !== -1) {
+              ApiClient.stopDeployment(d.deployment_id).catch(function () {});
+            }
+          });
+          ToastManager.show('Emergency stop sent.', 'warning');
+          _addActivity('Emergency stop sent');
+          setTimeout(_fetchDeployments, 2000);
+        }
+      });
+    });
+
+    _attachRuntimeEvents();
+
+    document.getElementById('wd-deploy').addEventListener('click', _handleDeploy);
+
+    document.getElementById('wd-reset-changes').addEventListener('click', function () {
+      var defaults = DeploymentConfig.runtimeDefaults;
+      _runtimeConfig = {};
+      for (var k in defaults) _runtimeConfig[k] = defaults[k];
+      document.getElementById('wd-runtime-body').innerHTML = _renderRuntimeConfig();
+      _attachRuntimeEvents();
+      _selectedStrategyId = null;
+      _selectedStrategy = null;
+      _parameterValues = {};
+      _parameterDefaults = {};
+      _loadStrategies();
+      _updateChecklist();
+      ToastManager.show('Reset to defaults.', 'info');
+      _addActivity('Reset to defaults');
+    });
+  }
+
+  function _attachRuntimeEvents() {
+    document.querySelectorAll('.rc-input').forEach(function (input) {
+      var key = input.getAttribute('data-key');
+
+      /* ── Symbol gets special handling ──────────────── */
+      if (key === 'symbol') {
+        input.addEventListener('input', function () {
+          input.value = input.value.toUpperCase().replace(/\s/g, '');
+          _runtimeConfig.symbol = input.value;
+          _validateSymbolInput();
+          _updateChecklist();
+        });
+        input.addEventListener('blur', function () {
+          input.value = input.value.trim().toUpperCase();
+          _runtimeConfig.symbol = input.value;
+          _validateSymbolInput();
+          _updateChecklist();
+        });
+        return;
+      }
+
+      /* ── All other inputs ──────────────────────────── */
+      input.addEventListener('change', function () {
+        _runtimeConfig[key] = input.type === 'number' ? parseFloat(input.value) : input.value;
+        _updateChecklist();
+        _addActivity('Config: ' + key + ' updated');
+      });
+    });
+  }
+
+  function _validateSymbolInput() {
+    var input = document.getElementById('wd-symbol-input');
+    var errEl = document.getElementById('wd-symbol-error');
+    if (!input || !errEl) return true;
+
+    var val = (input.value || '').trim();
+    var errSpan = errEl.querySelector('span');
+
+    if (!val) {
+      input.classList.remove('input-error');
+      errEl.classList.remove('visible');
+      return false;
+    }
+
+    if (!/^[A-Z0-9._]{1,30}$/.test(val)) {
+      input.classList.add('input-error');
+      errSpan.textContent = 'Only letters, numbers, dots, underscores allowed';
+      errEl.classList.add('visible');
+      return false;
+    }
+
+    input.classList.remove('input-error');
+    errEl.classList.remove('visible');
+    return true;
+  }
+
+  function _attachParamEvents() {
+    document.querySelectorAll('.wd-param-input-ctrl').forEach(function (input) {
+      var key = input.getAttribute('data-key');
+      var handler = function () {
+        var val;
+        if (input.type === 'checkbox') val = input.checked;
+        else if (input.tagName === 'SELECT' || input.type === 'text') val = input.value;
+        else val = parseFloat(input.value);
+        _parameterValues[key] = val;
+        var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
+        if (row) {
+          if (val !== _parameterDefaults[key]) row.classList.add('modified');
+          else row.classList.remove('modified');
+        }
+      };
+      input.addEventListener(input.type === 'checkbox' ? 'change' : 'input', handler);
+    });
+    document.querySelectorAll('.wd-param-reset').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-key');
+        var defVal = _parameterDefaults[key];
+        _parameterValues[key] = defVal;
+        var input = document.querySelector('.wd-param-input-ctrl[data-key="' + key + '"]');
+        if (input) {
+          if (input.type === 'checkbox') input.checked = defVal;
+          else input.value = defVal;
+        }
+        var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
+        if (row) row.classList.remove('modified');
+      });
+    });
+  }
+
+  function _attachDeploymentStopEvents() {
+    document.querySelectorAll('.dep-stop-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var depId = btn.getAttribute('data-depid');
+        ApiClient.stopDeployment(depId).then(function () {
+          ToastManager.show('Stop sent for ' + depId, 'info');
+          _addActivity('Stop sent: ' + depId);
+          setTimeout(_fetchDeployments, 2000);
+        }).catch(function (err) {
+          ToastManager.show('Stop failed: ' + err.message, 'error');
+        });
+      });
+    });
+  }
+
+  /* ── Strategy Loading ────────────────────────────────────── */
+
+  function _loadStrategies() {
+    var el = document.getElementById('wd-strat-selector-body');
+    if (!el) return;
+
+    ApiClient.getStrategies().then(function (data) {
+      _strategies = data.strategies || [];
+      el.innerHTML = _renderStrategySelector();
+
+      var sel = document.getElementById('wd-strategy-select');
+      if (sel) {
+        sel.addEventListener('change', function () {
+          var sid = sel.value;
+          if (!sid) {
+            _selectedStrategyId = null;
+            _selectedStrategy = null;
+            _parameterValues = {};
+            _parameterDefaults = {};
+            _renderStrategyMeta();
+            document.getElementById('wd-params-list').innerHTML =
+              '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">Select a strategy to see parameters.</div>';
+            document.getElementById('wd-param-count').textContent = '0 PARAMS';
+            _updateChecklist();
+            return;
+          }
+          _selectedStrategyId = sid;
+          // Find in loaded list
+          for (var i = 0; i < _strategies.length; i++) {
+            if (_strategies[i].strategy_id === sid) {
+              _selectedStrategy = _strategies[i];
+              break;
+            }
+          }
+          // If list didn't include full parameters, fetch detail
+          if (_selectedStrategy && (!_selectedStrategy.parameters || Object.keys(_selectedStrategy.parameters).length === 0)) {
+            ApiClient.getStrategy(sid).then(function (data) {
+              if (data.ok && data.strategy) {
+                var detail = data.strategy;
+                if (detail.parameters && typeof detail.parameters === 'object') {
+                  _selectedStrategy.parameters = detail.parameters;
+                  _selectedStrategy.parameter_count = Object.keys(detail.parameters).length;
+                }
+              }
+              _renderStrategyMeta();
+              _loadParamsFromSchema();
+              _updateChecklist();
+              _addActivity('Strategy selected: ' + sid);
+            }).catch(function () {
+              _renderStrategyMeta();
+              _loadParamsFromSchema();
+              _updateChecklist();
+            });
+          } else {
+            _renderStrategyMeta();
+            _loadParamsFromSchema();
+            _updateChecklist();
+            _addActivity('Strategy selected: ' + sid);
+          }
+        });
+      }
+    }).catch(function () {
+      el.innerHTML = '<div style="font-size:12px;color:var(--danger);padding:8px 0;">' +
+        'Failed to load strategies from backend.</div>';
+    });
+  }
+
+  function _loadParamsFromSchema() {
+    _parameterValues = {};
+    _parameterDefaults = {};
+
+    if (_selectedStrategy && _selectedStrategy.parameters) {
+      var schema = _selectedStrategy.parameters;
+      Object.keys(schema).forEach(function (key) {
+        var spec = schema[key];
+        if (typeof spec === 'object' && spec.default !== undefined) {
+          _parameterValues[key] = spec.default;
+          _parameterDefaults[key] = spec.default;
+        }
+      });
+    }
+
+    var el = document.getElementById('wd-params-list');
+    if (el) {
+      el.innerHTML = _renderParams();
+      _attachParamEvents();
+    }
+
+    var countEl = document.getElementById('wd-param-count');
+    if (countEl) countEl.textContent = Object.keys(_parameterValues).length + ' PARAMS';
+  }
+
+  /* ── Deployments Loading ─────────────────────────────────── */
+
+  function _fetchDeployments() {
+    var el = document.getElementById('wd-deployments-body');
+    if (!el) return;
+
+    ApiClient.getDeployments().then(function (data) {
+      var all = data.deployments || [];
+      var wid = _currentWorker.worker_id;
+      _deployments = all.filter(function (d) { return d.worker_id === wid; });
+      _deployments.sort(function (a, b) {
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+      });
+
+      var countEl = document.getElementById('wd-dep-count');
+      if (countEl) countEl.textContent = _deployments.length;
+
+      el.innerHTML = _renderDeployments();
+      _attachDeploymentStopEvents();
+    }).catch(function () {
+      el.innerHTML = '<div style="font-size:12px;color:var(--danger);padding:8px 0;">Failed to load deployments.</div>';
+    });
+  }
+
+  /* ── Deploy Handler ──────────────────────────────────────── */
+
+  function _handleDeploy() {
+    if (!_selectedStrategyId) {
+      ToastManager.show('Select a strategy first.', 'warning');
+      return;
+    }
+
+    /* ── Symbol validation ───────────────────────────── */
+    var symbolVal = (_runtimeConfig.symbol || '').trim().toUpperCase();
+    _runtimeConfig.symbol = symbolVal;
+    var symInput = document.getElementById('wd-symbol-input');
+    if (symInput) symInput.value = symbolVal;
+
+    if (!symbolVal) {
+      ToastManager.show('Enter a symbol.', 'warning');
+      if (symInput) symInput.focus();
+      return;
+    }
+    if (!/^[A-Z0-9._]{1,30}$/.test(symbolVal)) {
+      ToastManager.show('Invalid symbol — letters, numbers, dots, underscores only.', 'warning');
+      _validateSymbolInput();
+      if (symInput) symInput.focus();
+      return;
+    }
+
+    if (!_runtimeConfig.bar_size_points || _runtimeConfig.bar_size_points <= 0) {
+      ToastManager.show('Bar Size Points must be > 0.', 'warning');
+      return;
+    }
+
+    var w = _currentWorker;
+    var name = w.worker_name || w.worker_id;
+    var modCount = _getModifiedCount();
+    var tlDisplay = _runtimeConfig.tick_lookback_value + ' ' + _runtimeConfig.tick_lookback_unit;
+    var stratName = _selectedStrategy ? (_selectedStrategy.strategy_name || _selectedStrategyId) : _selectedStrategyId;
+
+    var bodyHtml =
+      '<p>Deploy strategy to <strong>' + name + '</strong>?</p>' +
+      '<div class="modal-summary">' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Worker</span><span class="modal-summary-value">' + name + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Strategy</span><span class="modal-summary-value">' + stratName + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Symbol</span><span class="modal-summary-value">' + _runtimeConfig.symbol + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Tick Lookback</span><span class="modal-summary-value">' + tlDisplay + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Bar Size Points</span><span class="modal-summary-value">' + _runtimeConfig.bar_size_points + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Max Bars in Memory</span><span class="modal-summary-value">' + _runtimeConfig.max_bars_memory + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Lot Size</span><span class="modal-summary-value">' + _runtimeConfig.lot_size + '</span></div>' +
+        '<div class="modal-summary-row"><span class="modal-summary-label">Modified Params</span><span class="modal-summary-value">' + modCount + '</span></div>' +
+      '</div>';
+
+    ModalManager.show({
+      title: 'Deploy Strategy',
+      bodyHtml: bodyHtml,
+      confirmText: 'Deploy',
+      onConfirm: function () {
+        var payload = {
+          strategy_id: _selectedStrategyId,
+          worker_id: w.worker_id,
+          symbol: _runtimeConfig.symbol,
+          tick_lookback_value: _runtimeConfig.tick_lookback_value,
+          tick_lookback_unit: _runtimeConfig.tick_lookback_unit,
+          bar_size_points: _runtimeConfig.bar_size_points,
+          max_bars_in_memory: _runtimeConfig.max_bars_memory,
+          lot_size: _runtimeConfig.lot_size,
+          strategy_parameters: _parameterValues,
+        };
+
+        _addActivity('Deploying ' + stratName + ' to ' + name + '\u2026');
+
+        ApiClient.createDeployment(payload).then(function (data) {
+          ToastManager.show('Deployment created: ' + data.deployment_id, 'success');
+          _addActivity('Deployment created: ' + data.deployment_id);
+          setTimeout(_fetchDeployments, 2000);
+        }).catch(function (err) {
+          ToastManager.show('Deployment failed: ' + err.message, 'error');
+          _addActivity('Deployment failed: ' + err.message);
+        });
+      }
+    });
+  }
+
+  /* ── Refresh ─────────────────────────────────────────────── */
+
+  function _refreshAll() {
+    _refreshWorkerStatus();
+    _fetchDeployments();
+  }
+
+  function _refreshWorkerStatus() {
+    if (!_currentWorker) return;
+    ApiClient.getFleetWorkers().then(function (data) {
+      var workers = data.workers || [];
+      var wid = _currentWorker.worker_id;
+      for (var i = 0; i < workers.length; i++) {
+        if (workers[i].worker_id === wid) {
+          _currentWorker = workers[i];
+          var grid = document.getElementById('wd-status-grid');
+          if (grid) grid.innerHTML = _renderStatusCards();
+          var pill = document.getElementById('wd-state-pill');
+          if (pill) {
+            var st = _currentWorker.state || 'unknown';
+            pill.className = 'state-pill ' + st;
+            pill.textContent = _stateLabel(st);
+          }
+          _updateChecklist();
+          return;
+        }
+      }
+    }).catch(function () {});
+  }
+
+  /* ── Public ──────────────────────────────────────────────── */
+
+  function render(workerData) {
+    _currentWorker = workerData;
+    _initState();
+
+    document.getElementById('main-content').innerHTML = _buildPage();
+    _attachEvents();
+
+    _addActivity('Worker detail opened: ' + (workerData.worker_name || workerData.worker_id));
+
+    // Load backend data
+    _loadStrategies();
+    _fetchDeployments();
+
+    _refreshInterval = setInterval(_refreshAll, 5000);
+  }
+
+  function destroy() {
+    if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; }
+    _currentWorker = null;
+  }
+
+  return { render: render, destroy: destroy };
+})();
+```
+
+---
+
+## FILE: `vm/core/worker_agent.py`
+
+- Relative path: `vm/core/worker_agent.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/core/worker_agent.py`
+- Size bytes: `11364`
+- SHA256: `82e076fefc176cb26a2cc8aeb4ec9d71299eea86d057c7713db1830bb7b2fc2d`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+"""
+JINNI Grid - Worker Agent
+Heartbeat + Command polling + Strategy Runner management.
+worker/worker_agent.py
+"""
+import os
+import sys
+import time
+import socket
+import threading
+import yaml
+import requests
+
+_worker_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_worker_dir)
+if _worker_dir not in sys.path:
+    sys.path.insert(0, _worker_dir)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from vm.core.strategy_worker import StrategyRunner
+from vm.trading.portfolio import TradeLedger
+
+
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    if not os.path.exists(config_path):
+        print(f"[ERROR] config.yaml not found at {config_path}")
+        sys.exit(1)
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def detect_host():
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        return f"{hostname} ({ip})"
+    except Exception:
+        return socket.gethostname()
+
+
+class WorkerAgent:
+    def __init__(self, config: dict):
+        self.worker_id = config["worker"]["worker_id"]
+        self.worker_name = config["worker"].get("worker_name", self.worker_id)
+        self.mother_url = config["mother_server"]["url"].rstrip("/")
+        self.heartbeat_interval = config["heartbeat"].get("interval_seconds", 10)
+        self.agent_version = config["agent"].get("version", "0.1.0")
+        self.host = detect_host()
+
+        self._runner: StrategyRunner | None = None
+        self._runner_lock = threading.Lock()
+
+        # Local trade ledger for persistence (Bug 18 fix)
+        self._ledger = TradeLedger(self.worker_id)
+        print(f"[AGENT] TradeLedger initialized for worker '{self.worker_id}'")
+
+    # ── Heartbeat ───────────────────────────────────────────
+
+    def _build_heartbeat_payload(self) -> dict:
+        runner = self._runner
+        diag = runner.get_diagnostics() if runner else {}
+
+        runner_state = diag.get("runner_state", "idle")
+        if runner_state in ("idle", "running", "warming_up"):
+            worker_state = "online"
+        elif runner_state == "failed":
+            worker_state = "error"
+        elif runner_state == "stopped":
+            worker_state = "online"
+        else:
+            worker_state = runner_state if runner else "online"
+
+        active_strategies = []
+        if diag.get("strategy_id"):
+            active_strategies = [diag["strategy_id"]]
+
+        errors = []
+        if diag.get("last_error"):
+            errors = [diag["last_error"]]
+
+        return {
+            "worker_id": self.worker_id,
+            "worker_name": self.worker_name,
+            "host": self.host,
+            "state": worker_state,
+            "agent_version": self.agent_version,
+            "mt5_state": diag.get("mt5_state"),
+            "account_id": diag.get("account_id"),
+            "broker": diag.get("broker"),
+            "active_strategies": active_strategies,
+            "open_positions_count": diag.get("open_positions_count", 0),
+            "floating_pnl": diag.get("floating_pnl", 0.0),
+            "errors": errors,
+            # Pipeline
+            "total_ticks": diag.get("total_ticks", 0),
+            "total_bars": diag.get("total_bars", 0),
+            "on_bar_calls": diag.get("on_bar_calls", 0),
+            "signal_count": diag.get("signal_count", 0),
+            "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
+            "current_price": diag.get("current_price"),
+            # MT5 account data (for portfolio)
+            "account_balance": diag.get("account_balance"),
+            "account_equity": diag.get("account_equity"),
+        }
+
+    def send_heartbeat(self):
+        endpoint = f"{self.mother_url}/api/Grid/workers/heartbeat"
+        payload = self._build_heartbeat_payload()
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=10)
+            data = resp.json()
+            status = "REGISTERED" if data.get("registered") else "OK"
+            print(f"[HEARTBEAT] {status} | worker={self.worker_id}")
+        except requests.exceptions.ConnectionError:
+            print(f"[WARNING] Could not reach Mother Server at {self.mother_url}")
+        except Exception as e:
+            print(f"[ERROR] Heartbeat: {type(e).__name__}: {e}")
+
+    # ── Trade Reporting (Bug 13/18/19 fix) ──────────────────
+
+    def _report_trade(self, report: dict):
+        """Report a closed trade to Mother server AND save to local ledger."""
+        # 1. Save to local TradeLedger
+        try:
+            self._ledger.add_trade(
+                report,
+                deployment_id=report.get("deployment_id"),
+                strategy_id=report.get("strategy_id"),
+            )
+            print(f"[TRADE] Saved locally: {report.get('direction')} "
+                  f"{report.get('symbol')} profit={report.get('profit', 0):.2f}")
+        except Exception as e:
+            print(f"[ERROR] Local trade save failed: {e}")
+
+        # 2. POST to Mother Server
+        payload = {
+            "trade_id": report.get("id"),
+            "deployment_id": report.get("deployment_id"),
+            "strategy_id": report.get("strategy_id"),
+            "worker_id": report.get("worker_id"),
+            "symbol": report.get("symbol", ""),
+            "direction": report.get("direction", ""),
+            "entry_price": report.get("entry_price", 0),
+            "exit_price": report.get("exit_price"),
+            "entry_time": str(report.get("entry_time", "")),
+            "exit_time": str(report.get("exit_time", "")),
+            "exit_reason": report.get("exit_reason"),
+            "sl_level": report.get("sl_level"),
+            "tp_level": report.get("tp_level"),
+            "lot_size": report.get("lot_size", 0.01),
+            "ticket": report.get("ticket"),
+            "points_pnl": report.get("points_pnl", 0),
+            "profit": report.get("profit", 0),
+            "bars_held": report.get("bars_held", 0),
+        }
+        endpoint = f"{self.mother_url}/api/portfolio/trades/report"
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=10)
+            if resp.status_code == 200:
+                print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
+                      f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+            else:
+                print(f"[ERROR] Trade report HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            print(f"[ERROR] Trade report to Mother failed: {e}")
+
+    # ── Command Polling ─────────────────────────────────────
+
+    def poll_commands(self):
+        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/poll"
+        try:
+            resp = requests.get(endpoint, timeout=10)
+            data = resp.json()
+            commands = data.get("commands", [])
+            for cmd in commands:
+                self._handle_command(cmd)
+        except requests.exceptions.ConnectionError:
+            pass
+        except Exception as e:
+            print(f"[ERROR] Command poll: {type(e).__name__}: {e}")
+
+    def _handle_command(self, cmd: dict):
+        cmd_type = cmd.get("command_type")
+        cmd_id = cmd.get("command_id")
+        payload = cmd.get("payload", {})
+        print(f"[COMMAND] Received: {cmd_type} ({cmd_id})")
+        self._ack_command(cmd_id)
+
+        if cmd_type == "deploy_strategy":
+            self._handle_deploy(payload)
+        elif cmd_type == "stop_strategy":
+            self._handle_stop(payload)
+        else:
+            print(f"[COMMAND] Unknown command type: {cmd_type}")
+
+    def _ack_command(self, command_id: str):
+        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/ack"
+        try:
+            requests.post(endpoint, json={"command_id": command_id}, timeout=10)
+            print(f"[COMMAND] Ack sent: {command_id}")
+        except Exception as e:
+            print(f"[ERROR] Ack failed: {e}")
+
+    def _report_runner_status(self, status: dict):
+        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/runner-status"
+        try:
+            requests.post(endpoint, json=status, timeout=10)
+        except Exception as e:
+            print(f"[ERROR] Runner status report failed: {e}")
+
+    # ── Deploy / Stop ───────────────────────────────────────
+
+    def _handle_deploy(self, payload: dict):
+        with self._runner_lock:
+            if self._runner:
+                # Bug 20 fix: log clear warning when replacing existing runner
+                print(f"[WARNING] Replacing existing runner "
+                      f"(deployment={self._runner.deployment_id}) "
+                      f"with new deployment {payload.get('deployment_id')}. "
+                      f"Only one runner per worker is supported.")
+                self._runner.stop()
+                self._runner = None
+
+            # Inject worker_id so StrategyRunner can include it in trade reports
+            payload["worker_id"] = self.worker_id
+
+            runner = StrategyRunner(
+                deployment_config=payload,
+                status_callback=self._report_runner_status,
+                trade_callback=self._report_trade,
+            )
+            self._runner = runner
+            runner.start()
+
+    def _handle_stop(self, payload: dict):
+        with self._runner_lock:
+            if self._runner:
+                dep_id = payload.get("deployment_id")
+                if dep_id and self._runner.deployment_id != dep_id:
+                    print(f"[COMMAND] Stop ignored — deployment_id mismatch.")
+                    return
+                self._runner.stop()
+                self._runner = None
+                print(f"[RUNNER] Stopped deployment {dep_id}")
+            else:
+                print("[COMMAND] Stop received but no active runner.")
+
+    # ── Main Loop ───────────────────────────────────────────
+
+    def run(self):
+        print("")
+        print("=" * 56)
+        print("  JINNI Grid Worker Agent")
+        print("=" * 56)
+        print(f"  Worker ID:    {self.worker_id}")
+        print(f"  Worker Name:  {self.worker_name}")
+        print(f"  Host:         {self.host}")
+        print(f"  Mother URL:   {self.mother_url}")
+        print(f"  Heartbeat:    {self.heartbeat_interval}s")
+        print(f"  Agent:        v{self.agent_version}")
+        print(f"  Trade Ledger: data/portfolio_{self.worker_id}.db")
+        print("=" * 56)
+        print("")
+
+        try:
+            while True:
+                self.send_heartbeat()
+                self.poll_commands()
+                time.sleep(self.heartbeat_interval)
+
+        except KeyboardInterrupt:
+            print("")
+            print(f"[SHUTDOWN] Stopping worker agent '{self.worker_id}'...")
+            with self._runner_lock:
+                if self._runner:
+                    self._runner.stop()
+            sys.exit(0)
+
+```
+
+---
+
+## FILE: `vm/trading/indicators.py`
+
+- Relative path: `vm/trading/indicators.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/indicators.py`
 - Size bytes: `7085`
 - SHA256: `91b2f5f74c0354d5f48ec8887a79fa64817afc12718014bf054de243b480eac7`
 - Guessed MIME type: `text/x-python`
@@ -1573,10 +2319,366 @@ class IndicatorEngine:
 
 ---
 
-## FILE: `worker/portfolio.py`
+## FILE: `vm/trading/mt5_history.py`
 
-- Relative path: `worker/portfolio.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/portfolio.py`
+- Relative path: `vm/trading/mt5_history.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/mt5_history.py`
+- Size bytes: `11402`
+- SHA256: `313590ee95ef2e5c7a6cbd850a43dbcbc35d3e1412441af3b39044a82b9b8d0c`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+"""
+worker/mt5_history.py
+MT5 Deal History — Source of Truth for Trade Records
+
+Converts MT5 named-tuple results to plain dicts immediately
+to prevent 'tuple indices must be integers' errors.
+"""
+
+import time
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, Any, List
+
+log = logging.getLogger("jinni.mt5history")
+
+_mt5 = None
+
+
+def _get_mt5():
+    global _mt5
+    if _mt5 is None:
+        try:
+            import MetaTrader5 as mt5
+            _mt5 = mt5
+        except ImportError:
+            log.error("MetaTrader5 package not available")
+            return None
+    return _mt5
+
+
+# ── Safe conversion: MT5 deal object → plain dict ───────────
+
+def _deal_to_dict(deal) -> dict:
+    """
+    Convert an MT5 TradeDeal object (named tuple / numpy row) to a plain dict.
+    Uses getattr() for safety — works regardless of MT5 version.
+    """
+    return {
+        "ticket": int(getattr(deal, "ticket", 0)),
+        "order": int(getattr(deal, "order", 0)),
+        "time": int(getattr(deal, "time", 0)),
+        "time_msc": int(getattr(deal, "time_msc", 0)),
+        "type": int(getattr(deal, "type", 0)),
+        "entry": int(getattr(deal, "entry", 0)),
+        "magic": int(getattr(deal, "magic", 0)),
+        "position_id": int(getattr(deal, "position_id", 0)),
+        "reason": int(getattr(deal, "reason", -1)),
+        "volume": float(getattr(deal, "volume", 0.0)),
+        "price": float(getattr(deal, "price", 0.0)),
+        "commission": float(getattr(deal, "commission", 0.0)),
+        "swap": float(getattr(deal, "swap", 0.0)),
+        "profit": float(getattr(deal, "profit", 0.0)),
+        "fee": float(getattr(deal, "fee", 0.0) or 0.0),
+        "symbol": str(getattr(deal, "symbol", "")),
+        "comment": str(getattr(deal, "comment", "")),
+        "external_id": str(getattr(deal, "external_id", "")),
+    }
+
+
+# ── Deal Reason Mapping ─────────────────────────────────────
+
+_REASON_MAP = None
+
+
+def _get_reason_map() -> dict:
+    global _REASON_MAP
+    if _REASON_MAP is not None:
+        return _REASON_MAP
+
+    mt5 = _get_mt5()
+    if mt5 is None:
+        return {}
+
+    _REASON_MAP = {}
+    defs = [
+        ("DEAL_REASON_CLIENT", "MANUAL_CLOSE"),
+        ("DEAL_REASON_MOBILE", "MANUAL_CLOSE"),
+        ("DEAL_REASON_WEB", "MANUAL_CLOSE"),
+        ("DEAL_REASON_EXPERT", "STRATEGY_CLOSE"),
+        ("DEAL_REASON_SL", "SL_HIT"),
+        ("DEAL_REASON_TP", "TP_HIT"),
+        ("DEAL_REASON_SO", "STOP_OUT"),
+        ("DEAL_REASON_ROLLOVER", "ROLLOVER"),
+        ("DEAL_REASON_VMARGIN", "VARIATION_MARGIN"),
+        ("DEAL_REASON_SPLIT", "SPLIT"),
+    ]
+    for attr, label in defs:
+        val = getattr(mt5, attr, None)
+        if val is not None:
+            _REASON_MAP[int(val)] = label
+
+    log.info(f"[MT5-HIST] Reason map loaded: {_REASON_MAP}")
+    return _REASON_MAP
+
+
+# ── Core: Fetch Closed Position ─────────────────────────────
+
+def fetch_closed_position(
+    position_ticket: int,
+    symbol: str = "",
+    max_retries: int = 5,
+    retry_delay_ms: int = 300,
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch complete trade record for a closed position from MT5 deal history.
+    Retries with increasing delay because MT5 needs time to finalize history.
+    """
+    mt5 = _get_mt5()
+    if mt5 is None:
+        log.error("[MT5-HIST] MT5 module not available")
+        return None
+
+    position_ticket = int(position_ticket)
+    log.info(f"[MT5-HIST] Fetching history: ticket={position_ticket} symbol={symbol}")
+
+    for attempt in range(1, max_retries + 1):
+        # Increasing delay: 300ms, 600ms, 900ms, 1200ms, 1500ms
+        delay_s = (retry_delay_ms * attempt) / 1000.0
+        time.sleep(delay_s)
+
+        try:
+            from_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            to_time = datetime.now(timezone.utc) + timedelta(hours=1)
+
+            raw_deals = mt5.history_deals_get(
+                from_time, to_time,
+                position=position_ticket
+            )
+
+            if raw_deals is None:
+                err = mt5.last_error()
+                log.warning(
+                    f"[MT5-HIST] Attempt {attempt}/{max_retries}: "
+                    f"history_deals_get returned None. "
+                    f"MT5 error: {err}"
+                )
+                continue
+
+            if len(raw_deals) == 0:
+                log.warning(
+                    f"[MT5-HIST] Attempt {attempt}/{max_retries}: "
+                    f"0 deals for position {position_ticket}"
+                )
+                continue
+
+            # Convert ALL deals to plain dicts immediately
+            deals = []
+            for i, raw in enumerate(raw_deals):
+                try:
+                    d = _deal_to_dict(raw)
+                    deals.append(d)
+                    log.debug(
+                        f"[MT5-HIST]   deal[{i}]: ticket={d['ticket']} "
+                        f"entry={d['entry']} type={d['type']} "
+                        f"price={d['price']} profit={d['profit']} "
+                        f"commission={d['commission']} reason={d['reason']}"
+                    )
+                except Exception as conv_err:
+                    log.error(
+                        f"[MT5-HIST] Failed to convert deal[{i}]: {conv_err} "
+                        f"raw type={type(raw)} raw={raw}"
+                    )
+                    continue
+
+            if not deals:
+                log.warning(
+                    f"[MT5-HIST] Attempt {attempt}: {len(raw_deals)} raw deals "
+                    f"but 0 converted successfully"
+                )
+                continue
+
+            log.info(
+                f"[MT5-HIST] Attempt {attempt}: {len(deals)} deals "
+                f"for position {position_ticket}"
+            )
+
+            return _build_trade_record(position_ticket, deals, symbol)
+
+        except Exception as e:
+            log.error(
+                f"[MT5-HIST] Attempt {attempt}/{max_retries} exception: "
+                f"{type(e).__name__}: {e}"
+            )
+            continue
+
+    log.error(
+        f"[MT5-HIST] FAILED after {max_retries} retries "
+        f"for position {position_ticket}"
+    )
+    return None
+
+
+# ── Build trade record from parsed deal dicts ───────────────
+
+def _build_trade_record(
+    position_ticket: int,
+    deals: List[dict],
+    symbol: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a clean trade record from a list of deal dicts.
+    All deals are already plain dicts (safe to use ["key"]).
+    """
+    reason_map = _get_reason_map()
+
+    # Separate IN (entry=0) and OUT (entry=1,2,3) deals
+    in_deals = [d for d in deals if d["entry"] == 0]
+    out_deals = [d for d in deals if d["entry"] in (1, 2, 3)]
+
+    if not in_deals:
+        log.warning(
+            f"[MT5-HIST] No IN deal for position {position_ticket}. "
+            f"Deal entries: {[d['entry'] for d in deals]}"
+        )
+    if not out_deals:
+        log.warning(
+            f"[MT5-HIST] No OUT deal for position {position_ticket} "
+            f"— may still be open"
+        )
+        return None
+
+    in_deal = in_deals[0] if in_deals else None
+    out_deal = out_deals[-1]
+
+    # Aggregate financials across ALL deals for this position
+    total_profit = round(sum(d["profit"] for d in deals), 2)
+    total_commission = round(sum(d["commission"] for d in deals), 2)
+    total_swap = round(sum(d["swap"] for d in deals), 2)
+    total_fee = round(sum(d["fee"] for d in deals), 2)
+    net_pnl = round(total_profit + total_commission + total_swap + total_fee, 2)
+
+    # Entry info
+    entry_price = in_deal["price"] if in_deal else out_deal["price"]
+    entry_time = in_deal["time"] if in_deal else out_deal["time"]
+
+    # Exit info
+    exit_price = out_deal["price"]
+    exit_time = out_deal["time"]
+
+    # Direction: IN deal type 0=BUY→long, 1=SELL→short
+    if in_deal:
+        direction = "long" if in_deal["type"] == 0 else "short"
+    else:
+        # OUT deal type is opposite of position direction
+        direction = "short" if out_deal["type"] == 0 else "long"
+
+    volume = in_deal["volume"] if in_deal else out_deal["volume"]
+    trade_symbol = (in_deal or out_deal)["symbol"] or symbol
+
+    # Close reason from MT5 reason enum
+    close_reason = "UNKNOWN"
+    out_reason_code = out_deal["reason"]
+    if out_reason_code >= 0:
+        close_reason = reason_map.get(out_reason_code, "UNKNOWN")
+        log.info(
+            f"[MT5-HIST] Reason code={out_reason_code} -> {close_reason}"
+        )
+
+    # Fallback: check deal comment
+    if close_reason in ("UNKNOWN", "STRATEGY_CLOSE"):
+        comment = out_deal["comment"].lower()
+        if "tp" in comment:
+            close_reason = "TP_HIT"
+        elif "sl" in comment:
+            close_reason = "SL_HIT"
+        elif "so" in comment:
+            close_reason = "STOP_OUT"
+
+    all_tickets = [d["ticket"] for d in in_deals + out_deals]
+
+    record = {
+        "mt5_position_ticket": position_ticket,
+        "mt5_deal_tickets": all_tickets,
+        "mt5_entry_deal": in_deal["ticket"] if in_deal else None,
+        "mt5_exit_deal": out_deal["ticket"],
+        "symbol": trade_symbol,
+        "direction": direction,
+        "volume": volume,
+        "lot_size": volume,
+        "entry_price": round(entry_price, 8),
+        "exit_price": round(exit_price, 8),
+        "entry_time": entry_time,
+        "exit_time": exit_time,
+        "profit": total_profit,
+        "commission": total_commission,
+        "swap": total_swap,
+        "fee": total_fee,
+        "net_pnl": net_pnl,
+        "exit_reason": close_reason,
+        "mt5_comment": out_deal["comment"],
+        "mt5_source": True,
+    }
+
+    log.info(
+        f"[MT5-HIST] RECORD BUILT: pos={position_ticket} "
+        f"{direction.upper()} {trade_symbol} "
+        f"entry={entry_price:.5f} exit={exit_price:.5f} "
+        f"profit={total_profit:.2f} comm={total_commission:.2f} "
+        f"swap={total_swap:.2f} net={net_pnl:.2f} "
+        f"reason={close_reason} deals={all_tickets}"
+    )
+
+    return record
+
+
+# ── Bulk fetch (for reconciliation) ─────────────────────────
+
+def fetch_recent_closed_positions(since_hours: int = 24) -> list:
+    mt5 = _get_mt5()
+    if mt5 is None:
+        return []
+
+    from_time = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+    to_time = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    raw = mt5.history_deals_get(from_time, to_time)
+    if raw is None or len(raw) == 0:
+        return []
+
+    # Convert and group by position_id
+    positions = {}
+    for r in raw:
+        try:
+            d = _deal_to_dict(r)
+        except Exception:
+            continue
+        pid = d["position_id"]
+        if pid == 0:
+            continue
+        positions.setdefault(pid, []).append(d)
+
+    results = []
+    for pid, pos_deals in positions.items():
+        has_in = any(d["entry"] == 0 for d in pos_deals)
+        has_out = any(d["entry"] in (1, 2, 3) for d in pos_deals)
+        if has_in and has_out:
+            rec = _build_trade_record(pid, pos_deals, "")
+            if rec:
+                results.append(rec)
+
+    log.info(f"[MT5-HIST] Bulk fetch: {len(results)} closed positions")
+    return results
+```
+
+---
+
+## FILE: `vm/trading/portfolio.py`
+
+- Relative path: `vm/trading/portfolio.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/portfolio.py`
 - Size bytes: `10094`
 - SHA256: `a78fb92e3c0b342bdc454bc956e657ca79c1610712bd0347cb590986731c3c29`
 - Guessed MIME type: `text/x-python`
@@ -1834,311 +2936,4 @@ class TradeLedger:
             "equity_curve": self.get_equity_curve(limit=500),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
-```
-
----
-
-## FILE: `worker/README.md`
-
-- Relative path: `worker/README.md`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/README.md`
-- Size bytes: `1215`
-- SHA256: `28ead786e4eb10d807621099ef8cec7fec39d645e950a3b2dd1180cea90184c1`
-- Guessed MIME type: `text/markdown`
-- Guessed encoding: `unknown`
-
-````markdown
-# JINNI Grid — Worker Agent
-
-## What It Does
-
-Sends periodic heartbeat POST requests to the JINNI Grid Mother Server.
-The Mother Server uses these heartbeats to track worker status in the Fleet dashboard.
-
-## Prerequisites
-
-- Python 3.10+
-- `requests` and `pyyaml` packages
-
-## Setup
-
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Edit `config.yaml`:
-   - Set `worker_id` to a unique ID for this worker
-   - Set `worker_name` to a human-readable name
-   - Set `mother_server.url` to your Mother Server's IP and port
-   - Adjust `heartbeat.interval_seconds` if needed
-
-3. Run the agent:
-   ```bash
-   python worker_agent.py
-   ```
-
-## Config Reference
-
-```yaml
-worker:
-  worker_id: "vm-worker-01"      # Unique worker identifier
-  worker_name: "Worker 01"       # Display name
-
-mother_server:
-  url: "http://192.168.1.100:5100"  # Mother Server address
-
-heartbeat:
-  interval_seconds: 5            # Seconds between heartbeats
-
-agent:
-  version: "0.1.0"               # Agent version reported to Mother Server
-```
-
-## What It Does NOT Do
-
-- No MT5 connectivity
-- No trading execution
-- No strategy deployment
-- No broker/account detection
-
-Those features come in future phases.
-````
-
----
-
-## FILE: `worker/worker_agent.py`
-
-- Relative path: `worker/worker_agent.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/worker_agent.py`
-- Size bytes: `8281`
-- SHA256: `3f7c2363d67c80f55159925893dbf80d96c2d95cce9a540f02d6c7a439e791a2`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI Grid - Worker Agent
-Heartbeat + Command polling + Strategy Runner management.
-worker/worker_agent.py
-"""
-import os
-import sys
-import time
-import socket
-import threading
-import yaml
-import requests
-
-_worker_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(_worker_dir)
-if _worker_dir not in sys.path:
-    sys.path.insert(0, _worker_dir)
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-from strategyWorker import StrategyRunner
-
-
-def load_config():
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
-    if not os.path.exists(config_path):
-        print(f"[ERROR] config.yaml not found at {config_path}")
-        sys.exit(1)
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def detect_host():
-    try:
-        hostname = socket.gethostname()
-        ip = socket.gethostbyname(hostname)
-        return f"{hostname} ({ip})"
-    except Exception:
-        return socket.gethostname()
-
-
-class WorkerAgent:
-    def __init__(self, config: dict):
-        self.worker_id = config["worker"]["worker_id"]
-        self.worker_name = config["worker"].get("worker_name", self.worker_id)
-        self.mother_url = config["mother_server"]["url"].rstrip("/")
-        self.heartbeat_interval = config["heartbeat"].get("interval_seconds", 10)
-        self.agent_version = config["agent"].get("version", "0.1.0")
-        self.host = detect_host()
-
-        self._runner: StrategyRunner | None = None
-        self._runner_lock = threading.Lock()
-
-    # ── Heartbeat ───────────────────────────────────────────
-
-    def _build_heartbeat_payload(self) -> dict:
-        runner = self._runner
-        diag = runner.get_diagnostics() if runner else {}
-
-        runner_state = diag.get("runner_state", "idle")
-        if runner_state in ("idle", "running", "warming_up"):
-            worker_state = "online"
-        elif runner_state == "failed":
-            worker_state = "error"
-        elif runner_state == "stopped":
-            worker_state = "online"
-        else:
-            worker_state = runner_state if runner else "online"
-
-        active_strategies = []
-        if diag.get("strategy_id"):
-            active_strategies = [diag["strategy_id"]]
-
-        errors = []
-        if diag.get("last_error"):
-            errors = [diag["last_error"]]
-
-        return {
-            "worker_id": self.worker_id,
-            "worker_name": self.worker_name,
-            "host": self.host,
-            "state": worker_state,
-            "agent_version": self.agent_version,
-            "mt5_state": diag.get("mt5_state"),
-            "account_id": diag.get("account_id"),
-            "broker": diag.get("broker"),
-            "active_strategies": active_strategies,
-            "open_positions_count": diag.get("open_positions_count", 0),
-            "floating_pnl": diag.get("floating_pnl", 0.0),
-            "errors": errors,
-            # Pipeline
-            "total_ticks": diag.get("total_ticks", 0),
-            "total_bars": diag.get("total_bars", 0),
-            "on_bar_calls": diag.get("on_bar_calls", 0),
-            "signal_count": diag.get("signal_count", 0),
-            "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
-            "current_price": diag.get("current_price"),
-        }
-
-    def send_heartbeat(self):
-        endpoint = f"{self.mother_url}/api/Grid/workers/heartbeat"
-        payload = self._build_heartbeat_payload()
-        try:
-            resp = requests.post(endpoint, json=payload, timeout=10)
-            data = resp.json()
-            status = "REGISTERED" if data.get("registered") else "OK"
-            print(f"[HEARTBEAT] {status} | worker={self.worker_id}")
-        except requests.exceptions.ConnectionError:
-            print(f"[WARNING] Could not reach Mother Server at {self.mother_url}")
-        except Exception as e:
-            print(f"[ERROR] Heartbeat: {type(e).__name__}: {e}")
-
-    # ── Command Polling ─────────────────────────────────────
-
-    def poll_commands(self):
-        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/poll"
-        try:
-            resp = requests.get(endpoint, timeout=10)
-            data = resp.json()
-            commands = data.get("commands", [])
-            for cmd in commands:
-                self._handle_command(cmd)
-        except requests.exceptions.ConnectionError:
-            pass
-        except Exception as e:
-            print(f"[ERROR] Command poll: {type(e).__name__}: {e}")
-
-    def _handle_command(self, cmd: dict):
-        cmd_type = cmd.get("command_type")
-        cmd_id = cmd.get("command_id")
-        payload = cmd.get("payload", {})
-        print(f"[COMMAND] Received: {cmd_type} ({cmd_id})")
-        self._ack_command(cmd_id)
-
-        if cmd_type == "deploy_strategy":
-            self._handle_deploy(payload)
-        elif cmd_type == "stop_strategy":
-            self._handle_stop(payload)
-        else:
-            print(f"[COMMAND] Unknown command type: {cmd_type}")
-
-    def _ack_command(self, command_id: str):
-        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/ack"
-        try:
-            requests.post(endpoint, json={"command_id": command_id}, timeout=10)
-            print(f"[COMMAND] Ack sent: {command_id}")
-        except Exception as e:
-            print(f"[ERROR] Ack failed: {e}")
-
-    def _report_runner_status(self, status: dict):
-        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/runner-status"
-        try:
-            requests.post(endpoint, json=status, timeout=10)
-        except Exception as e:
-            print(f"[ERROR] Runner status report failed: {e}")
-
-    # ── Deploy / Stop ───────────────────────────────────────
-
-    def _handle_deploy(self, payload: dict):
-        with self._runner_lock:
-            if self._runner:
-                print("[RUNNER] Stopping existing runner before new deployment.")
-                self._runner.stop()
-                self._runner = None
-
-            runner = StrategyRunner(
-                deployment_config=payload,
-                status_callback=self._report_runner_status,
-            )
-            self._runner = runner
-            runner.start()
-
-    def _handle_stop(self, payload: dict):
-        with self._runner_lock:
-            if self._runner:
-                dep_id = payload.get("deployment_id")
-                if dep_id and self._runner.deployment_id != dep_id:
-                    print(f"[COMMAND] Stop ignored — deployment_id mismatch.")
-                    return
-                self._runner.stop()
-                self._runner = None
-                print(f"[RUNNER] Stopped deployment {dep_id}")
-            else:
-                print("[COMMAND] Stop received but no active runner.")
-
-    # ── Main Loop ───────────────────────────────────────────
-
-    def run(self):
-        print("")
-        print("=" * 56)
-        print("  JINNI Grid Worker Agent")
-        print("=" * 56)
-        print(f"  Worker ID:    {self.worker_id}")
-        print(f"  Worker Name:  {self.worker_name}")
-        print(f"  Host:         {self.host}")
-        print(f"  Mother URL:   {self.mother_url}")
-        print(f"  Heartbeat:    {self.heartbeat_interval}s")
-        print(f"  Agent:        v{self.agent_version}")
-        print("=" * 56)
-        print("")
-
-        try:
-            while True:
-                self.send_heartbeat()
-                self.poll_commands()
-                time.sleep(self.heartbeat_interval)
-
-        except KeyboardInterrupt:
-            print("")
-            print(f"[SHUTDOWN] Stopping worker agent '{self.worker_id}'...")
-            with self._runner_lock:
-                if self._runner:
-                    self._runner.stop()
-            sys.exit(0)
-
-
-def main():
-    config = load_config()
-    agent = WorkerAgent(config)
-    agent.run()
-
-
-if __name__ == "__main__":
-    main()
 ```

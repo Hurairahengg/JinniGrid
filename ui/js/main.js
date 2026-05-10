@@ -577,7 +577,7 @@ var DashboardRenderer = (function () {
         _metricItem('Deploys', totalDeps + ' total') +
         _metricItem('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
         _metricItem('Ticks', _fmtNum(totalTicks)) +
-        _metricItem('Bars', _fmtNum(totalBars)) +
+        _metricItem('Bars', _fmtNum(totalBars) + (totalBarsInMem > 0 ? ' (' + totalBarsInMem + ' mem)' : '')) +
         _metricItem('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
         _metricItem('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
         _metricItem('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
@@ -607,7 +607,7 @@ var DashboardRenderer = (function () {
         data: { labels: labels, datasets: [{ data: values, borderColor: ChartHelper.accentColor(), backgroundColor: gradient, borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10 }] },
         options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return '$' + v.toFixed(0); } } } } })
       });
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Equity fetch failed:', err); });
   }
 
   /* ── Portfolio Stats Grid ─────────────────────────────────── */
@@ -629,7 +629,7 @@ var DashboardRenderer = (function () {
         _metricItem('Best', _fmtMoney(p.best_trade), 'text-success') +
         _metricItem('Worst', _fmtMoney(p.worst_trade), 'text-danger') +
         _metricItem('Open Pos', p.open_positions || 0);
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Portfolio stats fetch failed:', err); });
   }
 
   /* ── Fleet Panel ──────────────────────────────────────────── */
@@ -666,7 +666,7 @@ var DashboardRenderer = (function () {
       html += '</tbody></table></div>';
       html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';
       el.innerHTML = html;
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Fleet fetch failed:', err); });
   }
 
   /* ── Pipeline Panel ───────────────────────────────────────── */
@@ -675,10 +675,11 @@ var DashboardRenderer = (function () {
       var workers = data.workers || [];
       var el = document.getElementById('dash-pipeline');
       if (!el) return;
-      var totalTicks = 0, totalBars = 0, totalSignals = 0, totalOnBar = 0;
+      var totalTicks = 0, totalBars = 0, totalBarsInMem = 0, totalSignals = 0, totalOnBar = 0;
       workers.forEach(function (w) {
         totalTicks += (w.total_ticks || 0);
         totalBars += (w.total_bars || 0);
+        totalBarsInMem += (w.current_bars_in_memory || 0);
         totalSignals += (w.signal_count || 0);
         totalOnBar += (w.on_bar_calls || 0);
       });
@@ -686,15 +687,16 @@ var DashboardRenderer = (function () {
         el.innerHTML = _emptyState('fa-diagram-project', 'No Pipeline Data', 'Connect worker agents to see live flow.');
         return;
       }
+      var barsMemNote = totalBarsInMem > 0 ? '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + totalBarsInMem + ' in mem</div>' : '';
       el.innerHTML = '<div class="pipeline-flow">' +
         '<div class="pipeline-node"><span class="pipeline-val accent">' + _fmtNum(totalTicks) + '</span><span class="pipeline-lbl">Ticks</span></div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
-        '<div class="pipeline-node"><span class="pipeline-val warning">' + _fmtNum(totalBars) + '</span><span class="pipeline-lbl">Bars</span></div>' +
+        '<div class="pipeline-node"><span class="pipeline-val warning">' + _fmtNum(totalBars) + '</span><span class="pipeline-lbl">Bars Gen\u2019d</span>' + barsMemNote + '</div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
         '<div class="pipeline-node"><span class="pipeline-val success">' + _fmtNum(totalOnBar) + '</span><span class="pipeline-lbl">on_bar()</span></div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
         '<div class="pipeline-node"><span class="pipeline-val danger">' + _fmtNum(totalSignals) + '</span><span class="pipeline-lbl">Signals</span></div></div>';
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Pipeline fetch failed:', err); });
   }
 
   /* ── Strategies Panel ─────────────────────────────────────── */
@@ -752,7 +754,7 @@ var DashboardRenderer = (function () {
       html += '</tbody></table></div>';
       html += '<span class="view-fleet-link" onclick="App.navigateTo(\'portfolio\')">View Portfolio <i class="fa-solid fa-arrow-right"></i></span>';
       el.innerHTML = html;
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Trades fetch failed:', err); });
   }
 
   /* ── Recent Deployments Panel ─────────────────────────────── */
@@ -765,19 +767,29 @@ var DashboardRenderer = (function () {
         el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No deployments yet.</div>';
         return;
       }
-      deps = deps.slice().reverse().slice(0, 6);
-      var html = '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th></tr></thead><tbody>';
+      /* API returns DESC by created_at — take newest 6 directly */
+      deps = deps.slice(0, 6);
+      var html = '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th><th>Created</th></tr></thead><tbody>';
       deps.forEach(function (d) {
-        var sc = d.state === 'running' ? 'online' : d.state === 'failed' ? 'error' : d.state === 'stopped' ? 'offline' : 'stale';
+        var state = d.state || 'unknown';
+        var sc = state === 'running' ? 'online' : state === 'failed' ? 'error' : state === 'stopped' ? 'offline' : 'stale';
+        var created = d.created_at ? d.created_at.replace('T', ' ').substring(0, 16) : '\u2014';
+        var stratLabel = d.strategy_name || d.strategy_id || '\u2014';
+        if (d.strategy_version) stratLabel += ' v' + d.strategy_version;
         html += '<tr>' +
-          '<td class="mono">' + d.strategy_id + '</td>' +
-          '<td class="mono">' + d.worker_id + '</td>' +
-          '<td class="mono">' + d.symbol + '</td>' +
-          '<td>' + _statPill(d.state.toUpperCase().replace(/_/g, ' '), sc) + '</td></tr>';
+          '<td class="mono">' + stratLabel + '</td>' +
+          '<td class="mono">' + (d.worker_id || '\u2014') + '</td>' +
+          '<td class="mono">' + (d.symbol || '\u2014') + '</td>' +
+          '<td>' + _statPill(state.toUpperCase().replace(/_/g, ' '), sc) + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + created + '</td></tr>';
       });
       html += '</tbody></table></div>';
       el.innerHTML = html;
-    }).catch(function () {});
+    }).catch(function (err) {
+      console.error('[DASHBOARD] Failed to load deployments:', err);
+      var el = document.getElementById('dash-deploys');
+      if (el) el.innerHTML = '<div style="padding:16px 0;color:var(--danger);font-size:12px;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Failed to load deployments. Check console.</div>';
+    });
   }
 
   function _openWorker(workerId) {
@@ -830,7 +842,7 @@ var FleetRenderer = (function () {
         _row('Balance', bal) +
         _row('Positions', '<span style="color:var(--accent);">' + (w.open_positions_count || 0) + '</span>') +
         _row('Float PnL', '<span style="' + pnlStyle + '">' + pnlVal + '</span>') +
-        _row('Pipeline', '<span class="mono" style="font-size:10px;">' + (w.total_ticks || 0) + ' ticks / ' + (w.total_bars || 0) + ' bars / ' + (w.signal_count || 0) + ' sig</span>') +
+        _row('Pipeline', '<span class="mono" style="font-size:10px;">' + (w.total_ticks || 0) + ' ticks / ' + (w.total_bars || 0) + ' bars (' + (w.current_bars_in_memory || 0) + ' mem) / ' + (w.signal_count || 0) + ' sig</span>') +
         _row('Heartbeat', _fmtAge(w.heartbeat_age_seconds)) +
         '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Deploy</div>' +
       '</div></div>';

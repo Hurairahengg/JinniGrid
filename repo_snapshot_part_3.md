@@ -1,9 +1,4 @@
 # Repository Snapshot - Part 3 of 4
-
-- Root folder: `/home/hurairahengg/Documents/JinniGrid`
-- you knwo my whole jinni grid systeM/ basically it is thereliek a kubernetes server setup what it does is basically a mother server with ui and bunch of lank state VMs. the vms run a speacial typa of renko style bars not normal timeframe u will get more context in the codes but yeha and we can uipload strategy codes though mother ui and it wiill run strategy mt5 report and ecetra ecetra. currently im done coding the strategy system but its not tested yet an have confrimed bugs. so firm i wil ldrop u my whole project codebases from my readme. understand each code its role and keep in ur context i will give u big promtps to update code later duinerstood
-- Total files indexed: `26`
-- Files in this chunk: `7`
 ## Full Project Tree
 
 ```text
@@ -24,15 +19,22 @@ ui/css/style.css
 ui/index.html
 ui/js/main.js
 ui/js/workerDetailRenderer.js
-worker/config.yaml
-worker/event_log.py
-worker/execution.py
-worker/indicators.py
-worker/portfolio.py
-worker/README.md
-worker/requirements.txt
-worker/strategyWorker.py
-worker/worker_agent.py
+vm/__init__.py
+vm/config/__init__.py
+vm/config/config.yaml
+vm/core/__init__.py
+vm/core/strategy_worker.py
+vm/core/worker_agent.py
+vm/logging/__init__.py
+vm/logging/event_log.py
+vm/main.py
+vm/README.md
+vm/requirements.txt
+vm/trading/__init__.py
+vm/trading/execution.py
+vm/trading/indicators.py
+vm/trading/mt5_history.py
+vm/trading/portfolio.py
 ```
 
 ## Files In This Chunk - Part 3
@@ -41,10 +43,17 @@ worker/worker_agent.py
 app/logging_config.py
 app/services/strategy_registry.py
 config.yaml
+main.py
 README.md
-ui/js/workerDetailRenderer.js
-worker/requirements.txt
-worker/strategyWorker.py
+requirements.txt
+ui/css/style.css
+vm/logging/__init__.py
+vm/logging/event_log.py
+vm/main.py
+vm/README.md
+vm/requirements.txt
+vm/trading/__init__.py
+vm/trading/execution.py
 ```
 
 ## File Contents
@@ -176,8 +185,8 @@ def log_event(category: str, level: int, message: str, **data):
 
 - Relative path: `app/services/strategy_registry.py`
 - Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/app/services/strategy_registry.py`
-- Size bytes: `10796`
-- SHA256: `109eff2fc4083c77d8c034935b5b2f366813c48060d8eabd527bb33a6d81d650`
+- Size bytes: `10771`
+- SHA256: `0fc46d3d54c59a1933b9b4b84f0a8be3e60ad91c48ff183b5b00736ccbf782df`
 - Guessed MIME type: `text/x-python`
 - Guessed encoding: `unknown`
 
@@ -200,8 +209,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.persistence import (
-    save_strategy, get_all_strategies_db, get_strategy_db,
-    delete_strategy_db, log_event_db,
+    save_strategy, get_all_strategies_db, get_strategy_db, log_event_db
 )
 
 log = logging.getLogger("jinni.strategy")
@@ -518,14 +526,14 @@ def load_strategies_from_disk():
 
 - Relative path: `config.yaml`
 - Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/config.yaml`
-- Size bytes: `215`
-- SHA256: `9039bd9eac4b71db0e39e29e0cee3b35ba952ba108ebbd604db1570561efc855`
+- Size bytes: `208`
+- SHA256: `ac043fc6a227c9af80479836d074ea1ea2830e6be82c98e54af34453cb700ad1`
 - Guessed MIME type: `application/yaml`
 - Guessed encoding: `unknown`
 
 ```yaml
 server:
-  host: "192.168.3.232"
+  host: "0.0.0.0"
   port: 5100
   debug: true
   cors_origins:
@@ -538,6 +546,78 @@ app:
 fleet:
   stale_threshold_seconds: 30
   offline_threshold_seconds: 90
+```
+
+---
+
+## FILE: `main.py`
+
+- Relative path: `main.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/main.py`
+- Size bytes: `1516`
+- SHA256: `daf426a24f04de9e5be139a8dab64582e366954b7f0aa1026dff550d6e55c288`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+"""
+JINNI GRID - Mother Server Entry Point
+Run: python main.py
+"""
+
+import os
+import uvicorn
+
+from app.logging_config import setup_logging
+from app import create_app
+from app.config import Config
+
+
+# Initialize logging BEFORE anything else
+setup_logging()
+
+# App instance at module level so uvicorn reloader can find it
+app = create_app()
+
+
+def main():
+    server_config = Config.get_server_config()
+    app_config = Config.get_app_config()
+
+    host = server_config.get("host", "0.0.0.0")
+    port = server_config.get("port", 5100)
+    debug = server_config.get("debug", False)
+    name = app_config.get("name", "JINNI GRID Mother Server")
+    version = app_config.get("version", "0.2.0")
+
+    print("")
+    print("=" * 56)
+    print(f"  {name} v{version}")
+    print("=" * 56)
+    print(f"  Dashboard:   http://{host}:{port}")
+    print(f"  API docs:    http://{host}:{port}/docs")
+    print(f"  Debug mode:  {debug}")
+    print(f"  Database:    data/jinni_grid.db")
+    print(f"  Logs:        data/logs/")
+    print("=" * 56)
+    print("")
+
+    run_kwargs = {"host": host, "port": port, "reload": debug}
+
+    if debug:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(project_root, "data")
+        run_kwargs["reload_dirs"] = [
+            os.path.join(project_root, "app"),
+            os.path.join(project_root, "ui"),
+        ]
+        run_kwargs["reload_excludes"] = [data_dir]
+
+    uvicorn.run("main:app", **run_kwargs)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 ---
@@ -727,957 +807,1280 @@ Thresholds are configurable in `config.yaml` under `fleet`.
 
 ---
 
-## FILE: `ui/js/workerDetailRenderer.js`
+## FILE: `requirements.txt`
 
-- Relative path: `ui/js/workerDetailRenderer.js`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/js/workerDetailRenderer.js`
-- Size bytes: `41744`
-- SHA256: `c16202a61f1f2cc1e9a3028821660e16b0ccc95ce0436b8b2748d1b0e6af8c5c`
-- Guessed MIME type: `text/javascript`
+- Relative path: `requirements.txt`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/requirements.txt`
+- Size bytes: `68`
+- SHA256: `e1bb6d373c1916a0cfc941a59698ad1f70b2d70b84da0c666131c6adeec80e95`
+- Guessed MIME type: `text/plain`
 - Guessed encoding: `unknown`
 
-```javascript
-/* workerDetailRenderer.js */
-
-var WorkerDetailRenderer = (function () {
-  'use strict';
-
-  var _currentWorker = null;
-  var _refreshInterval = null;
-  var _runtimeConfig = {};
-  var _parameterValues = {};
-  var _parameterDefaults = {};
-  var _activityLog = [];
-
-  // Backend-loaded data
-  var _strategies = [];
-  var _selectedStrategyId = null;
-  var _selectedStrategy = null;
-  var _deployments = [];
-
-  /* ── Helpers ──────────────────────────────────────────────── */
-
-  function _formatAge(seconds) {
-    if (seconds === null || seconds === undefined) return '<span class="value-null">\u2014</span>';
-    var s = Math.round(seconds);
-    if (s < 60) return s + 's ago';
-    if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
-    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
-  }
-
-  function _nullVal(val, fallback) {
-    if (val === null || val === undefined || val === '')
-      return '<span class="value-null">' + (fallback || '\u2014') + '</span>';
-    return String(val);
-  }
-
-  function _stateColor(state) {
-    var map = { online: 'green', running: 'green', idle: 'blue', warning: 'amber', stale: 'orange', error: 'red', offline: 'gray' };
-    return map[state] || 'gray';
-  }
-
-  function _stateLabel(state) {
-    if (!state) return 'Unknown';
-    return state.charAt(0).toUpperCase() + state.slice(1);
-  }
-
-  function _formatPnl(val) {
-    if (val === null || val === undefined) return '<span class="value-null">\u2014</span>';
-    var sign = val >= 0 ? '+' : '';
-    return sign + '$' + val.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  }
-
-  function _timeNow() {
-    var d = new Date();
-    return String(d.getHours()).padStart(2, '0') + ':' +
-           String(d.getMinutes()).padStart(2, '0') + ':' +
-           String(d.getSeconds()).padStart(2, '0');
-  }
-
-  function _getModifiedCount() {
-    var count = 0;
-    for (var k in _parameterValues) {
-      if (_parameterValues[k] !== _parameterDefaults[k]) count++;
-    }
-    return count;
-  }
-
-  function _deployStateClass(state) {
-    if (!state) return 'unknown';
-    if (state === 'running') return 'online';
-    if (state === 'failed') return 'error';
-    if (state === 'stopped') return 'offline';
-    if (state.indexOf('loading') !== -1 || state.indexOf('fetching') !== -1 ||
-        state.indexOf('generating') !== -1 || state.indexOf('warming') !== -1) return 'warning';
-    return 'stale';
-  }
-
-  /* ── State Init ──────────────────────────────────────────── */
-
-  function _initState() {
-    _activityLog = [];
-    _strategies = [];
-    _selectedStrategyId = null;
-    _selectedStrategy = null;
-    _deployments = [];
-
-    var defaults = DeploymentConfig.runtimeDefaults;
-    _runtimeConfig = {};
-    for (var k in defaults) _runtimeConfig[k] = defaults[k];
-
-    _parameterValues = {};
-    _parameterDefaults = {};
-  }
-
-  /* ── Activity Log ────────────────────────────────────────── */
-
-  function _addActivity(text) {
-    _activityLog.unshift({ time: _timeNow(), text: text });
-    if (_activityLog.length > 30) _activityLog.length = 30;
-    _renderTimeline();
-  }
-
-  function _renderTimeline() {
-    var el = document.getElementById('wd-timeline');
-    if (!el) return;
-    if (_activityLog.length === 0) {
-      el.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No activity yet.</div>';
-      return;
-    }
-    var html = '';
-    _activityLog.forEach(function (entry) {
-      html += '<div class="wd-timeline-item">' +
-        '<span class="wd-timeline-time">' + entry.time + '</span>' +
-        '<span class="wd-timeline-dot"></span>' +
-        '<span class="wd-timeline-text">' + entry.text + '</span></div>';
-    });
-    el.innerHTML = html;
-  }
-
-  /* ── Status Cards ────────────────────────────────────────── */
-
-  function _renderStatusCards() {
-    var w = _currentWorker;
-    var state = w.state || 'unknown';
-    var strats = (w.active_strategies && w.active_strategies.length > 0)
-      ? w.active_strategies.join(', ') : 'None';
-
-    /* ── MT5 info ────────────────────────────────────── */
-    var mt5Val = _nullVal(w.mt5_state, 'Not Connected');
-    var mt5Color = '';
-    if (w.mt5_state === 'connected') {
-      mt5Val = '<span style="color:var(--success);">Connected</span>';
-    } else if (w.mt5_state === 'disconnected') {
-      mt5Val = '<span style="color:var(--danger);">Disconnected</span>';
-    }
-
-    var brokerAcct = '';
-    if (w.broker || w.account_id) {
-      brokerAcct = (w.broker || '?') + ' / ' + (w.account_id || '?');
-    } else {
-      brokerAcct = '<span class="value-null">\u2014</span>';
-    }
-
-    /* ── Pipeline stats ──────────────────────────────── */
-    var ticks = w.total_ticks || 0;
-    var bars = w.total_bars || 0;
-    var signals = w.signal_count || 0;
-    var onBarCalls = w.on_bar_calls || 0;
-
-    var pipelineVal =
-      '<span style="color:var(--accent);">' + _fmtNum(ticks) + '</span> ticks \u2192 ' +
-      '<span style="color:var(--warning);">' + _fmtNum(bars) + '</span> bars \u2192 ' +
-      '<span style="color:var(--success);">' + signals + '</span> signals';
-
-    /* ── Current price ───────────────────────────────── */
-    var priceVal = (w.current_price !== null && w.current_price !== undefined)
-      ? '<span class="mono">' + w.current_price.toFixed(2) + '</span>'
-      : '<span class="value-null">\u2014</span>';
-
-    /* ── PnL ─────────────────────────────────────────── */
-    var pnl = _formatPnl(w.floating_pnl);
-    var pnlStyle = '';
-    if (w.floating_pnl !== null && w.floating_pnl !== undefined) {
-      pnlStyle = w.floating_pnl >= 0 ? 'color:var(--success)' : 'color:var(--danger)';
-    }
-
-    var cards = [
-      { label: 'Connection',       value: '<div class="status-indicator"><span class="wd-status-dot-sm ' + _stateColor(state) + '"></span>' + _stateLabel(state) + '</div>' },
-      { label: 'MT5',              value: mt5Val },
-      { label: 'Broker / Account', value: brokerAcct },
-      { label: 'Active Strategy',  value: strats },
-      { label: 'Pipeline',         value: pipelineVal },
-      { label: 'Current Price',    value: priceVal },
-      { label: 'Equity',           value: '<span style="' + pnlStyle + '">' + pnl + '</span>' },
-      { label: 'Last Heartbeat',   value: _formatAge(w.heartbeat_age_seconds) },
-    ];
-
-    var html = '';
-    cards.forEach(function (c) {
-      html += '<div class="wd-status-card"><span class="status-label">' + c.label + '</span><span class="status-value">' + c.value + '</span></div>';
-    });
-    return html;
-  }
-
-  function _fmtNum(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-    return String(n);
-  }
-
-  /* ── Checklist ───────────────────────────────────────────── */
-
-  function _renderChecklist() {
-    var w = _currentWorker;
-    var onlineStates = ['online', 'running', 'idle'];
-    var isOnline = onlineStates.indexOf(w.state) !== -1;
-    var hasSid = !!_selectedStrategyId;
-    var hasSym = !!_runtimeConfig.symbol && /^[A-Z0-9._]{1,30}$/.test((_runtimeConfig.symbol || '').trim().toUpperCase());
-    var tlOk = _runtimeConfig.tick_lookback_value > 0;
-    var bsOk = _runtimeConfig.bar_size_points > 0;
-    var mbOk = _runtimeConfig.max_bars_memory > 0;
-
-    var items = [
-      { pass: isOnline, text: 'Worker connected', type: isOnline ? 'pass' : 'fail' },
-      { pass: hasSid, text: 'Strategy selected' + (hasSid ? ' (' + _selectedStrategyId + ')' : ''), type: hasSid ? 'pass' : 'fail' },
-      { pass: hasSym, text: 'Symbol selected', type: hasSym ? 'pass' : 'fail' },
-      { pass: tlOk, text: 'Tick lookback configured', type: tlOk ? 'pass' : 'fail' },
-      { pass: bsOk, text: 'Bar size points configured', type: bsOk ? 'pass' : 'fail' },
-      { pass: mbOk, text: 'Max bars memory configured', type: mbOk ? 'pass' : 'fail' },
-      { pass: true, text: 'Parameters configured', type: 'pass' },
-    ];
-
-    var iconMap = { pass: 'fa-check', fail: 'fa-xmark', warn: 'fa-exclamation', info: 'fa-info' };
-    var html = '';
-    items.forEach(function (item) {
-      var textClass = item.type === 'pass' ? 'wd-check-text pass' : 'wd-check-text';
-      html += '<div class="wd-check-item">' +
-        '<span class="wd-check-icon ' + item.type + '"><i class="fa-solid ' + iconMap[item.type] + '"></i></span>' +
-        '<span class="' + textClass + '">' + item.text + '</span></div>';
-    });
-    return html;
-  }
-
-  function _updateChecklist() {
-    var el = document.getElementById('wd-checklist');
-    if (el) el.innerHTML = _renderChecklist();
-  }
-
-  /* ── Build Strategy Selector ─────────────────────────────── */
-
-  function _renderStrategySelector() {
-    if (_strategies.length === 0) {
-      return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
-        '<i class="fa-solid fa-circle-info" style="margin-right:6px;opacity:0.5;"></i>' +
-        'No strategies registered. Go to Strategies page to upload one.</div>';
-    }
-
-    var html = '<div class="wd-form-grid" style="grid-template-columns:1fr;">' +
-      '<div class="wd-form-group"><label class="wd-form-label">Select Strategy</label>' +
-      '<select class="wd-form-select" id="wd-strategy-select">';
-    html += '<option value="">-- Choose a strategy --</option>';
-    _strategies.forEach(function (s) {
-      var disabled = s.validation_status !== 'validated' ? ' disabled' : '';
-      var label = (s.strategy_name || s.strategy_id) + ' v' + (s.version || '?');
-      if (s.validation_status !== 'validated') label += ' (invalid)';
-      var selected = (_selectedStrategyId === s.strategy_id) ? ' selected' : '';
-      html += '<option value="' + s.strategy_id + '"' + disabled + selected + '>' + label + '</option>';
-    });
-    html += '</select></div></div>';
-
-    // Metadata preview
-    html += '<div id="wd-strat-meta"></div>';
-    return html;
-  }
-
-  function _renderStrategyMeta() {
-    var el = document.getElementById('wd-strat-meta');
-    if (!el) return;
-    if (!_selectedStrategy) { el.innerHTML = ''; return; }
-
-    var s = _selectedStrategy;
-    el.innerHTML = '<div class="wd-metadata" style="margin-top:12px;"><div class="wd-metadata-grid">' +
-      '<div class="wd-metadata-item"><span class="wd-metadata-label">ID</span><span class="wd-metadata-value">' + s.strategy_id + '</span></div>' +
-      '<div class="wd-metadata-item"><span class="wd-metadata-label">Name</span><span class="wd-metadata-value">' + (s.strategy_name || s.strategy_id) + '</span></div>' +
-      '<div class="wd-metadata-item"><span class="wd-metadata-label">Version</span><span class="wd-metadata-value">' + (s.version || '\u2014') + '</span></div>' +
-      '<div class="wd-metadata-item"><span class="wd-metadata-label">Parameters</span><span class="wd-metadata-value">' + (s.parameter_count || 0) + '</span></div>' +
-      (s.description ? '<div class="wd-metadata-item" style="grid-column:1/-1;"><span class="wd-metadata-label">Description</span><span class="wd-metadata-value" style="font-family:Inter,sans-serif;">' + s.description + '</span></div>' : '') +
-      '<div class="wd-metadata-item"><span class="wd-metadata-label">Status</span><span class="wd-metadata-value" style="color:var(--success);">' + (s.validation_status || 'unknown') + '</span></div>' +
-      '</div></div>';
-  }
-
-  /* ── Build Strategy Parameters ───────────────────────────── */
-
-  function _renderParams() {
-    if (!_selectedStrategy || !_selectedStrategy.parameters ||
-        Object.keys(_selectedStrategy.parameters).length === 0) {
-      return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
-        'No editable parameters exposed by this strategy.</div>';
-    }
-
-    var schema = _selectedStrategy.parameters;
-    var html = '';
-
-    Object.keys(schema).forEach(function (key) {
-      var spec = schema[key];
-      if (typeof spec !== 'object') return;
-
-      var ptype = spec.type || 'number';
-      var label = spec.label || key;
-      var desc = spec.help || '';
-      var defVal = spec.default !== undefined ? spec.default : '';
-      var val = _parameterValues.hasOwnProperty(key) ? _parameterValues[key] : defVal;
-      var isModified = val !== defVal;
-      var modClass = isModified ? ' modified' : '';
-      var typeBadge = ptype === 'boolean' ? 'bool' : (ptype === 'number' ? (String(defVal).indexOf('.') !== -1 ? 'float' : 'int') : 'string');
-      var input = '';
-
-      if (ptype === 'boolean') {
-        input = '<input type="checkbox" class="wd-toggle wd-param-input-ctrl" data-key="' + key + '"' +
-          (val ? ' checked' : '') + ' />';
-      } else if (ptype === 'select' && spec.options) {
-        input = '<select class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" style="width:120px;text-align:left;">';
-        spec.options.forEach(function (opt) {
-          var optVal = typeof opt === 'object' ? opt.value : opt;
-          var optLabel = typeof opt === 'object' ? (opt.label || opt.value) : opt;
-          input += '<option value="' + optVal + '"' + (String(optVal) === String(val) ? ' selected' : '') + '>' + optLabel + '</option>';
-        });
-        input += '</select>';
-      } else if (ptype === 'string' || ptype === 'text') {
-        input = '<input type="text" class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" value="' + (val || '') + '" style="width:120px;text-align:left;" />';
-      } else {
-        var attrs = 'type="number" class="wd-param-input wd-param-input-ctrl" data-key="' + key + '" value="' + val + '"';
-        if (spec.min !== undefined && spec.min !== null) attrs += ' min="' + spec.min + '"';
-        if (spec.max !== undefined && spec.max !== null) attrs += ' max="' + spec.max + '"';
-        if (spec.step !== undefined && spec.step !== null) attrs += ' step="' + spec.step + '"';
-        input = '<input ' + attrs + ' />';
-      }
-
-      html += '<div class="wd-param-row' + modClass + '" data-key="' + key + '">' +
-        '<div class="wd-param-info">' +
-          '<div class="wd-param-name">' + label +
-            '<span class="wd-param-type-badge type-' + typeBadge + '">' + typeBadge + '</span></div>' +
-          '<div class="wd-param-desc">' + desc + '</div>' +
-        '</div>' +
-        '<div class="wd-param-controls">' +
-          input +
-          '<button class="wd-param-reset" data-key="' + key + '" title="Reset to default"><i class="fa-solid fa-rotate-left"></i></button>' +
-        '</div></div>';
-    });
-
-    return html;
-  }
-
-  /* ── Build Runtime Config ────────────────────────────────── */
-
-  function _renderRuntimeConfig() {
-    var rc = _runtimeConfig;
-    var tlUnits = DeploymentConfig.tickLookbackUnits;
-
-    var tlUnitOpts = tlUnits.map(function (u) {
-      var label = u.charAt(0).toUpperCase() + u.slice(1);
-      return '<option value="' + u + '"' + (rc.tick_lookback_unit === u ? ' selected' : '') + '>' + label + '</option>';
-    }).join('');
-
-    return '<div class="wd-form-grid">' +
-
-      /* ── Symbol (free-text input) ─────────────────────── */
-      '<div class="wd-form-group">' +
-        '<label class="wd-form-label">Symbol</label>' +
-        '<input type="text" class="wd-form-input rc-input" id="wd-symbol-input" data-key="symbol"' +
-          ' value="' + (rc.symbol || '') + '" placeholder="e.g. EURUSD, XAUUSD, BTCUSD"' +
-          ' autocomplete="off" spellcheck="false" />' +
-        '<div class="wd-symbol-hint">Letters, numbers, dots, underscores only — auto-uppercased</div>' +
-        '<div class="wd-field-error" id="wd-symbol-error"><i class="fa-solid fa-circle-xmark"></i><span></span></div>' +
-      '</div>' +
-
-      /* ── Lot Size ─────────────────────────────────────── */
-      '<div class="wd-form-group">' +
-        '<label class="wd-form-label">Lot Size</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="lot_size" value="' + rc.lot_size + '" step="0.01" min="0.01" />' +
-      '</div>' +
-
-      /* ── History Lookback (merged value + unit) ───────── */
-      '<div class="wd-form-group" style="grid-column:1/-1;">' +
-        '<label class="wd-form-label">History Lookback</label>' +
-        '<div class="wd-inline-row">' +
-          '<input type="number" class="wd-form-input rc-input" data-key="tick_lookback_value" value="' + rc.tick_lookback_value + '" step="1" min="1" placeholder="Amount" />' +
-          '<select class="wd-form-select rc-input" data-key="tick_lookback_unit">' + tlUnitOpts + '</select>' +
-        '</div>' +
-      '</div>' +
-
-      /* ── Bar Size Points ──────────────────────────────── */
-      '<div class="wd-form-group">' +
-        '<label class="wd-form-label">Bar Size Points</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="bar_size_points" value="' + rc.bar_size_points + '" step="1" min="1" />' +
-      '</div>' +
-
-      /* ── Max Bars in Memory ───────────────────────────── */
-      '<div class="wd-form-group">' +
-        '<label class="wd-form-label">Max Bars in Memory</label>' +
-        '<input type="number" class="wd-form-input rc-input" data-key="max_bars_memory" value="' + rc.max_bars_memory + '" step="10" min="10" />' +
-      '</div>' +
-
-    '</div>';
-  }
-
-  /* ── Deployments Panel ───────────────────────────────────── */
-
-  function _renderDeployments() {
-    if (_deployments.length === 0) {
-      return '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
-        'No deployments for this worker.</div>';
-    }
-
-    var html = '<div style="display:flex;flex-direction:column;gap:8px;">';
-    _deployments.forEach(function (d) {
-      var stateClass = _deployStateClass(d.state);
-      var updated = d.updated_at ? d.updated_at.replace('T', ' ').substring(0, 19) : '\u2014';
-      html += '<div style="background:var(--bg-secondary);border-radius:6px;padding:10px 14px;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-          '<span class="mono" style="font-size:12px;color:var(--accent);">' + d.deployment_id + '</span>' +
-          '<span class="state-pill ' + stateClass + '">' + d.state.toUpperCase().replace(/_/g, ' ') + '</span>' +
-        '</div>' +
-        '<div style="display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--text-muted);">' +
-          '<span>Strategy: <strong class="mono">' + d.strategy_id + '</strong></span>' +
-          '<span>Symbol: <strong class="mono">' + d.symbol + '</strong></span>' +
-          '<span>Bars: <strong class="mono">' + d.bar_size_points + 'pt / ' + d.max_bars_in_memory + '</strong></span>' +
-        '</div>' +
-        '<div style="display:flex;gap:16px;margin-top:4px;font-size:10.5px;color:var(--text-muted);">' +
-          '<span>Updated: ' + updated + '</span>' +
-          (d.last_error ? '<span style="color:var(--danger);">Error: ' + d.last_error + '</span>' : '') +
-        '</div>';
-
-      // Stop button for active deployments
-      var activeStates = ['queued','sent_to_worker','acknowledged_by_worker','loading_strategy','fetching_ticks','generating_initial_bars','warming_up','running'];
-      if (activeStates.indexOf(d.state) !== -1) {
-        html += '<button class="wd-btn wd-btn-ghost dep-stop-btn" data-depid="' + d.deployment_id + '" style="margin-top:8px;font-size:10.5px;">' +
-          '<i class="fa-solid fa-stop"></i> Stop</button>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-    return html;
-  }
-
-  /* ── Build Full Page ─────────────────────────────────────── */
-
-  function _buildPage() {
-    var w = _currentWorker;
-    var state = w.state || 'unknown';
-    var name = w.worker_name || w.worker_id;
-    var ip = w.host || '\u2014';
-
-    var html = '<div class="worker-detail">';
-
-    // Header
-    html += '<div class="wd-header">' +
-      '<div class="wd-header-left">' +
-        '<button class="wd-back-btn" id="wd-back-btn"><i class="fa-solid fa-arrow-left"></i> Back to Fleet</button>' +
-        '<div class="wd-header-info">' +
-          '<h2>' + name + '</h2>' +
-          '<div class="wd-header-meta">' +
-            '<span>' + w.worker_id + '</span><span class="meta-sep">\u00B7</span>' +
-            '<span>' + ip + '</span>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="wd-header-right">' +
-        '<span class="state-pill ' + state + '" id="wd-state-pill">' + _stateLabel(state) + '</span>' +
-        '<button class="wd-refresh-btn" id="wd-refresh-btn"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>' +
-        '<button class="wd-emergency-btn" id="wd-emergency-btn"><i class="fa-solid fa-circle-stop"></i> Emergency Stop</button>' +
-      '</div></div>';
-
-    // Status Cards
-    html += '<div class="wd-status-grid" id="wd-status-grid">' + _renderStatusCards() + '</div>';
-
-    // Content
-    html += '<div class="wd-content">';
-
-    // Main Column
-    html += '<div class="wd-main-col">';
-
-    // Strategy Selector
-    html += '<div class="wd-panel">' +
-      '<div class="wd-panel-header">Strategy Selection<span class="panel-badge">BACKEND</span></div>' +
-      '<div class="wd-panel-body" id="wd-strat-selector-body">' +
-        '<div class="loading-state" style="min-height:60px;"><div class="spinner"></div><p>Loading strategies\u2026</p></div>' +
-      '</div></div>';
-
-    // Runtime Config
-    html += '<div class="wd-panel">' +
-      '<div class="wd-panel-header">Runtime Configuration</div>' +
-      '<div class="wd-panel-body" id="wd-runtime-body">' + _renderRuntimeConfig() + '</div></div>';
-
-    // Strategy Parameters
-    html += '<div class="wd-panel">' +
-      '<div class="wd-panel-header">Strategy Parameters<span class="panel-badge" id="wd-param-count">0 PARAMS</span></div>' +
-      '<div class="wd-panel-body"><div class="wd-params-list" id="wd-params-list">' +
-        '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">Select a strategy to see parameters.</div>' +
-      '</div></div></div>';
-
-    html += '</div>'; // main-col
-
-    // Side Column
-    html += '<div class="wd-side-col">';
-
-    // Deployment Readiness
-    html += '<div class="wd-panel">' +
-      '<div class="wd-panel-header">Deployment Readiness</div>' +
-      '<div class="wd-panel-body"><div class="wd-checklist" id="wd-checklist">' + _renderChecklist() + '</div></div></div>';
-
-    // Deployments
-    html += '<div class="wd-panel">' +
-      '<div class="wd-panel-header">Deployments<span class="panel-badge" id="wd-dep-count">0</span></div>' +
-      '<div class="wd-panel-body" id="wd-deployments-body">' +
-        '<div class="loading-state" style="min-height:60px;"><div class="spinner"></div><p>Loading\u2026</p></div>' +
-      '</div></div>';
-
-    // Activity Timeline
-    html += '<div class="wd-panel">' +
-      '<div class="wd-panel-header">Activity<span class="panel-badge mock">LOCAL UI</span></div>' +
-      '<div class="wd-panel-body"><div class="wd-timeline" id="wd-timeline"></div></div></div>';
-
-    html += '</div>'; // side-col
-    html += '</div>'; // wd-content
-
-    // Action Bar
-    html += '<div class="wd-panel">' +
-      '<div class="wd-action-bar">' +
-        '<div class="wd-action-bar-left">' +
-          '<button class="wd-btn wd-btn-ghost" id="wd-reset-changes"><i class="fa-solid fa-rotate-left"></i> Reset</button>' +
-        '</div>' +
-        '<div class="wd-action-bar-right">' +
-          '<button class="wd-btn wd-btn-primary deploy" id="wd-deploy"><i class="fa-solid fa-rocket"></i> Deploy to Worker</button>' +
-        '</div>' +
-      '</div></div>';
-
-    html += '</div>'; // worker-detail
-    return html;
-  }
-
-  /* ── Attach Events ───────────────────────────────────────── */
-
-  function _attachEvents() {
-    document.getElementById('wd-back-btn').addEventListener('click', function () {
-      App.navigateTo('fleet');
-    });
-
-    document.getElementById('wd-refresh-btn').addEventListener('click', function () {
-      _refreshAll();
-      _addActivity('Refreshed');
-    });
-
-    document.getElementById('wd-emergency-btn').addEventListener('click', function () {
-      ModalManager.show({
-        title: 'Emergency Stop',
-        type: 'danger',
-        bodyHtml: '<p>This will send stop commands for all active deployments on this worker.</p>' +
-          '<div class="modal-warning"><i class="fa-solid fa-triangle-exclamation"></i>' +
-          '<span>All open positions will remain unmanaged. Use with extreme caution.</span></div>',
-        confirmText: 'Stop All',
-        onConfirm: function () {
-          _deployments.forEach(function (d) {
-            var activeStates = ['queued','sent_to_worker','acknowledged_by_worker','loading_strategy','fetching_ticks','generating_initial_bars','warming_up','running'];
-            if (activeStates.indexOf(d.state) !== -1) {
-              ApiClient.stopDeployment(d.deployment_id).catch(function () {});
-            }
-          });
-          ToastManager.show('Emergency stop sent.', 'warning');
-          _addActivity('Emergency stop sent');
-          setTimeout(_fetchDeployments, 2000);
-        }
-      });
-    });
-
-    _attachRuntimeEvents();
-
-    document.getElementById('wd-deploy').addEventListener('click', _handleDeploy);
-
-    document.getElementById('wd-reset-changes').addEventListener('click', function () {
-      var defaults = DeploymentConfig.runtimeDefaults;
-      _runtimeConfig = {};
-      for (var k in defaults) _runtimeConfig[k] = defaults[k];
-      document.getElementById('wd-runtime-body').innerHTML = _renderRuntimeConfig();
-      _attachRuntimeEvents();
-      _selectedStrategyId = null;
-      _selectedStrategy = null;
-      _parameterValues = {};
-      _parameterDefaults = {};
-      _loadStrategies();
-      _updateChecklist();
-      ToastManager.show('Reset to defaults.', 'info');
-      _addActivity('Reset to defaults');
-    });
-  }
-
-  function _attachRuntimeEvents() {
-    document.querySelectorAll('.rc-input').forEach(function (input) {
-      var key = input.getAttribute('data-key');
-
-      /* ── Symbol gets special handling ──────────────── */
-      if (key === 'symbol') {
-        input.addEventListener('input', function () {
-          input.value = input.value.toUpperCase().replace(/\s/g, '');
-          _runtimeConfig.symbol = input.value;
-          _validateSymbolInput();
-          _updateChecklist();
-        });
-        input.addEventListener('blur', function () {
-          input.value = input.value.trim().toUpperCase();
-          _runtimeConfig.symbol = input.value;
-          _validateSymbolInput();
-          _updateChecklist();
-        });
-        return;
-      }
-
-      /* ── All other inputs ──────────────────────────── */
-      input.addEventListener('change', function () {
-        _runtimeConfig[key] = input.type === 'number' ? parseFloat(input.value) : input.value;
-        _updateChecklist();
-        _addActivity('Config: ' + key + ' updated');
-      });
-    });
-  }
-
-  function _validateSymbolInput() {
-    var input = document.getElementById('wd-symbol-input');
-    var errEl = document.getElementById('wd-symbol-error');
-    if (!input || !errEl) return true;
-
-    var val = (input.value || '').trim();
-    var errSpan = errEl.querySelector('span');
-
-    if (!val) {
-      input.classList.remove('input-error');
-      errEl.classList.remove('visible');
-      return false;
-    }
-
-    if (!/^[A-Z0-9._]{1,30}$/.test(val)) {
-      input.classList.add('input-error');
-      errSpan.textContent = 'Only letters, numbers, dots, underscores allowed';
-      errEl.classList.add('visible');
-      return false;
-    }
-
-    input.classList.remove('input-error');
-    errEl.classList.remove('visible');
-    return true;
-  }
-
-  function _attachParamEvents() {
-    document.querySelectorAll('.wd-param-input-ctrl').forEach(function (input) {
-      var key = input.getAttribute('data-key');
-      var handler = function () {
-        var val;
-        if (input.type === 'checkbox') val = input.checked;
-        else if (input.tagName === 'SELECT' || input.type === 'text') val = input.value;
-        else val = parseFloat(input.value);
-        _parameterValues[key] = val;
-        var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
-        if (row) {
-          if (val !== _parameterDefaults[key]) row.classList.add('modified');
-          else row.classList.remove('modified');
-        }
-      };
-      input.addEventListener(input.type === 'checkbox' ? 'change' : 'input', handler);
-    });
-    document.querySelectorAll('.wd-param-reset').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var key = btn.getAttribute('data-key');
-        var defVal = _parameterDefaults[key];
-        _parameterValues[key] = defVal;
-        var input = document.querySelector('.wd-param-input-ctrl[data-key="' + key + '"]');
-        if (input) {
-          if (input.type === 'checkbox') input.checked = defVal;
-          else input.value = defVal;
-        }
-        var row = document.querySelector('.wd-param-row[data-key="' + key + '"]');
-        if (row) row.classList.remove('modified');
-      });
-    });
-  }
-
-  function _attachDeploymentStopEvents() {
-    document.querySelectorAll('.dep-stop-btn').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var depId = btn.getAttribute('data-depid');
-        ApiClient.stopDeployment(depId).then(function () {
-          ToastManager.show('Stop sent for ' + depId, 'info');
-          _addActivity('Stop sent: ' + depId);
-          setTimeout(_fetchDeployments, 2000);
-        }).catch(function (err) {
-          ToastManager.show('Stop failed: ' + err.message, 'error');
-        });
-      });
-    });
-  }
-
-  /* ── Strategy Loading ────────────────────────────────────── */
-
-  function _loadStrategies() {
-    var el = document.getElementById('wd-strat-selector-body');
-    if (!el) return;
-
-    ApiClient.getStrategies().then(function (data) {
-      _strategies = data.strategies || [];
-      el.innerHTML = _renderStrategySelector();
-
-      var sel = document.getElementById('wd-strategy-select');
-      if (sel) {
-        sel.addEventListener('change', function () {
-          var sid = sel.value;
-          if (!sid) {
-            _selectedStrategyId = null;
-            _selectedStrategy = null;
-            _parameterValues = {};
-            _parameterDefaults = {};
-            _renderStrategyMeta();
-            document.getElementById('wd-params-list').innerHTML =
-              '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">Select a strategy to see parameters.</div>';
-            document.getElementById('wd-param-count').textContent = '0 PARAMS';
-            _updateChecklist();
-            return;
-          }
-          _selectedStrategyId = sid;
-          // Find in loaded list
-          for (var i = 0; i < _strategies.length; i++) {
-            if (_strategies[i].strategy_id === sid) {
-              _selectedStrategy = _strategies[i];
-              break;
-            }
-          }
-          // If list didn't include full parameters, fetch detail
-          if (_selectedStrategy && (!_selectedStrategy.parameters || Object.keys(_selectedStrategy.parameters).length === 0)) {
-            ApiClient.getStrategy(sid).then(function (data) {
-              if (data.ok && data.strategy) {
-                var detail = data.strategy;
-                // Merge parameters from detail into selected
-                if (detail.parameters && typeof detail.parameters === 'object') {
-                  _selectedStrategy.parameters = detail.parameters;
-                  _selectedStrategy.parameter_count = Object.keys(detail.parameters).length;
-                }
-              }
-              _renderStrategyMeta();
-              _loadParamsFromSchema();
-              _updateChecklist();
-              _addActivity('Strategy selected: ' + sid);
-            }).catch(function () {
-              _renderStrategyMeta();
-              _loadParamsFromSchema();
-              _updateChecklist();
-            });
-          } else {
-            _renderStrategyMeta();
-            _loadParamsFromSchema();
-            _updateChecklist();
-            _addActivity('Strategy selected: ' + sid);
-          }
-          _updateChecklist();
-          _addActivity('Strategy selected: ' + sid);
-        });
-      }
-    }).catch(function () {
-      el.innerHTML = '<div style="font-size:12px;color:var(--danger);padding:8px 0;">' +
-        'Failed to load strategies from backend.</div>';
-    });
-  }
-
-  function _loadParamsFromSchema() {
-    _parameterValues = {};
-    _parameterDefaults = {};
-
-    if (_selectedStrategy && _selectedStrategy.parameters) {
-      var schema = _selectedStrategy.parameters;
-      Object.keys(schema).forEach(function (key) {
-        var spec = schema[key];
-        if (typeof spec === 'object' && spec.default !== undefined) {
-          _parameterValues[key] = spec.default;
-          _parameterDefaults[key] = spec.default;
-        }
-      });
-    }
-
-    var el = document.getElementById('wd-params-list');
-    if (el) {
-      el.innerHTML = _renderParams();
-      _attachParamEvents();
-    }
-
-    var countEl = document.getElementById('wd-param-count');
-    if (countEl) countEl.textContent = Object.keys(_parameterValues).length + ' PARAMS';
-  }
-
-  /* ── Deployments Loading ─────────────────────────────────── */
-
-  function _fetchDeployments() {
-    var el = document.getElementById('wd-deployments-body');
-    if (!el) return;
-
-    ApiClient.getDeployments().then(function (data) {
-      var all = data.deployments || [];
-      var wid = _currentWorker.worker_id;
-      _deployments = all.filter(function (d) { return d.worker_id === wid; });
-      _deployments.sort(function (a, b) {
-        return (b.updated_at || '').localeCompare(a.updated_at || '');
-      });
-
-      var countEl = document.getElementById('wd-dep-count');
-      if (countEl) countEl.textContent = _deployments.length;
-
-      el.innerHTML = _renderDeployments();
-      _attachDeploymentStopEvents();
-    }).catch(function () {
-      el.innerHTML = '<div style="font-size:12px;color:var(--danger);padding:8px 0;">Failed to load deployments.</div>';
-    });
-  }
-
-  /* ── Deploy Handler ──────────────────────────────────────── */
-
-  function _handleDeploy() {
-    if (!_selectedStrategyId) {
-      ToastManager.show('Select a strategy first.', 'warning');
-      return;
-    }
-
-    /* ── Symbol validation ───────────────────────────── */
-    var symbolVal = (_runtimeConfig.symbol || '').trim().toUpperCase();
-    _runtimeConfig.symbol = symbolVal;
-    var symInput = document.getElementById('wd-symbol-input');
-    if (symInput) symInput.value = symbolVal;
-
-    if (!symbolVal) {
-      ToastManager.show('Enter a symbol.', 'warning');
-      if (symInput) symInput.focus();
-      return;
-    }
-    if (!/^[A-Z0-9._]{1,30}$/.test(symbolVal)) {
-      ToastManager.show('Invalid symbol — letters, numbers, dots, underscores only.', 'warning');
-      _validateSymbolInput();
-      if (symInput) symInput.focus();
-      return;
-    }
-
-    if (!_runtimeConfig.bar_size_points || _runtimeConfig.bar_size_points <= 0) {
-      ToastManager.show('Bar Size Points must be > 0.', 'warning');
-      return;
-    }
-
-    var w = _currentWorker;
-    var name = w.worker_name || w.worker_id;
-    var modCount = _getModifiedCount();
-    var tlDisplay = _runtimeConfig.tick_lookback_value + ' ' + _runtimeConfig.tick_lookback_unit;
-    var stratName = _selectedStrategy ? (_selectedStrategy.strategy_name || _selectedStrategyId) : _selectedStrategyId;
-
-    var bodyHtml =
-      '<p>Deploy strategy to <strong>' + name + '</strong>?</p>' +
-      '<div class="modal-summary">' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Worker</span><span class="modal-summary-value">' + name + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Strategy</span><span class="modal-summary-value">' + stratName + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Symbol</span><span class="modal-summary-value">' + _runtimeConfig.symbol + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Tick Lookback</span><span class="modal-summary-value">' + tlDisplay + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Bar Size Points</span><span class="modal-summary-value">' + _runtimeConfig.bar_size_points + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Max Bars in Memory</span><span class="modal-summary-value">' + _runtimeConfig.max_bars_memory + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Lot Size</span><span class="modal-summary-value">' + _runtimeConfig.lot_size + '</span></div>' +
-        '<div class="modal-summary-row"><span class="modal-summary-label">Modified Params</span><span class="modal-summary-value">' + modCount + '</span></div>' +
-      '</div>';
-
-    ModalManager.show({
-      title: 'Deploy Strategy',
-      bodyHtml: bodyHtml,
-      confirmText: 'Deploy',
-      onConfirm: function () {
-        var payload = {
-          strategy_id: _selectedStrategyId,
-          worker_id: w.worker_id,
-          symbol: _runtimeConfig.symbol,
-          tick_lookback_value: _runtimeConfig.tick_lookback_value,
-          tick_lookback_unit: _runtimeConfig.tick_lookback_unit,
-          bar_size_points: _runtimeConfig.bar_size_points,
-          max_bars_in_memory: _runtimeConfig.max_bars_memory,
-          lot_size: _runtimeConfig.lot_size,
-          strategy_parameters: _parameterValues,
-        };
-
-        _addActivity('Deploying ' + stratName + ' to ' + name + '\u2026');
-
-        ApiClient.createDeployment(payload).then(function (data) {
-          ToastManager.show('Deployment created: ' + data.deployment_id, 'success');
-          _addActivity('Deployment created: ' + data.deployment_id);
-          setTimeout(_fetchDeployments, 2000);
-        }).catch(function (err) {
-          ToastManager.show('Deployment failed: ' + err.message, 'error');
-          _addActivity('Deployment failed: ' + err.message);
-        });
-      }
-    });
-  }
-
-  /* ── Refresh ─────────────────────────────────────────────── */
-
-  function _refreshAll() {
-    _refreshWorkerStatus();
-    _fetchDeployments();
-  }
-
-  function _refreshWorkerStatus() {
-    if (!_currentWorker) return;
-    ApiClient.getFleetWorkers().then(function (data) {
-      var workers = data.workers || [];
-      var wid = _currentWorker.worker_id;
-      for (var i = 0; i < workers.length; i++) {
-        if (workers[i].worker_id === wid) {
-          _currentWorker = workers[i];
-          var grid = document.getElementById('wd-status-grid');
-          if (grid) grid.innerHTML = _renderStatusCards();
-          var pill = document.getElementById('wd-state-pill');
-          if (pill) {
-            var st = _currentWorker.state || 'unknown';
-            pill.className = 'state-pill ' + st;
-            pill.textContent = _stateLabel(st);
-          }
-          _updateChecklist();
-          return;
-        }
-      }
-    }).catch(function () {});
-  }
-
-  /* ── Public ──────────────────────────────────────────────── */
-
-  function render(workerData) {
-    _currentWorker = workerData;
-    _initState();
-
-    document.getElementById('main-content').innerHTML = _buildPage();
-    _attachEvents();
-
-    _addActivity('Worker detail opened: ' + (workerData.worker_name || workerData.worker_id));
-
-    // Load backend data
-    _loadStrategies();
-    _fetchDeployments();
-
-    _refreshInterval = setInterval(_refreshAll, 5000);
-  }
-
-  function destroy() {
-    if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; }
-    _currentWorker = null;
-  }
-
-  return { render: render, destroy: destroy };
-})();
+```text
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pyyaml>=6.0
+python-multipart>=0.0.9
 ```
 
 ---
 
-## FILE: `worker/requirements.txt`
+## FILE: `ui/css/style.css`
 
-- Relative path: `worker/requirements.txt`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/requirements.txt`
+- Relative path: `ui/css/style.css`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/css/style.css`
+- Size bytes: `50131`
+- SHA256: `052e2a4c126ea410724237b69176b5cd2067f579ea375c652acbb1ed98c9c553`
+- Guessed MIME type: `text/css`
+- Guessed encoding: `unknown`
+
+```css
+/* base.css */
+
+*,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+html { font-size: 14px; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+  height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+a { text-decoration: none; color: inherit; }
+button { font-family: inherit; border: none; cursor: pointer; background: none; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+.text-success { color: var(--success) !important; }
+.text-danger  { color: var(--danger) !important; }
+.text-warning { color: var(--warning) !important; }
+.text-accent  { color: var(--accent) !important; }
+.text-muted   { color: var(--text-muted) !important; }
+.text-stale   { color: var(--stale) !important; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ── dashboard.css  ───────────────────────────────────────────────────── */
+.dashboard {
+  display: flex; flex-direction: column; gap: 24px;
+  width: 100%; max-width: 1500px;
+}
+
+/* ── Section Header ─────────────────────────────────────────────── */
+
+.section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.section-header i { color: var(--accent); font-size: 14px; }
+.section-header h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.3px; }
+.section-badge {
+  margin-left: 8px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
+  font-weight: 500; padding: 2px 8px; border-radius: 4px;
+  background: var(--accent-dim); color: var(--accent);
+}
+
+/* ── Portfolio Cards Grid ───────────────────────────────────────── */
+
+.portfolio-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+.portfolio-card {
+  background: var(--bg-card); border: 1px solid var(--border-primary); border-radius: 10px;
+  padding: 14px 16px; display: flex; align-items: flex-start; gap: 12px;
+  box-shadow: var(--shadow-sm); animation: fadeInUp 0.4s ease both;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.3s ease;
+  min-width: 0;
+}
+.portfolio-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); background: var(--bg-card-hover); }
+.portfolio-card:nth-child(1) { animation-delay: 0.02s; }
+.portfolio-card:nth-child(2) { animation-delay: 0.04s; }
+.portfolio-card:nth-child(3) { animation-delay: 0.06s; }
+.portfolio-card:nth-child(4) { animation-delay: 0.08s; }
+.portfolio-card:nth-child(5) { animation-delay: 0.10s; }
+.portfolio-card:nth-child(6) { animation-delay: 0.12s; }
+.portfolio-card:nth-child(7) { animation-delay: 0.14s; }
+.portfolio-card:nth-child(8) { animation-delay: 0.16s; }
+
+/* ── Card Icon ──────────────────────────────────────────────────── */
+
+.card-icon {
+  width: 36px; height: 36px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
+}
+.card-icon.neutral  { background: var(--accent-dim);  color: var(--accent); }
+.card-icon.positive { background: var(--success-dim); color: var(--success); }
+.card-icon.negative { background: var(--danger-dim);  color: var(--danger); }
+.card-icon.warning  { background: var(--warning-dim); color: var(--warning); }
+
+/* ── Card Info ──────────────────────────────────────────────────── */
+
+.card-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow: hidden; }
+.card-value {
+  font-family: 'JetBrains Mono', monospace; font-size: 16px;
+  font-weight: 700; color: var(--text-primary); line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-value.positive { color: var(--success); }
+.card-value.negative { color: var(--danger); }
+.card-label {
+  font-size: 10.5px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Equity Chart ───────────────────────────────────────────────── */
+
+.chart-container {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; padding: 20px; box-shadow: var(--shadow-sm);
+  animation: fadeInUp 0.4s ease 0.2s both; width: 100%;
+}
+.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.chart-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.chart-period { font-size: 11px; color: var(--text-muted); font-weight: 500; }
+.chart-wrapper { height: 280px; position: relative; }
+
+/* ── Fleet Summary Badges ───────────────────────────────────────── */
+
+.fleet-summary { display: flex; gap: 14px; flex-wrap: wrap; width: 100%; margin-bottom: 18px; }
+.fleet-badge {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 8px; padding: 10px 16px; box-shadow: var(--shadow-sm);
+  animation: fadeInUp 0.3s ease both;
+}
+.badge-count { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 700; }
+.badge-label { font-size: 11.5px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.badge-count.total   { color: var(--text-primary); }
+.badge-count.online  { color: var(--success); }
+.badge-count.warning { color: var(--warning); }
+.badge-count.stale   { color: var(--stale); }
+.badge-count.offline { color: var(--text-muted); }
+.badge-count.error   { color: var(--danger); }
+
+/* ── Fleet Grid ─────────────────────────────────────────────────── */
+
+.fleet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+
+/* ── Node Card ──────────────────────────────────────────────────── */
+
+.node-card {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-sm);
+  animation: fadeInUp 0.4s ease both;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.3s ease;
+  min-width: 0;
+}
+.node-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); background: var(--bg-card-hover); }
+.node-card:nth-child(1) { animation-delay: 0.02s; }
+.node-card:nth-child(2) { animation-delay: 0.04s; }
+.node-card:nth-child(3) { animation-delay: 0.06s; }
+.node-card:nth-child(4) { animation-delay: 0.08s; }
+.node-card:nth-child(5) { animation-delay: 0.10s; }
+.node-card:nth-child(6) { animation-delay: 0.12s; }
+
+/* ── Node Card Top Bar ──────────────────────────────────────────── */
+
+.node-card-top { height: 2px; }
+.node-card-top.online  { background: var(--success); }
+.node-card-top.running { background: var(--success); }
+.node-card-top.idle    { background: var(--accent); }
+.node-card-top.warning { background: var(--warning); }
+.node-card-top.stale   { background: var(--stale); }
+.node-card-top.offline { background: var(--text-muted); }
+.node-card-top.error   { background: var(--danger); }
+
+/* ── Node Card Header ───────────────────────────────────────────── */
+
+.node-card-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
+.node-name-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.node-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.node-status-dot.online  { background: var(--success); }
+.node-status-dot.running { background: var(--success); }
+.node-status-dot.idle    { background: var(--accent); }
+.node-status-dot.warning { background: var(--warning); }
+.node-status-dot.stale   { background: var(--stale); }
+.node-status-dot.offline { background: var(--text-muted); }
+.node-status-dot.error   { background: var(--danger); }
+.node-name {
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  font-weight: 500; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.node-status-badge {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 3px 8px; border-radius: 4px; flex-shrink: 0;
+}
+.node-status-badge.online  { background: var(--success-dim); color: var(--success); }
+.node-status-badge.running { background: var(--success-dim); color: var(--success); }
+.node-status-badge.idle    { background: var(--accent-dim);  color: var(--accent); }
+.node-status-badge.warning { background: var(--warning-dim); color: var(--warning); }
+.node-status-badge.stale   { background: var(--stale-dim);   color: var(--stale); }
+.node-status-badge.offline { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+.node-status-badge.error   { background: var(--danger-dim);  color: var(--danger); }
+.node-status-badge.unknown { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+
+/* ── Node Card Body ─────────────────────────────────────────────── */
+
+.node-card-body { padding: 0 16px 14px; }
+.node-info-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.node-info-row:last-child { border-bottom: none; }
+.node-info-label { font-size: 11px; color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+.node-info-value {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  color: var(--text-secondary); font-weight: 400; text-align: right;
+  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.node-info-value.strategy { color: var(--accent); font-weight: 500; }
+.node-info-value.inactive { color: var(--text-muted); }
+
+/* ── State Pills ────────────────────────────────────────────────── */
+
+.state-pill {
+  display: inline-block; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 2px 8px; border-radius: 4px;
+}
+.state-pill.online  { background: var(--success-dim); color: var(--success); }
+.state-pill.running { background: var(--success-dim); color: var(--success); }
+.state-pill.idle    { background: var(--accent-dim);  color: var(--accent); }
+.state-pill.warning { background: var(--warning-dim); color: var(--warning); }
+.state-pill.stale   { background: var(--stale-dim);   color: var(--stale); }
+.state-pill.error   { background: var(--danger-dim);  color: var(--danger); }
+.state-pill.offline { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+.state-pill.unknown { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+
+/* ── Compact Fleet Table ────────────────────────────────────────── */
+
+.compact-fleet-wrapper {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; padding: 16px; overflow-x: auto;
+  box-shadow: var(--shadow-sm); margin-top: 12px;
+}
+.compact-fleet-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.compact-fleet-table th {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); font-weight: 600; padding: 8px 12px;
+  text-align: left; border-bottom: 1px solid var(--border-primary);
+}
+.compact-fleet-table td {
+  font-size: 12px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary);
+}
+.compact-fleet-table td.mono { font-family: 'JetBrains Mono', monospace; }
+.compact-fleet-table tr:hover td { background: var(--bg-card-hover); }
+
+/* ── View Fleet Link ────────────────────────────────────────────── */
+
+.view-fleet-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--accent); font-weight: 500;
+  cursor: pointer; margin-top: 12px; transition: opacity 0.2s;
+}
+.view-fleet-link:hover { opacity: 0.8; }
+
+/* ── Null Value ─────────────────────────────────────────────────── */
+
+.value-null { color: var(--text-muted); font-style: italic; }
+
+/* ── Dashboard Fleet Section ────────────────────────────────────── */
+
+.dashboard-fleet-section { min-height: 120px; }
+
+/* ── Loading State ──────────────────────────────────────────────── */
+
+.loading-state {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; min-height: 300px; gap: 16px;
+  animation: fadeInUp 0.4s ease both;
+}
+.spinner {
+  width: 36px; height: 36px;
+  border: 3px solid var(--border-primary);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.loading-state p { font-size: 13px; color: var(--text-muted); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Empty State ────────────────────────────────────────────────── */
+
+.empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; min-height: 300px; gap: 14px;
+  animation: fadeInUp 0.4s ease both; padding: 40px;
+}
+.empty-state i { font-size: 52px; color: var(--text-muted); opacity: 0.25; }
+.empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text-secondary); }
+.empty-state p {
+  font-size: 13px; color: var(--text-muted); max-width: 420px;
+  text-align: center; line-height: 1.6;
+}
+.empty-state code {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  background: var(--bg-secondary); padding: 2px 8px;
+  border-radius: 4px; color: var(--accent);
+}
+
+/* ── Error State ────────────────────────────────────────────────── */
+
+.error-state {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; min-height: 300px; gap: 14px;
+  animation: fadeInUp 0.4s ease both; padding: 40px;
+}
+.error-state i { font-size: 52px; color: var(--danger); opacity: 0.4; }
+.error-state h3 { font-size: 16px; font-weight: 600; color: var(--text-secondary); }
+.error-state p {
+  font-size: 13px; color: var(--text-muted); max-width: 420px;
+  text-align: center; line-height: 1.6;
+}
+.retry-btn {
+  padding: 8px 20px; background: var(--accent-dim); color: var(--accent);
+  border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+  border: 1px solid transparent; transition: all 0.2s ease;
+}
+.retry-btn:hover { background: var(--accent); color: #fff; }
+
+/* ── Fleet Page ─────────────────────────────────────────────────── */
+
+.fleet-page {
+  display: flex; flex-direction: column; gap: 24px;
+  width: 100%; max-width: 1500px;
+  animation: fadeInUp 0.3s ease both;
+}
+.fleet-page-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.fleet-page-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.fleet-page-meta { display: flex; align-items: center; gap: 14px; }
+.auto-refresh-badge {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  color: var(--text-muted); background: var(--bg-card);
+  border: 1px solid var(--border-primary); padding: 4px 10px; border-radius: 5px;
+}
+.auto-refresh-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--success); animation: pulse-glow 2s ease-in-out infinite;
+}
+.last-synced {
+  font-size: 11px; color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Placeholder Page ───────────────────────────────────────────── */
+
+.placeholder-page {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; height: 100%; min-height: 400px; gap: 16px;
+  animation: fadeInUp 0.4s ease both;
+}
+.placeholder-page i { font-size: 48px; color: var(--text-muted); opacity: 0.3; }
+.placeholder-page h2 { font-size: 18px; font-weight: 600; color: var(--text-secondary); }
+.placeholder-page p {
+  font-size: 13px; color: var(--text-muted); max-width: 360px;
+  text-align: center; line-height: 1.6;
+}
+
+/* ── Animations ─────────────────────────────────────────────────── */
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .portfolio-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fleet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .portfolio-grid { grid-template-columns: minmax(0, 1fr); }
+  .fleet-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── layout.css  ────────────────────────────────────────────────── */
+
+body { display: flex; flex-direction: row; }
+
+/* ── Sidebar (always dark) ──────────────────────────────────────── */
+
+.sidebar {
+  width: 240px; min-width: 240px; height: 100vh; background: #0d1117;
+  display: flex; flex-direction: column; border-right: 1px solid #1e293b; z-index: 10;
+}
+.sidebar-brand {
+  height: 60px; display: flex; align-items: center; gap: 12px;
+  padding: 0 20px; border-bottom: 1px solid #1e293b;
+}
+.brand-mark {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, #06b6d4, #3b82f6);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace; font-weight: 700;
+  font-size: 12px; color: #fff; letter-spacing: -0.5px; flex-shrink: 0;
+}
+.brand-text { display: flex; flex-direction: column; line-height: 1; }
+.brand-name { font-weight: 700; font-size: 13px; color: #e2e8f0; letter-spacing: 1.2px; }
+.brand-sub { font-size: 10px; color: #64748b; margin-top: 3px; letter-spacing: 0.5px; }
+
+/* ── Navigation ─────────────────────────────────────────────────── */
+
+.sidebar-nav { flex: 1; display: flex; flex-direction: column; padding: 12px 0; overflow-y: auto; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px 20px;
+  color: #94a3b8; font-size: 13px; font-weight: 500;
+  border-left: 3px solid transparent; transition: all 0.2s ease;
+}
+.nav-item:hover { color: #e2e8f0; background: rgba(255,255,255,0.03); }
+.nav-item.active { color: #06b6d4; border-left-color: #06b6d4; background: rgba(6,182,212,0.08); }
+.nav-item i { width: 18px; text-align: center; font-size: 14px; }
+
+/* ── Sidebar Footer / Theme Toggle ──────────────────────────────── */
+
+.sidebar-footer { padding: 12px 16px; border-top: 1px solid #1e293b; }
+.theme-toggle {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 12px; border-radius: 6px; color: #94a3b8;
+  font-size: 12px; font-weight: 500; transition: all 0.2s ease;
+}
+.theme-toggle:hover { color: #e2e8f0; background: rgba(255,255,255,0.05); }
+.theme-toggle i { width: 16px; text-align: center; font-size: 13px; }
+
+/* ── Main Wrapper ───────────────────────────────────────────────── */
+
+.main-wrapper {
+  flex: 1; display: flex; flex-direction: column;
+  height: 100vh; min-width: 0; overflow: hidden;
+}
+
+/* ── Top Bar ────────────────────────────────────────────────────── */
+
+.topbar {
+  height: 60px; min-height: 60px; background: var(--bg-topbar);
+  border-bottom: 1px solid var(--border-primary);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 28px;
+}
+.topbar-left { display: flex; align-items: baseline; gap: 12px; }
+.topbar-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.topbar-subtitle { font-size: 11.5px; color: var(--text-muted); font-weight: 400; }
+.topbar-right { display: flex; align-items: center; gap: 20px; }
+.topbar-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-dot--online { background: var(--success); }
+.status-dot--offline { background: var(--text-muted); }
+.status-dot--warning { background: var(--warning); }
+.status-dot--error { background: var(--danger); }
+.status-dot.pulse { animation: pulse-glow 2s ease-in-out infinite; }
+
+@keyframes pulse-glow {
+  0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+}
+
+.topbar-clock {
+  font-family: 'JetBrains Mono', monospace; font-size: 13px;
+  font-weight: 500; color: var(--text-secondary); letter-spacing: 0.5px;
+}
+
+/* ── Content Area ───────────────────────────────────────────────── */
+
+.content {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+  padding: 24px 28px;
+  background: var(--bg-primary);
+  width: 100%;
+}
+
+/*theme.css*/
+
+[data-theme="dark"] {
+  --bg-primary: #0b0f19;
+  --bg-secondary: #111827;
+  --bg-card: #151c2c;
+  --bg-card-hover: #1a2236;
+  --bg-topbar: #0d1117;
+  --border-primary: #1e293b;
+  --border-subtle: #162033;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #06b6d4;
+  --accent-dim: rgba(6, 182, 212, 0.15);
+  --success: #10b981;
+  --success-dim: rgba(16, 185, 129, 0.15);
+  --danger: #ef4444;
+  --danger-dim: rgba(239, 68, 68, 0.15);
+  --warning: #f59e0b;
+  --warning-dim: rgba(245, 158, 11, 0.15);
+  --stale: #fb923c;
+  --stale-dim: rgba(251, 146, 60, 0.15);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
+  --scrollbar-track: #0b0f19;
+  --scrollbar-thumb: #1e293b;
+  --scrollbar-thumb-hover: #334155;
+}
+[data-theme="light"] {
+  --bg-primary: #f0f4f8;
+  --bg-secondary: #e2e8f0;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-topbar: #ffffff;
+  --border-primary: #e2e8f0;
+  --border-subtle: #f1f5f9;
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --accent: #0891b2;
+  --accent-dim: rgba(8, 145, 178, 0.12);
+  --success: #059669;
+  --success-dim: rgba(5, 150, 105, 0.12);
+  --danger: #dc2626;
+  --danger-dim: rgba(220, 38, 38, 0.12);
+  --warning: #d97706;
+  --warning-dim: rgba(217, 119, 6, 0.12);
+  --stale: #ea580c;
+  --stale-dim: rgba(234, 88, 12, 0.12);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.1);
+  --scrollbar-track: #f0f4f8;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+}
+body,.topbar,.content,.portfolio-card,.node-card,.section-header,.fleet-summary,
+.chart-container,.fleet-page,.loading-state,.empty-state,.error-state,.compact-fleet-wrapper,
+.fleet-badge {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* worker-detail.css*/
+
+
+/* ── Clickable Fleet Enhancement ──────────────────────────── */
+.node-card.clickable { cursor: pointer; }
+.node-card.clickable:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim), var(--shadow-md); }
+.node-card-action {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--border-subtle); font-size: 11px; color: var(--accent);
+  font-weight: 500;
+}
+.compact-fleet-table tr.clickable { cursor: pointer; }
+.compact-fleet-table tr.clickable:hover td { background: var(--bg-card-hover); }
+
+/* ── Worker Detail Page ───────────────────────────────────── */
+.worker-detail { display: flex; flex-direction: column; gap: 24px; max-width: 1400px; animation: fadeInUp 0.3s ease both; }
+
+.wd-header {
+  background: var(--bg-card); border: 1px solid var(--border-primary); border-radius: 10px;
+  padding: 20px; display: flex; align-items: center; justify-content: space-between;
+  box-shadow: var(--shadow-sm);
+}
+.wd-header-left { display: flex; align-items: center; gap: 16px; }
+.wd-back-btn {
+  padding: 8px 14px; background: var(--bg-secondary); border: 1px solid var(--border-primary);
+  border-radius: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 6px;
+}
+.wd-back-btn:hover { color: var(--accent); border-color: var(--accent); }
+.wd-header-info { display: flex; flex-direction: column; gap: 4px; }
+.wd-header-info h2 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.wd-header-meta {
+  display: flex; align-items: center; gap: 8px; font-size: 11.5px;
+  color: var(--text-muted); font-family: 'JetBrains Mono', monospace;
+}
+.meta-sep { opacity: 0.4; }
+.wd-header-right { display: flex; align-items: center; gap: 12px; }
+.wd-refresh-btn {
+  padding: 8px 14px; background: var(--bg-secondary); border: 1px solid var(--border-primary);
+  border-radius: 6px; color: var(--text-secondary); font-size: 11px; font-weight: 500;
+  cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+}
+.wd-refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
+.wd-emergency-btn {
+  padding: 8px 16px; background: var(--danger-dim); color: var(--danger);
+  border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; border: 1px solid transparent; cursor: pointer;
+  transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+}
+.wd-emergency-btn:hover { background: var(--danger); color: #fff; }
+
+/* ── Status Cards Grid ────────────────────────────────────── */
+.wd-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.wd-status-card {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 6px;
+  box-shadow: var(--shadow-sm);
+}
+.wd-status-card .status-label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); font-weight: 500;
+}
+.wd-status-card .status-value {
+  font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 600;
+  color: var(--text-primary);
+}
+.status-indicator { display: flex; align-items: center; gap: 6px; }
+.wd-status-dot-sm {
+  width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+}
+.wd-status-dot-sm.green { background: var(--success); }
+.wd-status-dot-sm.amber { background: var(--warning); }
+.wd-status-dot-sm.orange { background: var(--stale); }
+.wd-status-dot-sm.red { background: var(--danger); }
+.wd-status-dot-sm.blue { background: var(--accent); }
+.wd-status-dot-sm.gray { background: var(--text-muted); }
+
+/* ── Content Layout ───────────────────────────────────────── */
+.wd-content { display: grid; grid-template-columns: 1fr 360px; gap: 20px; }
+.wd-main-col { display: flex; flex-direction: column; gap: 20px; }
+.wd-side-col { display: flex; flex-direction: column; gap: 20px; }
+
+/* ── Panel ────────────────────────────────────────────────── */
+.wd-panel {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-sm);
+}
+.wd-panel-header {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  padding: 16px 20px; border-bottom: 1px solid var(--border-primary);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.panel-badge {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;
+  padding: 2px 8px; border-radius: 4px; background: var(--accent-dim); color: var(--accent);
+}
+.panel-badge.mock {
+  background: var(--warning-dim); color: var(--warning);
+}
+.wd-panel-body { padding: 20px; }
+
+/* ── File Upload ──────────────────────────────────────────── */
+.wd-file-upload {
+  border: 2px dashed var(--border-primary); border-radius: 8px; padding: 32px;
+  text-align: center; transition: all 0.2s; cursor: pointer;
+}
+.wd-file-upload:hover { border-color: var(--accent); }
+.wd-file-upload.has-file { border-color: var(--success); border-style: solid; }
+.wd-file-upload i { font-size: 32px; color: var(--text-muted); opacity: 0.4; }
+.wd-file-upload h4 { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-top: 10px; }
+.wd-file-upload p { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+.file-name {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent);
+  font-weight: 500; margin-top: 8px;
+}
+.wd-file-status {
+  display: flex; align-items: center; gap: 6px; justify-content: center;
+  margin-top: 8px; font-size: 11px;
+}
+
+/* ── Metadata Preview ─────────────────────────────────────── */
+.wd-metadata {
+  margin-top: 16px; background: var(--bg-secondary); border-radius: 8px;
+  padding: 16px; animation: fadeInUp 0.3s ease both;
+}
+.wd-metadata-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wd-metadata-item { display: flex; flex-direction: column; gap: 2px; }
+.wd-metadata-label {
+  font-size: 10px; text-transform: uppercase; color: var(--text-muted);
+  font-weight: 500; letter-spacing: 0.4px;
+}
+.wd-metadata-value {
+  font-size: 12px; color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Form Controls ────────────────────────────────────────── */
+.wd-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.wd-form-group { display: flex; flex-direction: column; gap: 5px; }
+.wd-form-label {
+  font-size: 11px; color: var(--text-muted); font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.wd-form-input, .wd-form-select {
+  width: 100%; padding: 8px 12px; background: var(--bg-secondary);
+  border: 1px solid var(--border-primary); border-radius: 6px;
+  color: var(--text-primary); font-size: 12px; font-family: 'JetBrains Mono', monospace;
+  outline: none; transition: border-color 0.2s;
+}
+.wd-form-input:focus, .wd-form-select:focus { border-color: var(--accent); }
+.wd-form-select { cursor: pointer; }
+
+/* ── Toggle Switch ────────────────────────────────────────── */
+.wd-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.wd-toggle-row:last-child { border-bottom: none; }
+.wd-toggle-label { display: flex; flex-direction: column; gap: 2px; }
+.wd-toggle-label span:first-child { font-size: 12px; color: var(--text-primary); font-weight: 500; }
+.wd-toggle-label span:last-child { font-size: 10.5px; color: var(--text-muted); }
+.wd-toggle {
+  position: relative; width: 40px; height: 22px; -webkit-appearance: none;
+  appearance: none; background: var(--border-primary); border-radius: 11px;
+  cursor: pointer; transition: background 0.2s; flex-shrink: 0; border: none;
+}
+.wd-toggle:checked { background: var(--accent); }
+.wd-toggle::after {
+  content: ''; position: absolute; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--text-primary); top: 2px; left: 2px; transition: transform 0.2s;
+}
+.wd-toggle:checked::after { transform: translateX(18px); }
+
+/* ── Parameters Editor ────────────────────────────────────── */
+.wd-params-list { display: flex; flex-direction: column; }
+.wd-param-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border-subtle); gap: 12px;
+}
+.wd-param-row:last-child { border-bottom: none; }
+.wd-param-row.modified { border-left: 3px solid var(--accent); padding-left: 12px; margin-left: -4px; }
+.wd-param-info { flex: 1; min-width: 0; }
+.wd-param-name { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.wd-param-desc { font-size: 10.5px; color: var(--text-muted); margin-top: 2px; }
+.wd-param-type-badge {
+  display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle;
+}
+.type-int { background: var(--accent-dim); color: var(--accent); }
+.type-float { background: var(--warning-dim); color: var(--warning); }
+.type-bool { background: var(--success-dim); color: var(--success); }
+.type-string { background: var(--stale-dim); color: var(--stale); }
+.wd-param-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.wd-param-input {
+  width: 100px; padding: 6px 10px; background: var(--bg-secondary);
+  border: 1px solid var(--border-primary); border-radius: 6px;
+  color: var(--text-primary); font-size: 11.5px; font-family: 'JetBrains Mono', monospace;
+  outline: none; transition: border-color 0.2s; text-align: right;
+}
+.wd-param-input:focus { border-color: var(--accent); }
+.wd-param-reset {
+  width: 24px; height: 24px; border-radius: 50%; background: transparent;
+  border: none; color: var(--text-muted); font-size: 11px; cursor: pointer;
+  opacity: 0.5; transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+}
+.wd-param-reset:hover { opacity: 1; color: var(--accent); }
+
+/* ── Checklist ────────────────────────────────────────────── */
+.wd-checklist { display: flex; flex-direction: column; }
+.wd-check-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wd-check-item:last-child { border-bottom: none; }
+.wd-check-icon {
+  width: 18px; height: 18px; border-radius: 4px; display: flex;
+  align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;
+}
+.wd-check-icon.pass { background: var(--success-dim); color: var(--success); }
+.wd-check-icon.fail { background: var(--danger-dim); color: var(--danger); }
+.wd-check-icon.warn { background: var(--warning-dim); color: var(--warning); }
+.wd-check-icon.info { background: var(--accent-dim); color: var(--accent); }
+.wd-check-text { font-size: 12px; color: var(--text-secondary); }
+.wd-check-text.pass { color: var(--text-primary); }
+.wd-check-text.dimmed { color: var(--text-muted); font-style: italic; }
+
+/* ── Deploy Action Bar ────────────────────────────────────── */
+.wd-action-bar {
+  padding: 16px 20px; display: flex; align-items: center;
+  justify-content: space-between; border-top: 1px solid var(--border-primary);
+}
+.wd-action-bar-left, .wd-action-bar-right { display: flex; gap: 10px; }
+.wd-btn {
+  padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 500;
+  border: 1px solid transparent; cursor: pointer; transition: all 0.2s;
+  display: flex; align-items: center; gap: 6px;
+}
+.wd-btn-ghost { background: transparent; border-color: var(--border-primary); color: var(--text-secondary); }
+.wd-btn-ghost:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.wd-btn-outline { background: transparent; border-color: var(--accent); color: var(--accent); }
+.wd-btn-outline:hover { background: var(--accent); color: #fff; }
+.wd-btn-primary { background: var(--accent); color: #fff; font-weight: 600; }
+.wd-btn-primary:hover { filter: brightness(1.1); }
+.wd-btn-primary.deploy {
+  background: linear-gradient(135deg, #06b6d4, #3b82f6); box-shadow: var(--shadow-md);
+}
+.wd-btn-primary.deploy:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+
+/* ── Activity Timeline ────────────────────────────────────── */
+.wd-timeline { display: flex; flex-direction: column; }
+.wd-timeline-item {
+  display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.wd-timeline-item:last-child { border-bottom: none; }
+.wd-timeline-time {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-muted);
+  width: 60px; flex-shrink: 0;
+}
+.wd-timeline-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  flex-shrink: 0; margin-top: 5px;
+}
+.wd-timeline-text { font-size: 11.5px; color: var(--text-secondary); }
+
+/* ── Modal ────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  animation: modal-fade-in 0.2s ease;
+}
+.modal-card {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 12px; width: 480px; max-width: 90vw; box-shadow: var(--shadow-lg);
+  animation: modal-slide-in 0.3s ease;
+}
+.modal-header {
+  padding: 20px 24px; border-bottom: 1px solid var(--border-primary);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.modal-close { font-size: 18px; cursor: pointer; color: var(--text-muted); transition: color 0.2s; background: none; border: none; }
+.modal-close:hover { color: var(--text-primary); }
+.modal-body { padding: 20px 24px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+.modal-footer {
+  padding: 16px 24px; border-top: 1px solid var(--border-primary);
+  display: flex; justify-content: flex-end; gap: 10px;
+}
+.modal-summary {
+  background: var(--bg-secondary); border-radius: 8px; padding: 14px; margin-top: 12px;
+}
+.modal-summary-row { display: flex; justify-content: space-between; padding: 4px 0; }
+.modal-summary-label { font-size: 11.5px; color: var(--text-muted); }
+.modal-summary-value { font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-primary); }
+.modal-warning {
+  background: var(--warning-dim); border-radius: 6px; padding: 10px 14px;
+  margin-top: 12px; font-size: 11.5px; color: var(--warning);
+  display: flex; gap: 8px; align-items: flex-start; line-height: 1.5;
+}
+
+@keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-slide-in {
+  from { opacity: 0; transform: translateY(-10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Toast ─────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed; top: 20px; right: 20px; z-index: 1100;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  padding: 12px 18px; border-radius: 8px; box-shadow: var(--shadow-md);
+  display: flex; align-items: center; gap: 10px; font-size: 12.5px; font-weight: 500;
+  animation: toast-in 0.3s ease; min-width: 300px; max-width: 420px;
+}
+.toast-success { background: var(--success-dim); border: 1px solid rgba(16,185,129,0.2); color: var(--success); }
+.toast-info { background: var(--accent-dim); border: 1px solid rgba(6,182,212,0.2); color: var(--accent); }
+.toast-warning { background: var(--warning-dim); border: 1px solid rgba(245,158,11,0.2); color: var(--warning); }
+.toast-error { background: var(--danger-dim); border: 1px solid rgba(239,68,68,0.2); color: var(--danger); }
+.toast i { font-size: 14px; flex-shrink: 0; }
+.toast-dismiss {
+  margin-left: auto; cursor: pointer; opacity: 0.6; font-size: 14px;
+  background: none; border: none; color: inherit;
+}
+.toast-dismiss:hover { opacity: 1; }
+
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 1200px) {
+  .wd-content { grid-template-columns: 1fr; }
+  .wd-status-grid { grid-template-columns: repeat(2, 1fr); }
+  .wd-form-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .wd-status-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Symbol Input + Inline Lookback ───────────────────────── */
+.wd-inline-row {
+  display: flex; gap: 8px; align-items: center;
+}
+.wd-inline-row .wd-form-input { flex: 1; min-width: 0; }
+.wd-inline-row .wd-form-select { flex: 0 0 130px; }
+.wd-field-error {
+  font-size: 10.5px; color: var(--danger); margin-top: 4px;
+  display: none; align-items: center; gap: 4px;
+}
+.wd-field-error.visible { display: flex; }
+.wd-field-error i { font-size: 10px; }
+.wd-form-input.input-error { border-color: var(--danger); }
+.wd-symbol-hint {
+  font-size: 10px; color: var(--text-muted); margin-top: 3px;
+  font-style: italic;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   JINNI GRID — Pro Dashboard Additions
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Card Sub-label ───────────────────────────────────────── */
+.card-sub { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+
+/* ── Dashboard Layout Grids ───────────────────────────────── */
+.dash-split-row { display: grid; grid-template-columns: 1fr 360px; gap: 20px; }
+.dash-chart-section { min-width: 0; }
+.dash-stats-section { min-width: 0; }
+.dash-triple-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.dash-dual-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+/* ── Dashboard Stats Grid ─────────────────────────────────── */
+.dash-stats-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; padding: 16px; box-shadow: var(--shadow-sm);
+}
+.dash-stat-item {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 8px 4px; border-radius: 6px; background: var(--bg-secondary);
+}
+.dash-stat-val {
+  font-family: 'JetBrains Mono', monospace; font-size: 14px;
+  font-weight: 700; color: var(--text-primary);
+}
+.dash-stat-val.positive { color: var(--success); }
+.dash-stat-val.negative { color: var(--danger); }
+.dash-stat-lbl {
+  font-size: 9.5px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-muted); text-align: center;
+}
+
+/* ── Dashboard Panel Body ─────────────────────────────────── */
+.dash-panel-body {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; padding: 16px; box-shadow: var(--shadow-sm); min-height: 120px;
+}
+
+/* ── Pipeline Flow ────────────────────────────────────────── */
+.pipeline-flow {
+  display: flex; align-items: center; justify-content: center;
+  gap: 12px; flex-wrap: wrap; padding: 12px 0;
+}
+.pipeline-node {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: var(--bg-secondary); border-radius: 8px; padding: 14px 18px; min-width: 80px;
+}
+.pipeline-val { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 700; }
+.pipeline-val.accent { color: var(--accent); }
+.pipeline-val.warning { color: var(--warning); }
+.pipeline-val.success { color: var(--success); }
+.pipeline-val.danger { color: var(--danger); }
+.pipeline-lbl {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); font-weight: 500;
+}
+.pipeline-arrow { color: var(--text-muted); font-size: 14px; opacity: 0.4; }
+
+/* ── Strategy Row (Dashboard) ─────────────────────────────── */
+.dash-strat-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: var(--bg-secondary); border-radius: 6px;
+}
+.dash-strat-info { display: flex; align-items: center; gap: 8px; }
+.dash-strat-meta { font-size: 10px; color: var(--text-muted); }
+.dash-strat-badges { display: flex; align-items: center; gap: 8px; }
+
+/* ── Portfolio Tabs ───────────────────────────────────────── */
+.port-tabs {
+  display: flex; gap: 4px; background: var(--bg-card);
+  border: 1px solid var(--border-primary); border-radius: 8px;
+  padding: 4px; width: fit-content;
+}
+.port-tab {
+  padding: 6px 16px; border-radius: 6px; font-size: 12px; font-weight: 500;
+  color: var(--text-muted); cursor: pointer; transition: all 0.2s;
+  border: none; background: none;
+}
+.port-tab:hover { color: var(--text-primary); }
+.port-tab.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* ── Portfolio Filters ────────────────────────────────────── */
+.port-filters { display: flex; gap: 14px; flex-wrap: wrap; }
+.port-filters .wd-form-group { min-width: 160px; }
+
+/* ── Logs ─────────────────────────────────────────────────── */
+.log-filters { display: flex; gap: 14px; flex-wrap: wrap; }
+.log-filters .wd-form-group { min-width: 140px; }
+.log-auto-label {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  color: var(--text-muted); cursor: pointer; user-select: none;
+}
+.log-auto-label input { accent-color: var(--accent); }
+.log-count {
+  font-size: 11px; color: var(--text-muted); margin-bottom: 8px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.log-table tr.log-row { transition: background 0.15s; }
+.log-table tr.log-row.clickable { cursor: pointer; }
+.log-table tr.log-row.clickable:hover td { background: var(--bg-card-hover); }
+.log-detail-row td { padding: 0 !important; }
+.log-payload {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
+  color: var(--text-secondary); background: var(--bg-secondary);
+  padding: 12px 16px; margin: 4px 12px 8px; border-radius: 6px;
+  white-space: pre-wrap; word-break: break-all; max-height: 300px;
+  overflow-y: auto; border: 1px solid var(--border-primary);
+}
+
+/* ── Responsive additions ─────────────────────────────────── */
+@media (max-width: 1200px) {
+  .dash-split-row { grid-template-columns: 1fr; }
+  .dash-triple-row { grid-template-columns: 1fr; }
+  .dash-dual-row { grid-template-columns: 1fr; }
+  .dash-stats-grid { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 768px) {
+  .dash-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .port-tabs { flex-wrap: wrap; }
+  .port-filters { flex-direction: column; }
+  .log-filters { flex-direction: column; }
+}
+```
+
+---
+
+## FILE: `vm/logging/__init__.py`
+
+- Relative path: `vm/logging/__init__.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/logging/__init__.py`
+- Size bytes: `0`
+- SHA256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+
+```
+
+---
+
+## FILE: `vm/logging/event_log.py`
+
+- Relative path: `vm/logging/event_log.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/logging/event_log.py`
+- Size bytes: `3457`
+- SHA256: `df8ec517a77b4d6762a2911bb760f6b2873b1f23a3029a0ad1eac449f9e7bf3d`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+"""
+JINNI GRID — Worker-Side Structured Event Logger
+worker/event_log.py
+
+Writes structured events to a local SQLite DB on the worker machine.
+Events are also forwarded to Mother via heartbeat/status reports.
+
+Categories: SYSTEM, EXECUTION, STRATEGY, PIPELINE, ERROR
+"""
+
+import json
+import os
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from typing import Optional
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+
+class WorkerEventLog:
+    """Per-worker persistent event log."""
+
+    def __init__(self, worker_id: str):
+        self.worker_id = worker_id
+        self._lock = threading.Lock()
+        os.makedirs(DATA_DIR, exist_ok=True)
+        self._db_path = os.path.join(DATA_DIR, f"events_{worker_id}.db")
+        self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=15)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=3000")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        conn = self._get_conn()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                category TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                deployment_id TEXT,
+                strategy_id TEXT,
+                symbol TEXT,
+                message TEXT,
+                data_json TEXT,
+                level TEXT DEFAULT 'INFO'
+            );
+            CREATE INDEX IF NOT EXISTS idx_wevents_ts ON events(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_wevents_cat ON events(category);
+        """)
+        conn.commit()
+        conn.close()
+
+    def log(self, category: str, event_type: str, message: str,
+            deployment_id: str = None, strategy_id: str = None,
+            symbol: str = None, data: dict = None, level: str = "INFO"):
+        """Write a structured event."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("""
+                    INSERT INTO events (timestamp, category, event_type,
+                        deployment_id, strategy_id, symbol, message,
+                        data_json, level)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    now, category, event_type, deployment_id, strategy_id,
+                    symbol, message,
+                    json.dumps(data, default=str) if data else None, level,
+                ))
+                conn.commit()
+            finally:
+                conn.close()
+
+        # Also print for console visibility
+        print(f"[EVENT:{category}] {event_type} | {message}")
+
+    def get_recent(self, limit: int = 100, category: str = None) -> list:
+        conn = self._get_conn()
+        try:
+            if category:
+                rows = conn.execute(
+                    "SELECT * FROM events WHERE category=? ORDER BY id DESC LIMIT ?",
+                    (category, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
+                ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+```
+
+---
+
+## FILE: `vm/main.py`
+
+- Relative path: `vm/main.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/main.py`
+- Size bytes: `187`
+- SHA256: `0cd0547536acb075a8611d1ec123da8dcda200827f8f481406398060cebfd253`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+
+
+from vm.core.worker_agent import WorkerAgent, load_config
+
+def main():
+    config = load_config()
+    agent = WorkerAgent(config)
+    agent.run()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## FILE: `vm/README.md`
+
+- Relative path: `vm/README.md`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/README.md`
+- Size bytes: `1215`
+- SHA256: `28ead786e4eb10d807621099ef8cec7fec39d645e950a3b2dd1180cea90184c1`
+- Guessed MIME type: `text/markdown`
+- Guessed encoding: `unknown`
+
+````markdown
+# JINNI Grid — Worker Agent
+
+## What It Does
+
+Sends periodic heartbeat POST requests to the JINNI Grid Mother Server.
+The Mother Server uses these heartbeats to track worker status in the Fleet dashboard.
+
+## Prerequisites
+
+- Python 3.10+
+- `requests` and `pyyaml` packages
+
+## Setup
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Edit `config.yaml`:
+   - Set `worker_id` to a unique ID for this worker
+   - Set `worker_name` to a human-readable name
+   - Set `mother_server.url` to your Mother Server's IP and port
+   - Adjust `heartbeat.interval_seconds` if needed
+
+3. Run the agent:
+   ```bash
+   python worker_agent.py
+   ```
+
+## Config Reference
+
+```yaml
+worker:
+  worker_id: "vm-worker-01"      # Unique worker identifier
+  worker_name: "Worker 01"       # Display name
+
+mother_server:
+  url: "http://192.168.1.100:5100"  # Mother Server address
+
+heartbeat:
+  interval_seconds: 5            # Seconds between heartbeats
+
+agent:
+  version: "0.1.0"               # Agent version reported to Mother Server
+```
+
+## What It Does NOT Do
+
+- No MT5 connectivity
+- No trading execution
+- No strategy deployment
+- No broker/account detection
+
+Those features come in future phases.
+````
+
+---
+
+## FILE: `vm/requirements.txt`
+
+- Relative path: `vm/requirements.txt`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/requirements.txt`
 - Size bytes: `48`
 - SHA256: `7a58cbea9db5d6fbf9c1ea4bc53a1363984cef617cc862e83bc855137186f9fc`
 - Guessed MIME type: `text/plain`
@@ -1691,355 +2094,359 @@ MetaTrader5>=5.0.45
 
 ---
 
-## FILE: `worker/strategyWorker.py`
+## FILE: `vm/trading/__init__.py`
 
-- Relative path: `worker/strategyWorker.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/worker/strategyWorker.py`
-- Size bytes: `46091`
-- SHA256: `106d42794021f754d383e7e6e3042990c4a3456cf55815b3afca1f965165186c`
+- Relative path: `vm/trading/__init__.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/__init__.py`
+- Size bytes: `0`
+- SHA256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+
+```
+
+---
+
+## FILE: `vm/trading/execution.py`
+
+- Relative path: `vm/trading/execution.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/execution.py`
+- Size bytes: `23215`
+- SHA256: `3790c76cd4e0cb636fb6d65cd80feb9ac06763fcf88fd009932ced7742f3c1f3`
 - Guessed MIME type: `text/x-python`
 - Guessed encoding: `unknown`
 
 ```python
 """
-JINNI GRID — Combined Worker Runtime
-worker/strategyWorker.py
+JINNI GRID — Trade Execution Layer + Logger
+worker/execution.py
 
-Uses:
-  worker/indicators.py  — HMA/WMA/SMA/EMA precompute + IndicatorEngine
-  worker/execution.py   — ExecutionLogger, MT5Executor, signal validation,
-                           SL/TP computation, trade records, PositionState
+Handles:
+  - Real MT5 order execution (BUY/SELL/CLOSE)
+  - Position querying (filtered by magic number)
+  - SL/TP modification
+  - R-multiple TP computation from fill price
+  - MA-snapshot SL computation
+  - MA-cross exit monitoring
+  - Dedicated [EXEC] execution logger
+  - Trade record building for ctx._trades
+  - Signal validation (ported from JINNI ZERO engine_core.py)
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import sys
-import tempfile
-import threading
-import time
-import traceback
-import types
-from abc import ABC, abstractmethod
-from collections import deque
-from datetime import datetime, timezone, timedelta
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
-from worker.indicators import IndicatorEngine, precompute_indicator_series
-from worker.execution import (
+
+# =============================================================================
+# Signal Constants
+# =============================================================================
+
+SIGNAL_BUY = "BUY"
+SIGNAL_SELL = "SELL"
+SIGNAL_HOLD = "HOLD"
+SIGNAL_CLOSE = "CLOSE"
+SIGNAL_CLOSE_LONG = "CLOSE_LONG"
+SIGNAL_CLOSE_SHORT = "CLOSE_SHORT"
+VALID_SIGNALS = {
     SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
-    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, VALID_SIGNALS,
-    PositionState, ExecutionLogger, MT5Executor,
-    validate_signal, compute_sl, compute_tp, build_trade_record,
-)
+    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, None,
+}
 
 
 # =============================================================================
-# Strategy Base Class
+# Signal Validation (ported from JINNI ZERO engine_core.py)
 # =============================================================================
 
-class BaseStrategy(ABC):
-    strategy_id: str = ""
-    name: str = ""
-    description: str = ""
-    version: str = "1.0"
-    min_lookback: int = 0
+def validate_signal(raw, bar_index: int) -> dict:
+    """
+    Validate and normalize a raw signal dict from strategy.on_bar().
+    Matches JINNI ZERO backtester validate_signal() exactly.
+    """
+    if raw is None:
+        return {"signal": "HOLD"}
+    if not isinstance(raw, dict):
+        print(f"[EXEC] WARNING: Bar {bar_index}: strategy returned "
+              f"{type(raw).__name__}, expected dict or None")
+        return {"signal": "HOLD"}
 
-    def get_metadata(self) -> Dict[str, Any]:
+    sig = raw.get("signal")
+    if sig is not None:
+        sig = str(sig).upper()
+    if sig not in VALID_SIGNALS:
+        print(f"[EXEC] WARNING: Bar {bar_index}: invalid signal '{sig}'")
+        return {"signal": "HOLD"}
+
+    out = {"signal": sig or "HOLD"}
+
+    # Direct SL/TP
+    if raw.get("sl") is not None:
+        out["sl"] = float(raw["sl"])
+    if raw.get("tp") is not None:
+        out["tp"] = float(raw["tp"])
+
+    # Engine-computed SL/TP fields
+    for key in ("sl_mode", "sl_pts", "sl_ma_key", "sl_ma_val",
+                "tp_mode", "tp_r"):
+        if raw.get(key) is not None:
+            if key in ("sl_mode", "sl_ma_key", "tp_mode"):
+                out[key] = raw[key]
+            else:
+                out[key] = float(raw[key])
+
+    # Engine-level MA cross exit keys
+    if raw.get("engine_sl_ma_key") is not None:
+        out["engine_sl_ma_key"] = str(raw["engine_sl_ma_key"])
+    if raw.get("engine_tp_ma_key") is not None:
+        out["engine_tp_ma_key"] = str(raw["engine_tp_ma_key"])
+
+    # CLOSE signal
+    if out["signal"] == "CLOSE":
+        out["close"] = True
+        out["close_reason"] = str(raw.get("close_reason", "strategy_close"))
+    elif raw.get("close"):
+        out["close"] = True
+        out["close_reason"] = str(raw.get("close_reason", "strategy_close"))
+
+    # Dynamic SL/TP updates
+    if raw.get("update_sl") is not None:
+        out["update_sl"] = float(raw["update_sl"])
+    if raw.get("update_tp") is not None:
+        out["update_tp"] = float(raw["update_tp"])
+
+    # Comment
+    if raw.get("comment"):
+        out["comment"] = str(raw["comment"])
+
+    return out
+
+
+# =============================================================================
+# SL/TP Computation Helpers
+# =============================================================================
+
+def compute_sl(signal: dict, entry_price: float, direction: str) -> Optional[float]:
+    """
+    Compute SL price from signal fields.
+    Supports: direct sl, sl_mode=ma_snapshot, sl_mode=fixed.
+    """
+    sl_mode = signal.get("sl_mode")
+
+    if sl_mode == "ma_snapshot":
+        ma_val = signal.get("sl_ma_val")
+        if ma_val is not None:
+            ma_val = float(ma_val)
+            if direction == "long" and ma_val < entry_price:
+                return round(ma_val, 5)
+            elif direction == "short" and ma_val > entry_price:
+                return round(ma_val, 5)
+        return None
+
+    if sl_mode == "fixed":
+        pts = float(signal.get("sl_pts", 0))
+        if pts > 0:
+            if direction == "long":
+                return round(entry_price - pts, 5)
+            else:
+                return round(entry_price + pts, 5)
+        return None
+
+    # Direct SL
+    if signal.get("sl") is not None:
+        return float(signal["sl"])
+
+    return None
+
+
+def compute_tp(signal: dict, entry_price: float, sl_price: Optional[float],
+               direction: str) -> Optional[float]:
+    """
+    Compute TP price from signal fields.
+    Supports: direct tp, tp_mode=r_multiple.
+    """
+    tp_mode = signal.get("tp_mode")
+
+    if tp_mode == "r_multiple":
+        r = float(signal.get("tp_r", 1.0))
+        if sl_price is not None:
+            risk = abs(entry_price - sl_price)
+            if risk > 0:
+                if direction == "long":
+                    return round(entry_price + risk * r, 5)
+                else:
+                    return round(entry_price - risk * r, 5)
+        return None
+
+    # Direct TP
+    if signal.get("tp") is not None:
+        return float(signal["tp"])
+
+    return None
+
+
+# =============================================================================
+# Position State
+# =============================================================================
+
+@dataclass
+class PositionState:
+    has_position: bool = False
+    direction: Optional[str] = None
+    entry_price: Optional[float] = None
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    size: Optional[float] = None
+    ticket: Optional[int] = None
+    profit: Optional[float] = None
+    entry_bar: Optional[int] = None
+    # Backtester-compatible fields
+    bars_held: int = 0
+    unrealized_pts: float = 0.0
+    unrealized_pnl: float = 0.0
+    mae: float = 0.0
+    mfe: float = 0.0
+
+    @property
+    def sl_level(self) -> Optional[float]:
+        """Backtester-compatible alias for sl."""
+        return self.sl
+
+    @property
+    def tp_level(self) -> Optional[float]:
+        """Backtester-compatible alias for tp."""
+        return self.tp
+
+
+# =============================================================================
+# Execution Logger
+# =============================================================================
+
+class ExecutionLogger:
+    """Dedicated [EXEC] logger for all trade decisions."""
+
+    def __init__(self, deployment_id: str, symbol: str):
+        self.deployment_id = deployment_id
+        self.symbol = symbol
+        self.buys_attempted = 0
+        self.buys_filled = 0
+        self.sells_attempted = 0
+        self.sells_filled = 0
+        self.closes_attempted = 0
+        self.closes_filled = 0
+        self.holds = 0
+        self.skips = 0
+        self.rejections = 0
+        self.modifications = 0
+        self.ma_cross_exits = 0
+
+    def _ts(self) -> str:
+        return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+
+    def _pos_str(self, pos: PositionState) -> str:
+        if not pos or not pos.has_position:
+            return "FLAT"
+        d = (pos.direction or "?").upper()
+        p = f"@{pos.entry_price:.5f}" if pos.entry_price else ""
+        s = f"x{pos.size}" if pos.size else ""
+        pnl = f" pnl={pos.profit:.2f}" if pos.profit is not None else ""
+        return f"{d}{p}{s}{pnl}"
+
+    def log_signal(self, action: str, bar_idx: int, bar_time, price,
+                   pos: PositionState):
+        print(
+            f"[EXEC] {self._ts()} | {action} | {self.symbol} | "
+            f"bar={bar_idx} t={bar_time} | price={price} | "
+            f"pos={self._pos_str(pos)}"
+        )
+
+    def log_open(self, direction: str, result: dict, sl=None, tp=None):
+        if direction == "BUY":
+            self.buys_attempted += 1
+        else:
+            self.sells_attempted += 1
+
+        if result.get("success"):
+            if direction == "BUY":
+                self.buys_filled += 1
+            else:
+                self.sells_filled += 1
+            print(
+                f"[EXEC]   -> OPENED {direction} | "
+                f"ticket={result.get('ticket')} "
+                f"price={result.get('price', 0):.5f} "
+                f"vol={result.get('volume', 0)} "
+                f"sl={sl} tp={tp}"
+            )
+        else:
+            self.rejections += 1
+            print(
+                f"[EXEC]   -> REJECTED {direction} | "
+                f"error={result.get('error', 'unknown')}"
+            )
+
+    def log_close(self, results: list, reason: str = "signal"):
+        self.closes_attempted += 1
+        for r in results:
+            if r.get("success"):
+                self.closes_filled += 1
+                print(
+                    f"[EXEC]   -> CLOSED ticket={r.get('ticket')} "
+                    f"price={r.get('price', 0):.5f} "
+                    f"profit={r.get('profit', 0):.2f} "
+                    f"reason={reason}"
+                )
+            else:
+                self.rejections += 1
+                print(
+                    f"[EXEC]   -> CLOSE FAILED ticket={r.get('ticket', '?')} "
+                    f"error={r.get('error', 'unknown')}"
+                )
+
+    def log_skip(self, action: str, reason: str):
+        self.skips += 1
+        print(f"[EXEC]   -> SKIPPED {action} | reason={reason}")
+
+    def log_hold(self):
+        self.holds += 1
+
+    def log_modify(self, result: dict, sl=None, tp=None):
+        self.modifications += 1
+        if result.get("success"):
+            print(f"[EXEC]   -> MODIFIED sl={sl} tp={tp}")
+        else:
+            print(f"[EXEC]   -> MODIFY FAILED error={result.get('error')}")
+
+    def log_ma_cross_exit(self, ma_key: str, direction: str, ma_val: float,
+                          close_price: float):
+        self.ma_cross_exits += 1
+        print(
+            f"[EXEC]   -> MA CROSS EXIT | {ma_key}={ma_val:.5f} "
+            f"close={close_price:.5f} dir={direction}"
+        )
+
+    def get_stats(self) -> dict:
         return {
-            "id": self.strategy_id, "name": self.name or self.strategy_id,
-            "description": self.description or "", "version": self.version,
-            "min_lookback": self.min_lookback,
-            "parameters": self.get_parameter_schema(),
+            "buys_attempted": self.buys_attempted,
+            "buys_filled": self.buys_filled,
+            "sells_attempted": self.sells_attempted,
+            "sells_filled": self.sells_filled,
+            "closes_attempted": self.closes_attempted,
+            "closes_filled": self.closes_filled,
+            "holds": self.holds,
+            "skips": self.skips,
+            "rejections": self.rejections,
+            "modifications": self.modifications,
+            "ma_cross_exits": self.ma_cross_exits,
         }
 
-    def get_parameter_schema(self) -> Dict[str, Any]:
-        return getattr(self, "parameters", {})
-
-    def get_default_parameters(self) -> Dict[str, Any]:
-        schema = self.get_parameter_schema()
-        defaults = {}
-        for key, spec in schema.items():
-            if isinstance(spec, dict) and "default" in spec:
-                defaults[key] = spec["default"]
-        return defaults
-
-    def validate_parameters(self, raw_params: Dict[str, Any]) -> Dict[str, Any]:
-        params = dict(self.get_default_parameters())
-        for key, value in (raw_params or {}).items():
-            params[key] = value
-        return params
-
-    def build_indicators(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return []
-
-    def on_init(self, ctx: Any) -> None:
-        pass
-
-    def on_end(self, ctx: Any) -> None:
-        pass
-
-    @abstractmethod
-    def on_bar(self, ctx: Any) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError("Strategy must implement on_bar()")
-
 
 # =============================================================================
-# Strategy Context
+# MT5 Trade Executor
 # =============================================================================
-
-class StrategyContext:
-    def __init__(self, bars: list, params: dict,
-                 position: Optional[PositionState] = None):
-        self._bars = bars
-        self._params = params
-        self._position = position or PositionState()
-        self._index: int = 0
-        self._trades: list = []
-        self._equity: float = 0.0
-        self._balance: float = 0.0
-        self._indicators: dict = {}
-        self._ind_series: dict = {}
-        self.state: dict = {}
-
-    @property
-    def index(self) -> int:
-        return self._index
-
-    @index.setter
-    def index(self, val: int):
-        self._index = val
-
-    @property
-    def bar(self) -> dict:
-        if 0 <= self._index < len(self._bars):
-            return self._bars[self._index]
-        return {}
-
-    @property
-    def bars(self) -> list:
-        return self._bars
-
-    @property
-    def indicators(self) -> dict:
-        return self._indicators
-
-    @property
-    def ind_series(self) -> dict:
-        return self._ind_series
-
-    @property
-    def position(self) -> PositionState:
-        return self._position
-
-    @position.setter
-    def position(self, val: PositionState):
-        self._position = val
-
-    @property
-    def params(self) -> dict:
-        return self._params
-
-    @property
-    def trades(self) -> list:
-        return self._trades
-
-    @property
-    def equity(self) -> float:
-        return self._equity
-
-    @equity.setter
-    def equity(self, val: float):
-        self._equity = val
-
-    @property
-    def balance(self) -> float:
-        return self._balance
-
-    @balance.setter
-    def balance(self, val: float):
-        self._balance = val
-
-
-# =============================================================================
-# Range Bar Engine
-# =============================================================================
-
-def _make_bar(time_: int, open_: float, high_: float, low_: float,
-              close_: float, volume_: float) -> dict:
-    return {
-        "time": int(time_), "open": round(open_, 5), "high": round(high_, 5),
-        "low": round(low_, 5), "close": round(close_, 5),
-        "volume": round(volume_, 2),
-    }
-
-
-class RangeBarEngine:
-    def __init__(self, bar_size_points: float, max_bars: int = 500,
-                 on_bar: Optional[Callable[[dict], None]] = None):
-        self.range_size = float(bar_size_points)
-        self.max_bars = max_bars
-        self._on_bar = on_bar
-        self.trend = 0
-        self.bar: Optional[dict] = None
-        self.bars: deque = deque(maxlen=max_bars)
-        self._last_emitted_ts: Optional[int] = None
-        self.total_ticks = 0
-        self.total_bars_emitted = 0
-
-    @property
-    def current_bars_count(self) -> int:
-        return len(self.bars)
-
-    def _emit(self, bar_dict: dict) -> None:
-        ts = int(bar_dict["time"])
-        if self._last_emitted_ts is not None and ts <= self._last_emitted_ts:
-            ts = self._last_emitted_ts + 1
-        bar_dict["time"] = ts
-        self._last_emitted_ts = ts
-        self.bars.append(bar_dict)
-        self.total_bars_emitted += 1
-        if self._on_bar:
-            self._on_bar(bar_dict)
-
-    def _start_bar(self, ts: int, price: float, volume: float) -> None:
-        self.bar = {"time": ts, "open": price, "high": price,
-                    "low": price, "close": price, "volume": volume}
-
-    def process_tick(self, ts: int, price: float, volume: float = 0.0) -> None:
-        self.total_ticks += 1
-        if self.bar is None:
-            self._start_bar(ts, price, volume)
-            return
-        p, rs = price, self.range_size
-        self.bar["volume"] += volume
-
-        while True:
-            o = self.bar["open"]
-            if self.trend == 0:
-                up_t, dn_t = o + rs, o - rs
-                if p >= up_t:
-                    self.bar["high"] = max(self.bar["high"], up_t)
-                    self.bar["low"] = min(self.bar["low"], o)
-                    self.bar["close"] = up_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.trend = 1
-                    self.bar = {"time": ts, "open": up_t, "high": up_t,
-                                "low": up_t, "close": up_t, "volume": 0.0}
-                    continue
-                if p <= dn_t:
-                    self.bar["high"] = max(self.bar["high"], o)
-                    self.bar["low"] = min(self.bar["low"], dn_t)
-                    self.bar["close"] = dn_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.trend = -1
-                    self.bar = {"time": ts, "open": dn_t, "high": dn_t,
-                                "low": dn_t, "close": dn_t, "volume": 0.0}
-                    continue
-                self.bar["high"] = max(self.bar["high"], p)
-                self.bar["low"] = min(self.bar["low"], p)
-                self.bar["close"] = p
-                break
-            if self.trend == 1:
-                cont_t, rev_t = o + rs, o - (2 * rs)
-                if p >= cont_t:
-                    self.bar["high"] = max(self.bar["high"], cont_t)
-                    self.bar["low"] = min(self.bar["low"], o)
-                    self.bar["close"] = cont_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.bar = {"time": ts, "open": cont_t, "high": cont_t,
-                                "low": cont_t, "close": cont_t, "volume": 0.0}
-                    continue
-                if p <= rev_t:
-                    ro, rc = o - rs, o - (2 * rs)
-                    h_ = max(self.bar["high"], o)
-                    l_ = min(self.bar["low"], rc)
-                    self._emit(_make_bar(self.bar["time"], ro, h_, l_, rc,
-                               self.bar["volume"]))
-                    self.trend = -1
-                    self.bar = {"time": ts, "open": rc, "high": rc,
-                                "low": rc, "close": rc, "volume": 0.0}
-                    continue
-                self.bar["high"] = max(self.bar["high"], p)
-                self.bar["low"] = min(self.bar["low"], p)
-                self.bar["close"] = p
-                break
-            if self.trend == -1:
-                cont_t, rev_t = o - rs, o + (2 * rs)
-                if p <= cont_t:
-                    self.bar["high"] = max(self.bar["high"], o)
-                    self.bar["low"] = min(self.bar["low"], cont_t)
-                    self.bar["close"] = cont_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.bar = {"time": ts, "open": cont_t, "high": cont_t,
-                                "low": cont_t, "close": cont_t, "volume": 0.0}
-                    continue
-                if p >= rev_t:
-                    ro, rc = o + rs, o + (2 * rs)
-                    h_ = max(self.bar["high"], rc)
-                    l_ = min(self.bar["low"], o)
-                    self._emit(_make_bar(self.bar["time"], ro, h_, l_, rc,
-                               self.bar["volume"]))
-                    self.trend = 1
-                    self.bar = {"time": ts, "open": rc, "high": rc,
-                                "low": rc, "close": rc, "volume": 0.0}
-                    continue
-                self.bar["high"] = max(self.bar["high"], p)
-                self.bar["low"] = min(self.bar["low"], p)
-                self.bar["close"] = p
-                break
-
-    def reset(self) -> None:
-        self.trend = 0
-        self.bar = None
-        self.bars.clear()
-        self._last_emitted_ts = None
-        self.total_ticks = 0
-        self.total_bars_emitted = 0
-
-
-# =============================================================================
-# MT5 Tick Normalizer + Connector
-# =============================================================================
-
-def _tick_field(raw, field: str, default: float = 0.0) -> float:
-    try:
-        return float(raw[field])
-    except (KeyError, IndexError, TypeError, ValueError):
-        pass
-    try:
-        return float(getattr(raw, field))
-    except (AttributeError, TypeError, ValueError):
-        pass
-    return default
-
-
-def normalize_tick(raw) -> Optional[dict]:
-    ts_val = _tick_field(raw, "time", -1.0)
-    if ts_val < 0:
-        return None
-    ts = int(ts_val)
-    time_msc_val = _tick_field(raw, "time_msc", -1.0)
-    time_msc = int(time_msc_val) if time_msc_val >= 0 else ts * 1000
-    bid = _tick_field(raw, "bid", 0.0)
-    ask = _tick_field(raw, "ask", 0.0)
-    last = _tick_field(raw, "last", 0.0)
-    volume = _tick_field(raw, "volume", 0.0)
-    price = bid if bid > 0 else (last if last > 0 else ask)
-    if price <= 0:
-        return None
-    return {"ts": ts, "time_msc": time_msc, "price": price,
-            "bid": bid, "ask": ask, "last": last, "volume": volume}
-
 
 def _import_mt5():
     try:
@@ -2049,811 +2456,349 @@ def _import_mt5():
         return None
 
 
-def init_mt5() -> Tuple[bool, str]:
-    mt5 = _import_mt5()
-    if mt5 is None:
-        return False, "MetaTrader5 package not installed."
-    if not mt5.initialize():
-        return False, f"MT5 initialize() failed: {mt5.last_error()}"
-    info = mt5.terminal_info()
-    if info is None:
-        return False, "MT5 terminal_info() returned None."
-    account = mt5.account_info()
-    acct_str = f" | account={account.login} broker={account.company}" if account else ""
-    print(f"[MT5] Connected: {info.name}{acct_str}")
-    return True, "ok"
+class MT5Executor:
+    """Handles all real MT5 order execution."""
 
+    def __init__(self, symbol: str, lot_size: float, deployment_id: str):
+        self.symbol = symbol
+        self.lot_size = lot_size
+        self.magic = self._make_magic(deployment_id)
+        self._mt5 = _import_mt5()
+        self._filling_mode = None
 
-def shutdown_mt5() -> None:
-    mt5 = _import_mt5()
-    if mt5:
-        mt5.shutdown()
+        if self._mt5:
+            self._filling_mode = self._detect_filling()
+            print(
+                f"[EXECUTOR] Ready: symbol={symbol} lot={lot_size} "
+                f"magic={self.magic} filling={self._filling_mode}"
+            )
+        else:
+            print("[EXECUTOR] WARNING: MT5 not available. Execution disabled.")
 
+    @staticmethod
+    def _make_magic(deployment_id: str) -> int:
+        h = 0
+        for c in deployment_id:
+            h = (h * 31 + ord(c)) & 0xFFFFFFFF
+        return (h % 900000) + 100000
 
-def get_mt5_account_info() -> Optional[dict]:
-    mt5 = _import_mt5()
-    if mt5 is None:
-        return None
-    account = mt5.account_info()
-    if account is None:
-        return None
-    terminal = mt5.terminal_info()
-    return {
-        "login": str(account.login),
-        "broker": str(account.company) if account.company else None,
-        "server": str(account.server) if account.server else None,
-        "balance": float(account.balance),
-        "equity": float(account.equity),
-        "terminal": str(terminal.name) if terminal else None,
-    }
+    def _detect_filling(self) -> int:
+        mt5 = self._mt5
+        info = mt5.symbol_info(self.symbol)
+        if info is None:
+            return 1
+        fm = info.filling_mode
+        if fm & 2:
+            return 1  # IOC
+        elif fm & 1:
+            return 0  # FOK
+        else:
+            return 2  # RETURN
 
+    # ── Open Orders ─────────────────────────────────────────
 
-def fetch_historical_ticks(symbol, lookback_value, lookback_unit):
-    mt5 = _import_mt5()
-    if mt5 is None:
-        return None, "MetaTrader5 package not installed."
-    now = datetime.now(timezone.utc)
-    if lookback_unit == "minutes":
-        from_time = now - timedelta(minutes=lookback_value)
-    elif lookback_unit == "hours":
-        from_time = now - timedelta(hours=lookback_value)
-    elif lookback_unit == "days":
-        from_time = now - timedelta(days=lookback_value)
-    else:
-        return None, f"Invalid lookback_unit: {lookback_unit}"
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        return None, f"Symbol '{symbol}' not found in MT5."
-    if not symbol_info.visible:
-        if not mt5.symbol_select(symbol, True):
-            return None, f"Failed to enable symbol '{symbol}' in MT5."
-    print(f"[MT5] Fetching ticks: {symbol} from {from_time.isoformat()}")
-    ticks = mt5.copy_ticks_range(symbol, from_time, now, mt5.COPY_TICKS_ALL)
-    if ticks is None or len(ticks) == 0:
-        return None, f"No ticks for {symbol}. MT5 error: {mt5.last_error()}"
-    result, skipped = [], 0
-    for raw_tick in ticks:
-        n = normalize_tick(raw_tick)
-        if n is None:
-            skipped += 1
-            continue
-        result.append({"ts": n["ts"], "price": n["price"], "volume": n["volume"]})
-    if not result:
-        return None, f"All {len(ticks)} ticks had no valid price."
-    print(f"[MT5] Got {len(result)} ticks for {symbol} (skipped {skipped})")
-    return result, "ok"
+    def open_buy(self, sl=None, tp=None, comment="") -> dict:
+        return self._open_order("buy", sl, tp, comment)
 
+    def open_sell(self, sl=None, tp=None, comment="") -> dict:
+        return self._open_order("sell", sl, tp, comment)
 
-def stream_live_ticks(symbol, poll_interval=0.05):
-    mt5 = _import_mt5()
-    if mt5 is None:
-        raise RuntimeError("MetaTrader5 package not installed.")
-    cursor_time = datetime.now(timezone.utc)
-    last_tick_msc = 0
-    while True:
-        ticks = mt5.copy_ticks_from(symbol, cursor_time, 1000, mt5.COPY_TICKS_ALL)
-        if ticks is not None and len(ticks) > 0:
-            for raw_tick in ticks:
-                n = normalize_tick(raw_tick)
-                if n is None:
-                    continue
-                if n["time_msc"] <= last_tick_msc:
-                    continue
-                last_tick_msc = n["time_msc"]
-                yield {"ts": n["ts"], "price": n["price"], "volume": n["volume"]}
-            last_ts = _tick_field(ticks[-1], "time", 0.0)
-            if last_ts > 0:
-                cursor_time = datetime.fromtimestamp(int(last_ts), tz=timezone.utc)
-        time.sleep(poll_interval)
+    def _open_order(self, direction: str, sl=None, tp=None,
+                    comment="") -> dict:
+        mt5 = self._mt5
+        if mt5 is None:
+            return {"success": False, "error": "MT5 not available"}
 
+        tick = mt5.symbol_info_tick(self.symbol)
+        if tick is None:
+            return {"success": False,
+                    "error": f"No tick data for {self.symbol}"}
 
-class _MT5ConnectorFacade:
-    init_mt5 = staticmethod(init_mt5)
-    shutdown_mt5 = staticmethod(shutdown_mt5)
-    fetch_historical_ticks = staticmethod(fetch_historical_ticks)
-    stream_live_ticks = staticmethod(stream_live_ticks)
-    get_mt5_account_info = staticmethod(get_mt5_account_info)
+        is_buy = direction == "buy"
+        price = tick.ask if is_buy else tick.bid
+        order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
 
-
-mt5_connector = _MT5ConnectorFacade()
-
-
-# =============================================================================
-# Strategy Loader
-# =============================================================================
-
-def load_strategy_from_source(source_code: str, class_name: str,
-                              strategy_id: str) -> Tuple[Optional[object], Optional[str]]:
-    try:
-        _ensure_base_importable()
-    except Exception as exc:
-        return None, f"Failed to prepare base imports: {exc}"
-
-    module_name = f"jinni_strategy_{strategy_id}"
-    try:
-        tmp_dir = tempfile.mkdtemp(prefix="jinni_strat_")
-        tmp_path = os.path.join(tmp_dir, f"{module_name}.py")
-        with open(tmp_path, "w", encoding="utf-8") as file:
-            file.write(source_code)
-        spec = importlib.util.spec_from_file_location(module_name, tmp_path)
-        if spec is None or spec.loader is None:
-            return None, "Failed to create module spec."
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        klass = getattr(module, class_name, None)
-        if klass is None:
-            available = [k for k in dir(module) if not k.startswith("_")]
-            return None, f"Class '{class_name}' not found. Available: {available}"
-        instance = klass()
-        if not hasattr(instance, "on_bar"):
-            return None, f"Class '{class_name}' has no on_bar() method."
-        print(f"[LOADER] Strategy loaded: {class_name} (id={strategy_id})")
-        return instance, None
-    except Exception as exc:
-        tb = traceback.format_exc()
-        print(f"[LOADER] Failed: {exc}\n{tb}")
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _ensure_base_importable():
-    current_module = sys.modules[__name__]
-    sys.modules["base_strategy"] = current_module
-    sys.modules["worker.base_strategy"] = current_module
-    if "backend" not in sys.modules:
-        bm = types.ModuleType("backend")
-        bm.__path__ = []
-        sys.modules["backend"] = bm
-    if "backend.strategies" not in sys.modules:
-        sm = types.ModuleType("backend.strategies")
-        sm.__path__ = []
-        sys.modules["backend.strategies"] = sm
-    sys.modules["backend.strategies.base"] = current_module
-
-
-# =============================================================================
-# Strategy Runner
-# =============================================================================
-
-class StrategyRunner:
-    def __init__(self, deployment_config: dict, status_callback=None):
-        self.config = deployment_config
-        self._status_callback = status_callback
-
-        self.deployment_id: str = deployment_config["deployment_id"]
-        self.strategy_id: str = deployment_config["strategy_id"]
-        self.class_name: str = deployment_config.get("strategy_class_name", "")
-        self.source_code: str = deployment_config.get("strategy_file_content", "")
-        self.symbol: str = deployment_config["symbol"]
-        self.tick_lookback_value: int = deployment_config.get("tick_lookback_value", 30)
-        self.tick_lookback_unit: str = deployment_config.get("tick_lookback_unit", "minutes")
-        self.bar_size_points: float = deployment_config["bar_size_points"]
-        self.max_bars: int = deployment_config.get("max_bars_in_memory", 500)
-        self.lot_size: float = deployment_config.get("lot_size", 0.01)
-        self.strategy_parameters: dict = deployment_config.get("strategy_parameters") or {}
-
-        self._strategy = None
-        self._ctx: Optional[StrategyContext] = None
-        self._bar_engine: Optional[RangeBarEngine] = None
-        self._executor: Optional[MT5Executor] = None
-        self._exec_log: Optional[ExecutionLogger] = None
-        self._indicator_engine: Optional[IndicatorEngine] = None
-        self._runner_state: str = "idle"
-        self._last_signal: Optional[dict] = None
-        self._last_error: Optional[str] = None
-        self._started_at: Optional[str] = None
-        self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._bar_index: int = 0
-
-        # MT5 info
-        self._mt5_state: Optional[str] = None
-        self._mt5_broker: Optional[str] = None
-        self._mt5_account_id: Optional[str] = None
-        self._mt5_server: Optional[str] = None
-        self._mt5_balance: Optional[float] = None
-        self._mt5_equity: Optional[float] = None
-
-        # Pipeline counters
-        self._total_ticks_ingested: int = 0
-        self._total_bars_produced: int = 0
-        self._on_bar_call_count: int = 0
-        self._signal_count: int = 0
-        self._warmup_signal_count: int = 0
-        self._last_bar_time: Optional[int] = None
-        self._current_price: Optional[float] = None
-        self._trade_counter: int = 0
-
-        # Active trade tracking (for MA-cross exit + trade records)
-        self._active_trade_meta: Optional[dict] = None
-
-    # ── Diagnostics ─────────────────────────────────────────
-
-    def get_diagnostics(self) -> dict:
-        exec_stats = self._exec_log.get_stats() if self._exec_log else {}
-        open_count = self._executor.get_open_count() if self._executor else 0
-        floating = self._executor.get_floating_pnl() if self._executor else 0.0
-
-        if self._executor and self._executor._mt5:
-            try:
-                acct = self._executor._mt5.account_info()
-                if acct:
-                    self._mt5_balance = float(acct.balance)
-                    self._mt5_equity = float(acct.equity)
-            except Exception:
-                pass
-
-        return {
-            "runner_state": self._runner_state,
-            "strategy_id": self.strategy_id,
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
             "symbol": self.symbol,
-            "mt5_state": self._mt5_state,
-            "broker": self._mt5_broker,
-            "account_id": self._mt5_account_id,
-            "mt5_server": self._mt5_server,
-            "mt5_balance": self._mt5_balance,
-            "mt5_equity": self._mt5_equity,
-            "total_ticks": self._total_ticks_ingested,
-            "total_bars": self._total_bars_produced,
-            "current_bars_in_memory": (
-                self._bar_engine.current_bars_count if self._bar_engine else 0
-            ),
-            "on_bar_calls": self._on_bar_call_count,
-            "signal_count": self._signal_count,
-            "warmup_signals": self._warmup_signal_count,
-            "last_bar_time": self._last_bar_time,
-            "current_price": self._current_price,
-            "last_signal": self._last_signal,
-            "last_error": self._last_error,
-            "started_at": self._started_at,
-            "open_positions_count": open_count,
-            "floating_pnl": floating,
-            "trade_count": self._trade_counter,
-            **{f"exec_{k}": v for k, v in exec_stats.items()},
+            "volume": self.lot_size,
+            "type": order_type,
+            "price": price,
+            "deviation": 30,
+            "magic": self.magic,
+            "comment": comment or f"JG_{direction}",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self._filling_mode,
         }
 
-    # ── Status Reporting ────────────────────────────────────
+        if sl is not None and sl > 0:
+            request["sl"] = round(float(sl), 5)
+        if tp is not None and tp > 0:
+            request["tp"] = round(float(tp), 5)
 
-    def _report_status(self):
-        if not self._status_callback:
-            return
-        status = {
-            "deployment_id": self.deployment_id,
-            "strategy_id": self.strategy_id,
-            "strategy_name": getattr(self._strategy, "name", None) if self._strategy else None,
-            "symbol": self.symbol,
-            "runner_state": self._runner_state,
-            "bar_size_points": self.bar_size_points,
-            "max_bars_in_memory": self.max_bars,
-            "current_bars_count": self._bar_engine.current_bars_count if self._bar_engine else 0,
-            "last_signal": self._last_signal,
-            "last_error": self._last_error,
-            "started_at": self._started_at,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        for attempt in range(3):
-            try:
-                self._status_callback(status)
-                return
-            except Exception as exc:
-                print(f"[RUNNER] Status report attempt {attempt + 1}/3 failed: {exc}")
-                if attempt < 2:
-                    time.sleep(1.0)
+        print(f"[EXECUTOR] Sending {direction.upper()}: {request}")
+        result = mt5.order_send(request)
 
-    def _set_state(self, state: str, error: str = None):
-        self._runner_state = state
-        if error:
-            self._last_error = error
-        print(f"[RUNNER] {self.deployment_id} -> {state}"
-              + (f" (error: {error})" if error else ""))
-        self._report_status()
+        if result is None:
+            err = mt5.last_error()
+            return {"success": False, "error": f"order_send returned None: {err}"}
 
-    # ── MT5 Info ────────────────────────────────────────────
-
-    def _capture_mt5_info(self):
-        info = mt5_connector.get_mt5_account_info()
-        if info:
-            self._mt5_state = "connected"
-            self._mt5_broker = info.get("broker")
-            self._mt5_account_id = info.get("login")
-            self._mt5_server = info.get("server")
-            self._mt5_balance = info.get("balance")
-            self._mt5_equity = info.get("equity")
-            print(f"[RUNNER] MT5 info: broker={self._mt5_broker} "
-                  f"account={self._mt5_account_id} balance={self._mt5_balance}")
-        else:
-            self._mt5_state = "connected_no_account"
-
-    # ── Position Refresh ────────────────────────────────────
-
-    def _refresh_position(self):
-        if self._executor:
-            pos = self._executor.get_position_state()
-            if self._active_trade_meta and pos.has_position:
-                pos.entry_bar = self._active_trade_meta.get("entry_bar")
-            self._ctx.position = pos
-
-    # ── Pipeline Log ────────────────────────────────────────
-
-    def _log_pipeline(self, label: str = ""):
-        c = f" [{label}]" if label else ""
-        exec_s = self._exec_log.get_stats() if self._exec_log else {}
-        pos_n = self._executor.get_open_count() if self._executor else 0
-        print(
-            f"[PIPELINE]{c} dep={self.deployment_id} | "
-            f"ticks={self._total_ticks_ingested} "
-            f"bars={self._total_bars_produced} "
-            f"on_bar={self._on_bar_call_count} "
-            f"signals={self._signal_count} "
-            f"buys={exec_s.get('buys_filled', 0)} "
-            f"sells={exec_s.get('sells_filled', 0)} "
-            f"closes={exec_s.get('closes_filled', 0)} "
-            f"ma_exits={exec_s.get('ma_cross_exits', 0)} "
-            f"positions={pos_n} "
-            f"trades={self._trade_counter} "
-            f"price={self._current_price}"
-        )
-
-    # ── MA-Cross Exit Check ─────────────────────────────────
-
-    def _check_ma_cross_exit(self, bar: dict) -> bool:
-        """
-        Check if any engine-level MA cross exit triggers.
-        Matches JINNI ZERO backtester _check_exit() MA cross logic.
-        Returns True if a position was closed.
-        """
-        if not self._active_trade_meta:
-            return False
-
-        pos = self._ctx.position
-        if not pos.has_position:
-            return False
-
-        close_price = float(bar.get("close", 0))
-        direction = pos.direction
-
-        # Check TP MA cross
-        tp_ma_key = self._active_trade_meta.get("engine_tp_ma_key")
-        if tp_ma_key:
-            tp_ma_val = self._ctx.indicators.get(tp_ma_key)
-            if tp_ma_val is not None:
-                if direction == "long" and close_price < tp_ma_val:
-                    self._exec_log.log_ma_cross_exit(tp_ma_key, direction,
-                                                     tp_ma_val, close_price)
-                    self._close_and_record("MA_TP_EXIT", bar)
-                    return True
-                if direction == "short" and close_price > tp_ma_val:
-                    self._exec_log.log_ma_cross_exit(tp_ma_key, direction,
-                                                     tp_ma_val, close_price)
-                    self._close_and_record("MA_TP_EXIT", bar)
-                    return True
-
-        # Check SL MA cross
-        sl_ma_key = self._active_trade_meta.get("engine_sl_ma_key")
-        if sl_ma_key:
-            sl_ma_val = self._ctx.indicators.get(sl_ma_key)
-            if sl_ma_val is not None:
-                if direction == "long" and close_price < sl_ma_val:
-                    self._exec_log.log_ma_cross_exit(sl_ma_key, direction,
-                                                     sl_ma_val, close_price)
-                    self._close_and_record("MA_SL_EXIT", bar)
-                    return True
-                if direction == "short" and close_price > sl_ma_val:
-                    self._exec_log.log_ma_cross_exit(sl_ma_key, direction,
-                                                     sl_ma_val, close_price)
-                    self._close_and_record("MA_SL_EXIT", bar)
-                    return True
-
-        return False
-
-    # ── Close + Record Trade ────────────────────────────────
-
-    def _close_and_record(self, reason: str, bar: dict):
-        """Close all positions and write trade record to ctx._trades."""
-        pos = self._ctx.position
-        if not pos.has_position:
-            return
-
-        results = self._executor.close_all_positions()
-        self._exec_log.log_close(results, reason=reason)
-
-        # Build trade record
-        meta = self._active_trade_meta or {}
-        for r in results:
-            if r.get("success"):
-                self._trade_counter += 1
-                record = build_trade_record(
-                    trade_id=self._trade_counter,
-                    direction=pos.direction or "long",
-                    entry_price=pos.entry_price or 0,
-                    entry_bar=meta.get("entry_bar", self._bar_index),
-                    entry_time=meta.get("entry_time", bar.get("time", 0)),
-                    exit_price=r.get("price", 0),
-                    exit_bar=self._bar_index,
-                    exit_time=bar.get("time", 0),
-                    exit_reason=reason,
-                    sl=pos.sl,
-                    tp=pos.tp,
-                    lot_size=pos.size or self.lot_size,
-                    ticket=r.get("ticket"),
-                    profit=r.get("profit", 0),
-                )
-                self._ctx._trades.append(record)
-                print(f"[TRADE #{self._trade_counter}] {record['direction'].upper()} "
-                      f"entry={record['entry_price']} exit={record['exit_price']} "
-                      f"reason={reason} profit={record.get('profit', 0):.2f}")
-
-        self._active_trade_meta = None
-        self._refresh_position()
-
-    # ── Bar Callback ────────────────────────────────────────
-
-    def _on_new_bar(self, bar: dict):
-        self._total_bars_produced += 1
-        self._last_bar_time = bar.get("time")
-
-        if self._stop_event.is_set():
-            return
-        if self._strategy is None or self._ctx is None:
-            return
-
-        bars_list = list(self._bar_engine.bars)
-        self._ctx._bars = bars_list
-        self._ctx.index = len(bars_list) - 1
-        self._bar_index = self._ctx.index
-
-        # Update indicators
-        if self._indicator_engine:
-            self._indicator_engine.update(bars_list, self._ctx)
-
-        # Refresh real position from MT5
-        self._refresh_position()
-
-        # Check engine-level MA cross exits BEFORE calling strategy
-        if self._ctx.position.has_position:
-            if self._check_ma_cross_exit(bar):
-                # Position was closed by MA cross — strategy will see flat
-                self._refresh_position()
-
-        min_lb = getattr(self._strategy, "min_lookback", 0) or 0
-        if self._ctx.index < min_lb:
-            return
-
-        self._on_bar_call_count += 1
-
-        try:
-            raw_signal = self._strategy.on_bar(self._ctx)
-        except Exception as exc:
-            tb = traceback.format_exc()
-            print(f"[RUNNER] on_bar() error: {exc}\n{tb}")
-            self._set_state("failed", f"on_bar error: {type(exc).__name__}: {exc}")
-            self._stop_event.set()
-            return
-
-        action = validate_signal(raw_signal, self._bar_index)
-        self._handle_signal(action, bar)
-
-        if self._on_bar_call_count % 50 == 0:
-            self._log_pipeline("LIVE_BAR")
-
-    # ── Signal Handling + Execution ─────────────────────────
-
-    def _handle_signal(self, action: dict, bar: dict):
-        sig = action.get("signal")
-        if sig not in VALID_SIGNALS:
-            return
-
-        pos = self._ctx.position
-
-        self._exec_log.log_signal(
-            sig, self._bar_index, self._last_bar_time,
-            self._current_price, pos,
-        )
-
-        # ── HOLD ────────────────────────────────────────
-        if sig == SIGNAL_HOLD:
-            self._exec_log.log_hold()
-            if "update_sl" in action or "update_tp" in action:
-                self._handle_modify(action)
-            return
-
-        # ── CLOSE variants ──────────────────────────────
-        if sig == SIGNAL_CLOSE or action.get("close"):
-            if not pos.has_position:
-                self._exec_log.log_skip("CLOSE", "no position")
-                return
-            reason = action.get("close_reason", "strategy_close")
-            self._close_and_record(reason, bar)
-            self._signal_count += 1
-            self._last_signal = action
-            return
-
-        if sig == SIGNAL_CLOSE_LONG:
-            if not pos.has_position or pos.direction != "long":
-                self._exec_log.log_skip("CLOSE_LONG", "no long position")
-                return
-            self._close_and_record("strategy_close_long", bar)
-            self._signal_count += 1
-            self._last_signal = action
-            return
-
-        if sig == SIGNAL_CLOSE_SHORT:
-            if not pos.has_position or pos.direction != "short":
-                self._exec_log.log_skip("CLOSE_SHORT", "no short position")
-                return
-            self._close_and_record("strategy_close_short", bar)
-            self._signal_count += 1
-            self._last_signal = action
-            return
-
-        # ── BUY / SELL ──────────────────────────────────
-        if sig not in (SIGNAL_BUY, SIGNAL_SELL):
-            return
-
-        self._signal_count += 1
-        self._last_signal = action
-        direction = "long" if sig == SIGNAL_BUY else "short"
-
-        # Already in same direction
-        if pos.has_position and pos.direction == direction:
-            self._exec_log.log_skip(sig, f"already {direction}")
-            return
-
-        # In opposite direction — close first
-        if pos.has_position:
-            self._close_and_record("reverse", bar)
-
-        # Compute SL from signal (ma_snapshot, fixed, or direct)
-        entry_estimate = self._current_price or float(bar.get("close", 0))
-        sl_price = compute_sl(action, entry_estimate, direction)
-        tp_price = compute_tp(action, entry_estimate, sl_price, direction)
-
-        # Validate SL/TP sanity
-        if sl_price is not None:
-            if direction == "long" and sl_price >= entry_estimate:
-                print(f"[EXEC] WARNING: Long SL {sl_price} >= entry {entry_estimate}, clearing SL")
-                sl_price = None
-            elif direction == "short" and sl_price <= entry_estimate:
-                print(f"[EXEC] WARNING: Short SL {sl_price} <= entry {entry_estimate}, clearing SL")
-                sl_price = None
-
-        if tp_price is not None:
-            if direction == "long" and tp_price <= entry_estimate:
-                print(f"[EXEC] WARNING: Long TP {tp_price} <= entry {entry_estimate}, clearing TP")
-                tp_price = None
-            elif direction == "short" and tp_price >= entry_estimate:
-                print(f"[EXEC] WARNING: Short TP {tp_price} >= entry {entry_estimate}, clearing TP")
-                tp_price = None
-
-        comment = action.get("comment", f"JG_{sig}")
-
-        # Execute
-        if sig == SIGNAL_BUY:
-            result = self._executor.open_buy(sl=sl_price, tp=tp_price, comment=comment)
-        else:
-            result = self._executor.open_sell(sl=sl_price, tp=tp_price, comment=comment)
-
-        self._exec_log.log_open(sig, result, sl_price, tp_price)
-
-        if result.get("success"):
-            fill_price = result.get("price", entry_estimate)
-
-            # Recompute TP from actual fill price for R-multiple
-            if action.get("tp_mode") == "r_multiple" and sl_price is not None:
-                real_risk = abs(fill_price - sl_price)
-                r = float(action.get("tp_r", 1.0))
-                if real_risk > 0:
-                    if direction == "long":
-                        tp_price = round(fill_price + real_risk * r, 5)
-                    else:
-                        tp_price = round(fill_price - real_risk * r, 5)
-                    # Modify TP on the position
-                    mod_result = self._executor.modify_sl_tp(
-                        result["ticket"], sl=sl_price, tp=tp_price
-                    )
-                    self._exec_log.log_modify(mod_result, sl=sl_price, tp=tp_price)
-
-            # Store trade metadata for MA-cross exits + trade records
-            self._active_trade_meta = {
-                "entry_bar": self._bar_index,
-                "entry_time": bar.get("time", 0),
-                "entry_price": fill_price,
-                "direction": direction,
-                "sl": sl_price,
-                "tp": tp_price,
-                "ticket": result.get("ticket"),
-                "engine_sl_ma_key": action.get("engine_sl_ma_key"),
-                "engine_tp_ma_key": action.get("engine_tp_ma_key"),
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {
+                "success": False,
+                "error": f"retcode={result.retcode} comment={result.comment}",
+                "retcode": result.retcode,
             }
 
-        self._refresh_position()
-        self._report_status()
+        return {
+            "success": True,
+            "ticket": result.order,
+            "price": result.price,
+            "volume": result.volume,
+        }
 
-    def _handle_modify(self, action: dict):
-        pos = self._ctx.position
-        if not pos.has_position or not pos.ticket:
-            self._exec_log.log_skip("MODIFY", "no position")
-            return
-        new_sl = action.get("update_sl")
-        new_tp = action.get("update_tp")
-        result = self._executor.modify_sl_tp(pos.ticket, sl=new_sl, tp=new_tp)
-        self._exec_log.log_modify(result, sl=new_sl, tp=new_tp)
-        self._refresh_position()
+    # ── Close Orders ────────────────────────────────────────
 
-    # ── Lifecycle ───────────────────────────────────────────
+    def close_position(self, ticket: int, pos_type: int,
+                       volume: float, profit: float) -> dict:
+        mt5 = self._mt5
+        if mt5 is None:
+            return {"success": False, "ticket": ticket,
+                    "error": "MT5 not available"}
 
-    def start(self):
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        tick = mt5.symbol_info_tick(self.symbol)
+        if tick is None:
+            return {"success": False, "ticket": ticket,
+                    "error": f"No tick for {self.symbol}"}
 
-    def stop(self):
-        self._stop_event.set()
-        self._set_state("stopped")
-        if self._thread:
-            self._thread.join(timeout=10)
+        is_long = (pos_type == 0)
+        close_price = tick.bid if is_long else tick.ask
+        close_type = mt5.ORDER_TYPE_SELL if is_long else mt5.ORDER_TYPE_BUY
 
-    def _run(self):
-        try:
-            self._run_lifecycle()
-        except Exception as exc:
-            tb = traceback.format_exc()
-            print(f"[RUNNER] FATAL: {self.deployment_id}:\n{tb}")
-            self._set_state("failed", f"{type(exc).__name__}: {exc}")
-            try:
-                mt5_connector.shutdown_mt5()
-            except Exception:
-                pass
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": volume,
+            "type": close_type,
+            "position": ticket,
+            "price": close_price,
+            "deviation": 30,
+            "magic": self.magic,
+            "comment": "JG_close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self._filling_mode,
+        }
 
-    def _run_lifecycle(self):
-        self._started_at = datetime.now(timezone.utc).isoformat()
+        print(f"[EXECUTOR] Closing ticket={ticket}: {request}")
+        result = mt5.order_send(request)
 
-        # Phase 1: Load Strategy
-        self._set_state("loading_strategy")
-        strategy_instance, load_error = load_strategy_from_source(
-            self.source_code, self.class_name, self.strategy_id,
-        )
-        if load_error:
-            self._set_state("failed", f"Strategy load failed: {load_error}")
-            return
-        self._strategy = strategy_instance
-        params = self._strategy.validate_parameters(self.strategy_parameters)
-        self._ctx = StrategyContext(bars=[], params=params)
+        if result is None:
+            err = mt5.last_error()
+            return {"success": False, "ticket": ticket,
+                    "error": f"order_send None: {err}"}
 
-        # Build indicator engine from strategy declarations
-        indicator_defs = self._strategy.build_indicators(params)
-        self._indicator_engine = IndicatorEngine(indicator_defs)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {
+                "success": False, "ticket": ticket,
+                "error": f"retcode={result.retcode} comment={result.comment}",
+            }
 
-        try:
-            self._strategy.on_init(self._ctx)
-        except Exception as exc:
-            self._set_state("failed", f"on_init() failed: {type(exc).__name__}: {exc}")
-            return
-        print(f"[RUNNER] Strategy loaded: {self.class_name} | "
-              f"min_lookback={getattr(self._strategy, 'min_lookback', 0)} | "
-              f"indicators={len(indicator_defs)} | params={params}")
+        return {
+            "success": True, "ticket": ticket,
+            "price": result.price, "volume": volume,
+            "profit": profit,
+        }
 
-        # Phase 2: Init MT5
-        ok, msg = mt5_connector.init_mt5()
-        if not ok:
-            self._set_state("failed", f"MT5 init failed: {msg}")
-            return
-        self._capture_mt5_info()
+    def close_all_positions(self) -> list:
+        return [self.close_position(p["ticket"], p["type"], p["volume"], p["profit"])
+                for p in self.get_positions()]
 
-        # Phase 2b: Create executor + logger
-        self._executor = MT5Executor(self.symbol, self.lot_size, self.deployment_id)
-        self._exec_log = ExecutionLogger(self.deployment_id, self.symbol)
+    def close_long_positions(self) -> list:
+        return [self.close_position(p["ticket"], p["type"], p["volume"], p["profit"])
+                for p in self.get_positions() if p["type"] == 0]
 
-        # Phase 3: Fetch Historical Ticks
-        self._set_state("fetching_ticks")
-        ticks, tick_err = mt5_connector.fetch_historical_ticks(
-            self.symbol, self.tick_lookback_value, self.tick_lookback_unit,
-        )
-        if ticks is None:
-            self._set_state("failed", f"Tick fetch failed: {tick_err}")
-            mt5_connector.shutdown_mt5()
-            return
-        if len(ticks) == 0:
-            self._set_state("failed", "No ticks returned from MT5.")
-            mt5_connector.shutdown_mt5()
-            return
-        self._total_ticks_ingested = len(ticks)
-        self._current_price = ticks[-1]["price"]
-        print(f"[RUNNER] Fetched {len(ticks)} historical ticks for {self.symbol}")
+    def close_short_positions(self) -> list:
+        return [self.close_position(p["ticket"], p["type"], p["volume"], p["profit"])
+                for p in self.get_positions() if p["type"] == 1]
 
-        # Phase 4: Generate Initial Bars
-        self._set_state("generating_initial_bars")
-        self._bar_engine = RangeBarEngine(
-            bar_size_points=self.bar_size_points,
-            max_bars=self.max_bars,
-            on_bar=None,
-        )
-        for tick in ticks:
-            self._bar_engine.process_tick(tick["ts"], tick["price"], tick["volume"])
+    # ── Modify SL/TP ────────────────────────────────────────
 
-        initial_count = self._bar_engine.current_bars_count
-        self._total_bars_produced = self._bar_engine.total_bars_emitted
-        if self._bar_engine.bars:
-            self._last_bar_time = self._bar_engine.bars[-1].get("time")
+    def modify_sl_tp(self, ticket: int, sl=None, tp=None) -> dict:
+        mt5 = self._mt5
+        if mt5 is None:
+            return {"success": False, "error": "MT5 not available"}
 
-        print(f"[RUNNER] Initial bars: {initial_count} "
-              f"(total emitted: {self._total_bars_produced}) "
-              f"(from {len(ticks)} ticks, bar_size={self.bar_size_points}pt)")
+        positions = mt5.positions_get(ticket=ticket)
+        if positions is None or len(positions) == 0:
+            return {"success": False, "error": f"Position {ticket} not found"}
 
-        if initial_count == 0:
-            self._set_state("failed",
-                f"No bars from {len(ticks)} ticks. "
-                f"bar_size_points={self.bar_size_points} may be too large for {self.symbol}.")
-            mt5_connector.shutdown_mt5()
-            return
+        pos = positions[0]
+        new_sl = round(float(sl), 5) if sl is not None else pos.sl
+        new_tp = round(float(tp), 5) if tp is not None else pos.tp
 
-        self._log_pipeline("INITIAL_BARS")
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": self.symbol,
+            "position": ticket,
+            "sl": new_sl,
+            "tp": new_tp,
+        }
 
-        # Phase 5: Warm Up (signals logged, NOT executed)
-        self._set_state("warming_up")
-        bars_list = list(self._bar_engine.bars)
-        self._ctx._bars = bars_list
-        min_lb = getattr(self._strategy, "min_lookback", 0) or 0
+        result = mt5.order_send(request)
+        if result is None:
+            return {"success": False, "error": "order_send returned None"}
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {"success": False,
+                    "error": f"retcode={result.retcode} comment={result.comment}"}
+        return {"success": True, "sl": new_sl, "tp": new_tp}
 
-        for i in range(len(bars_list)):
-            if self._stop_event.is_set():
-                return
-            self._ctx.index = i
-            self._bar_index = i
+    # ── Query ───────────────────────────────────────────────
 
-            # Compute indicators for warmup bars
-            if self._indicator_engine:
-                warmup_slice = bars_list[:i + 1]
-                self._indicator_engine.update(warmup_slice, self._ctx)
-
-            self._refresh_position()
-
-            if i < min_lb:
+    def get_positions(self) -> list:
+        mt5 = self._mt5
+        if mt5 is None:
+            return []
+        positions = mt5.positions_get(symbol=self.symbol)
+        if positions is None:
+            return []
+        result = []
+        for p in positions:
+            if p.magic != self.magic:
                 continue
+            result.append({
+                "ticket": p.ticket, "type": p.type,
+                "volume": p.volume, "price_open": p.price_open,
+                "sl": p.sl, "tp": p.tp, "profit": p.profit,
+                "symbol": p.symbol, "magic": p.magic,
+            })
+        return result
 
-            self._on_bar_call_count += 1
-            try:
-                raw_signal = self._strategy.on_bar(self._ctx)
-                if raw_signal:
-                    s = raw_signal.get("signal")
-                    if s in (SIGNAL_BUY, SIGNAL_SELL, SIGNAL_CLOSE,
-                             SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT):
-                        self._warmup_signal_count += 1
-                        print(f"[RUNNER] Warmup signal #{self._warmup_signal_count} "
-                              f"at bar {i}: {s} (NOT executed)")
-            except Exception as exc:
-                print(f"[RUNNER] Warmup on_bar error at bar {i}: {exc}")
+    def get_floating_pnl(self) -> float:
+        return sum(p["profit"] for p in self.get_positions())
 
-        print(f"[RUNNER] Warmup complete. on_bar calls: {self._on_bar_call_count} | "
-              f"warmup signals: {self._warmup_signal_count} (all skipped)")
-        self._log_pipeline("WARMUP_DONE")
+    def get_open_count(self) -> int:
+        return len(self.get_positions())
 
-        # Phase 6: Live Tick Loop (signals ARE executed)
-        self._set_state("running")
-        self._bar_engine._on_bar = self._on_new_bar
-        live_tick_count = 0
+    def get_position_state(self) -> PositionState:
+        positions = self.get_positions()
+        if not positions:
+            return PositionState(has_position=False)
+        p = positions[0]
+        return PositionState(
+            has_position=True,
+            direction="long" if p["type"] == 0 else "short",
+            entry_price=p["price_open"],
+            sl=p["sl"] if p["sl"] != 0 else None,
+            tp=p["tp"] if p["tp"] != 0 else None,
+            size=p["volume"],
+            ticket=p["ticket"],
+            profit=p["profit"],
+        )
+    # ── Deal History (for broker-side closes) ───────────────
 
+    def get_closed_deal_profit(self, ticket: int) -> dict:
+        """
+        Look up the profit of a position that was closed by the broker (SL/TP).
+        Uses MT5 deal history. Returns {profit, close_price, close_time} or empty dict.
+        """
+        mt5 = self._mt5
+        if mt5 is None:
+            return {}
         try:
-            for tick in mt5_connector.stream_live_ticks(self.symbol):
-                if self._stop_event.is_set():
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            # Search deals for this position in the last 2 hours
+            deals = mt5.history_deals_get(
+                now - timedelta(hours=2), now, position=ticket
+            )
+            if deals is None or len(deals) == 0:
+                return {}
+            # The closing deal is the one with DEAL_ENTRY_OUT (1)
+            close_deal = None
+            for d in deals:
+                if d.entry == 1:  # DEAL_ENTRY_OUT
+                    close_deal = d
                     break
-                self._total_ticks_ingested += 1
-                self._current_price = tick["price"]
-                live_tick_count += 1
-                self._bar_engine.process_tick(tick["ts"], tick["price"], tick["volume"])
-                if live_tick_count % 5000 == 0:
-                    self._log_pipeline("LIVE_TICK")
+            if close_deal is None:
+                # Fallback: use last deal
+                close_deal = deals[-1]
+            return {
+                "profit": close_deal.profit,
+                "close_price": close_deal.price,
+                "close_time": close_deal.time,
+                "commission": close_deal.commission,
+                "swap": close_deal.swap,
+                "fee": getattr(close_deal, "fee", 0.0),
+            }
         except Exception as exc:
-            if not self._stop_event.is_set():
-                tb = traceback.format_exc()
-                print(f"[RUNNER] Live loop error: {exc}\n{tb}")
-                self._set_state("failed", f"Live loop error: {type(exc).__name__}: {exc}")
-        finally:
-            self._log_pipeline("SHUTDOWN")
-            mt5_connector.shutdown_mt5()
-            self._mt5_state = "disconnected"
-            if not self._stop_event.is_set():
-                self._set_state("stopped")
+            print(f"[EXECUTOR] Deal history lookup failed for ticket {ticket}: {exc}")
+            return {}
+
+    def get_account_info(self) -> dict:
+        """Get MT5 account balance, equity, and margin info."""
+        mt5 = self._mt5
+        if mt5 is None:
+            return {}
+        try:
+            info = mt5.account_info()
+            if info is None:
+                return {}
+            return {
+                "balance": info.balance,
+                "equity": info.equity,
+                "margin": info.margin,
+                "free_margin": info.margin_free,
+                "profit": info.profit,  # total floating
+                "currency": info.currency,
+            }
+        except Exception as exc:
+            print(f"[EXECUTOR] Account info failed: {exc}")
+            return {}
+
+
+# =============================================================================
+# Trade Record Builder (for ctx._trades)
+# =============================================================================
+
+def build_trade_record(
+    trade_id: int,
+    direction: str,
+    entry_price: float,
+    entry_bar: int,
+    entry_time: int,
+    exit_price: float,
+    exit_bar: int,
+    exit_time: int,
+    exit_reason: str,
+    sl: Optional[float] = None,
+    tp: Optional[float] = None,
+    lot_size: float = 0.01,
+    ticket: Optional[int] = None,
+    profit: Optional[float] = None,
+) -> dict:
+    """
+    Build a trade record compatible with JINNI ZERO backtester format.
+    Strategies use ctx.trades for gating logic, no-reuse, etc.
+    """
+    points_pnl = (exit_price - entry_price) if direction == "long" \
+                 else (entry_price - exit_price)
+
+    return {
+        "id": trade_id,
+        "direction": direction,
+        "entry_bar": entry_bar,
+        "entry_time": entry_time,
+        "entry_price": round(entry_price, 5),
+        "exit_bar": exit_bar,
+        "exit_time": exit_time,
+        "exit_price": round(exit_price, 5),
+        "exit_reason": exit_reason,
+        "sl_level": sl,
+        "tp_level": tp,
+        "lot_size": lot_size,
+        "ticket": ticket,
+        "points_pnl": round(points_pnl, 5),
+        "profit": profit,
+        "bars_held": exit_bar - entry_bar,
+    }
 ```

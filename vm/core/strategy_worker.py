@@ -20,8 +20,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from worker.indicators import IndicatorEngine, precompute_indicator_series
-from worker.execution import (
+from vm.trading.indicators import IndicatorEngine, precompute_indicator_series
+from vm.trading.execution import (
     SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
     SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, VALID_SIGNALS,
     PositionState, ExecutionLogger, MT5Executor,
@@ -1089,31 +1089,92 @@ class StrategyRunner:
         for r in results:
             if r.get("success"):
                 self._trade_counter += 1
-                record = build_trade_record(
-                    trade_id=self._trade_counter,
-                    direction=pos.direction or "long",
-                    entry_price=pos.entry_price or 0,
-                    entry_bar=meta.get("entry_bar", self._bar_index),
-                    entry_time=meta.get("entry_time", bar.get("time", 0)),
-                    exit_price=r.get("price", 0),
-                    exit_bar=self._bar_index,
-                    exit_time=bar.get("time", 0),
-                    exit_reason=reason,
-                    sl=pos.sl,
-                    tp=pos.tp,
-                    lot_size=pos.size or self.lot_size,
-                    ticket=r.get("ticket"),
-                    profit=r.get("profit", 0),
-                )
-                # ★ FIX: Add context fields
-                record["deployment_id"] = self._deployment_id
-                record["strategy_id"] = self._strategy_id
-                record["worker_id"] = self._worker_id
+                ticket = r.get("ticket") or meta.get("ticket")
+
+                # ★ FIX: Fetch ACTUAL PnL from MT5 deal history (not estimates)
+                mt5_record = None
+                if ticket:
+                    mt5_record = fetch_closed_position_from_mt5(
+                        position_ticket=ticket,
+                        symbol=self.symbol,
+                        max_retries=5,
+                        retry_delay_ms=300,
+                    )
+
+                if mt5_record:
+                    # ── MT5 deal history is source of truth ──
+                    record = {
+                        "mt5_ticket": ticket,
+                        "trade_id": self._trade_counter,
+                        "deployment_id": self._deployment_id,
+                        "strategy_id": self._strategy_id,
+                        "worker_id": self._worker_id,
+                        "symbol": mt5_record["symbol"],
+                        "direction": mt5_record["direction"],
+                        "lot_size": mt5_record["lot_size"],
+                        "entry_price": mt5_record["entry_price"],
+                        "exit_price": mt5_record["exit_price"],
+                        "entry_time": mt5_record["entry_time"],
+                        "exit_time": mt5_record["exit_time"],
+                        "entry_time_unix": mt5_record.get("entry_time_unix"),
+                        "exit_time_unix": mt5_record.get("exit_time_unix"),
+                        "profit": mt5_record["profit"],
+                        "commission": mt5_record["commission"],
+                        "swap": mt5_record["swap"],
+                        "fee": mt5_record.get("fee", 0),
+                        "net_pnl": mt5_record["net_pnl"],
+                        "exit_reason": reason,
+                        "mt5_exit_reason": mt5_record["exit_reason"],
+                        "mt5_source": True,
+                        "entry_bar": meta.get("entry_bar", self._bar_index),
+                        "exit_bar": self._bar_index,
+                        "bars_held": max(0, self._bar_index - meta.get("entry_bar", self._bar_index)),
+                        "mt5_deal_tickets": mt5_record.get("mt5_deal_tickets", []),
+                        "mt5_comment": mt5_record.get("mt5_comment", ""),
+                        "sl": meta.get("sl") or pos.sl,
+                        "tp": meta.get("tp") or pos.tp,
+                    }
+                    print(f"[TRADE #{self._trade_counter}] MT5 CONFIRMED | "
+                          f"ticket={ticket} {mt5_record['direction'].upper()} "
+                          f"entry={mt5_record['entry_price']:.5f} "
+                          f"exit={mt5_record['exit_price']:.5f} "
+                          f"profit={mt5_record['profit']:.2f} "
+                          f"comm={mt5_record['commission']:.2f} "
+                          f"swap={mt5_record['swap']:.2f} "
+                          f"net={mt5_record['net_pnl']:.2f} "
+                          f"reason={reason}")
+                else:
+                    # ── Fallback: no deal history — use raw close result, zero out unknowns ──
+                    record = build_trade_record(
+                        trade_id=self._trade_counter,
+                        direction=pos.direction or "long",
+                        entry_price=pos.entry_price or 0,
+                        entry_bar=meta.get("entry_bar", self._bar_index),
+                        entry_time=meta.get("entry_time", bar.get("time", 0)),
+                        exit_price=r.get("price", 0),
+                        exit_bar=self._bar_index,
+                        exit_time=bar.get("time", 0),
+                        exit_reason=reason,
+                        sl=pos.sl,
+                        tp=pos.tp,
+                        lot_size=pos.size or self.lot_size,
+                        ticket=ticket,
+                        profit=r.get("profit", 0),
+                    )
+                    record["deployment_id"] = self._deployment_id
+                    record["strategy_id"] = self._strategy_id
+                    record["worker_id"] = self._worker_id
+                    record["mt5_source"] = False
+                    record["commission"] = 0.0
+                    record["swap"] = 0.0
+                    record["fee"] = 0.0
+                    record["net_pnl"] = round(float(r.get("profit", 0)), 2)
+                    print(f"[TRADE #{self._trade_counter}] FALLBACK (no MT5 history) | "
+                          f"{record['direction'].upper()} "
+                          f"entry={record['entry_price']} exit={record['exit_price']} "
+                          f"reason={reason} profit={r.get('profit', 0):.2f}")
 
                 self._ctx._trades.append(record)
-                print(f"[TRADE #{self._trade_counter}] {record['direction'].upper()} "
-                      f"entry={record['entry_price']} exit={record['exit_price']} "
-                      f"reason={reason} profit={record.get('profit', 0):.2f}")
                 self._report_trade(record)
 
         self._active_trade_meta = None

@@ -91,6 +91,7 @@ class HeartbeatPayload(BaseModel):
     errors: Optional[List[str]] = None
     total_ticks: Optional[int] = 0
     total_bars: Optional[int] = 0
+    current_bars_in_memory: Optional[int] = 0
     on_bar_calls: Optional[int] = 0
     signal_count: Optional[int] = 0
     last_bar_time: Optional[str] = None
@@ -428,6 +429,17 @@ async def create_deployment_endpoint(payload: DeploymentCreate):
 @router.get("/api/grid/deployments", tags=["Deployments"])
 async def list_deployments():
     deployments = get_all_deployments()
+    # Enrich with strategy names for UI display
+    try:
+        strat_list = get_all_strategies()
+        strat_map = {s["strategy_id"]: s for s in strat_list}
+        for d in deployments:
+            sid = d.get("strategy_id", "")
+            strat = strat_map.get(sid, {})
+            d["strategy_name"] = strat.get("name", sid)
+            d["strategy_version"] = strat.get("version", "")
+    except Exception:
+        pass  # Don't break listing if enrichment fails
     return {
         "ok": True,
         "deployments": deployments,
