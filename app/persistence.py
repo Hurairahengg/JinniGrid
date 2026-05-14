@@ -12,6 +12,7 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from typing import Optional
 
 _DB_PATH = None
 _local = threading.local()
@@ -237,6 +238,8 @@ def init_db(db_path: str = "jinni_grid.db"):
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
 
     conn.commit()
+    # Ensure validation tables
+    _ensure_validation_tables()
     print(f"[DB] Initialized: {db_path}")
 
 
@@ -785,3 +788,176 @@ def full_system_reset_db() -> dict:
     except Exception:
         pass
     return counts
+# ══════════════════════════════════════════════════════════════
+# VALIDATION JOBS
+# ══════════════════════════════════════════════════════════════
+
+def _ensure_validation_tables():
+    """Create validation tables if they don't exist. Safe to call multiple times."""
+    conn = _get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS validation_jobs (
+            job_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_name TEXT,
+            worker_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            month INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            lot_size REAL DEFAULT 0.01,
+            bar_size_points REAL DEFAULT 100,
+            max_bars_memory INTEGER DEFAULT 500,
+            spread_points REAL DEFAULT 0,
+            commission_per_lot REAL DEFAULT 0,
+            state TEXT DEFAULT 'queued',
+            progress REAL DEFAULT 0,
+            progress_message TEXT,
+            error TEXT,
+            summary_json TEXT,
+            equity_curve_json TEXT,
+            trades_json TEXT,
+            total_ticks INTEGER DEFAULT 0,
+            total_bars INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_val_state ON validation_jobs(state);
+        CREATE INDEX IF NOT EXISTS idx_val_created ON validation_jobs(created_at);
+    """)
+    conn.commit()
+
+
+def save_validation_job(job_id: str, data: dict):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO validation_jobs (
+            job_id, strategy_id, strategy_name, worker_id,
+            symbol, month, year, lot_size, bar_size_points,
+            max_bars_memory, spread_points, commission_per_lot,
+            state, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(job_id) DO UPDATE SET
+            state=excluded.state
+    """, (
+        job_id,
+        data.get("strategy_id"),
+        data.get("strategy_name"),
+        data.get("worker_id"),
+        data.get("symbol"),
+        data.get("month"),
+        data.get("year"),
+        data.get("lot_size", 0.01),
+        data.get("bar_size_points", 100),
+        data.get("max_bars_memory", 500),
+        data.get("spread_points", 0),
+        data.get("commission_per_lot", 0),
+        data.get("state", "queued"),
+    ))
+    conn.commit()
+
+
+def update_validation_progress(job_id: str, progress: float, message: str):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("""
+        UPDATE validation_jobs
+        SET progress=?, progress_message=?, state='running',
+            started_at=COALESCE(started_at, datetime('now'))
+        WHERE job_id=?
+    """, (round(progress, 1), message, job_id))
+    conn.commit()
+
+
+def complete_validation_job(job_id: str, results: dict):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    summary = results.get("summary", {})
+    equity_curve = results.get("equity_curve", [])
+    trades = results.get("trades", [])
+
+    conn.execute("""
+        UPDATE validation_jobs
+        SET state='completed', progress=100,
+            progress_message='Validation complete',
+            summary_json=?, equity_curve_json=?, trades_json=?,
+            total_ticks=?, total_bars=?,
+            completed_at=datetime('now')
+        WHERE job_id=?
+    """, (
+        json.dumps(summary),
+        json.dumps(equity_curve),
+        json.dumps(trades),
+        results.get("total_ticks", 0),
+        results.get("total_bars", 0),
+        job_id,
+    ))
+    conn.commit()
+
+
+def fail_validation_job(job_id: str, error: str):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("""
+        UPDATE validation_jobs
+        SET state='failed', error=?, completed_at=datetime('now')
+        WHERE job_id=?
+    """, (error, job_id))
+    conn.commit()
+
+
+def get_validation_job(job_id: str) -> Optional[dict]:
+    _ensure_validation_tables()
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM validation_jobs WHERE job_id=?", (job_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    # Parse JSON fields
+    for field in ("summary_json", "equity_curve_json", "trades_json"):
+        raw = d.get(field)
+        if raw:
+            try:
+                d[field.replace("_json", "")] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d[field.replace("_json", "")] = None
+        else:
+            d[field.replace("_json", "")] = None
+    return d
+
+
+def get_all_validation_jobs(limit: int = 100) -> list:
+    _ensure_validation_tables()
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT job_id, strategy_id, strategy_name, worker_id, symbol, "
+        "month, year, lot_size, bar_size_points, state, progress, "
+        "progress_message, error, total_ticks, total_bars, "
+        "created_at, started_at, completed_at, summary_json "
+        "FROM validation_jobs ORDER BY created_at DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        raw = d.pop("summary_json", None)
+        if raw:
+            try:
+                d["summary"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d["summary"] = None
+        else:
+            d["summary"] = None
+        result.append(d)
+    return result
+
+
+def delete_validation_job(job_id: str) -> bool:
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("DELETE FROM validation_jobs WHERE job_id=?", (job_id,))
+    conn.commit()
+    return True

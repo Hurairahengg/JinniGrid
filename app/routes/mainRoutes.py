@@ -665,3 +665,163 @@ async def emergency_stop():
     """Stop all strategies + close all positions across all workers."""
     result = emergency_stop_all()
     return result
+# =============================================================================
+# Validation Jobs
+# =============================================================================
+
+from app.persistence import (
+    save_validation_job, update_validation_progress,
+    complete_validation_job, fail_validation_job,
+    get_validation_job, get_all_validation_jobs,
+    delete_validation_job,
+)
+
+
+class ValidationJobCreate(BaseModel):
+    strategy_id: str
+    worker_id: str
+    symbol: str
+    month: int
+    year: int = 2026
+    lot_size: Optional[float] = 0.01
+    bar_size_points: Optional[float] = 100
+    max_bars_memory: Optional[int] = 500
+    spread_points: Optional[float] = 0
+    commission_per_lot: Optional[float] = 0
+    strategy_parameters: Optional[Dict[str, Any]] = None
+
+
+@router.post("/api/validation/jobs", tags=["Validation"])
+async def create_validation_job(payload: ValidationJobCreate):
+    """Create a new validation job and send to worker."""
+    strat = get_strategy(payload.strategy_id)
+    if not strat:
+        raise HTTPException(status_code=404, detail="Strategy not found.")
+
+    import uuid
+    job_id = "val-" + str(uuid.uuid4())[:8]
+    now = datetime.now(timezone.utc).isoformat()
+
+    file_content = get_strategy_file_content(payload.strategy_id)
+    if not file_content:
+        raise HTTPException(status_code=404,
+                            detail="Strategy file content not found.")
+
+    strat_name = strat.get("name", payload.strategy_id)
+
+    # Save to DB
+    save_validation_job(job_id, {
+        "strategy_id": payload.strategy_id,
+        "strategy_name": strat_name,
+        "worker_id": payload.worker_id,
+        "symbol": payload.symbol,
+        "month": payload.month,
+        "year": payload.year,
+        "lot_size": payload.lot_size,
+        "bar_size_points": payload.bar_size_points,
+        "max_bars_memory": payload.max_bars_memory,
+        "spread_points": payload.spread_points,
+        "commission_per_lot": payload.commission_per_lot,
+        "state": "queued",
+    })
+
+    # Send command to worker
+    cmd_payload = {
+        "job_id": job_id,
+        "strategy_id": payload.strategy_id,
+        "strategy_file_content": file_content,
+        "strategy_class_name": strat.get("class_name"),
+        "strategy_parameters": payload.strategy_parameters or {},
+        "symbol": payload.symbol,
+        "month": payload.month,
+        "year": payload.year,
+        "lot_size": payload.lot_size,
+        "bar_size_points": payload.bar_size_points,
+        "max_bars_memory": payload.max_bars_memory,
+        "spread_points": payload.spread_points,
+        "commission_per_lot": payload.commission_per_lot,
+    }
+    enqueue_command(payload.worker_id, "run_validation", cmd_payload)
+
+    log_event_db("validation", "created",
+                 f"Validation job {job_id} created: "
+                 f"{strat_name} on {payload.symbol} "
+                 f"{payload.year}-{payload.month:02d}",
+                 worker_id=payload.worker_id,
+                 strategy_id=payload.strategy_id,
+                 symbol=payload.symbol)
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "timestamp": now,
+    }
+
+
+@router.get("/api/validation/jobs", tags=["Validation"])
+async def list_validation_jobs(limit: int = Query(50)):
+    jobs = get_all_validation_jobs(limit=limit)
+    return {
+        "ok": True,
+        "jobs": jobs,
+        "count": len(jobs),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/api/validation/jobs/{job_id}", tags=["Validation"])
+async def get_validation_job_detail(job_id: str):
+    job = get_validation_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Validation job not found.")
+    return {"ok": True, "job": job}
+
+
+@router.post("/api/validation/jobs/{job_id}/progress", tags=["Validation"])
+async def update_validation_job_progress(job_id: str,
+                                          payload: dict = Body(...)):
+    progress = payload.get("progress", 0)
+    message = payload.get("progress_message", "")
+    update_validation_progress(job_id, progress, message)
+    return {"ok": True}
+
+
+@router.post("/api/validation/jobs/{job_id}/results", tags=["Validation"])
+async def receive_validation_results(job_id: str,
+                                      payload: dict = Body(...)):
+    if "error" in payload and payload["error"]:
+        fail_validation_job(job_id, payload["error"])
+        log_event_db("validation", "failed",
+                     f"Validation {job_id} failed: {payload['error']}",
+                     level="ERROR")
+        return {"ok": True, "state": "failed"}
+
+    results = payload.get("results", {})
+    complete_validation_job(job_id, results)
+
+    summary = results.get("summary", {})
+    log_event_db("validation", "completed",
+                 f"Validation {job_id} complete: "
+                 f"{summary.get('total_trades', 0)} trades, "
+                 f"net=${summary.get('net_pnl', 0):.2f}",
+                 data=summary)
+
+    return {"ok": True, "state": "completed"}
+
+
+@router.delete("/api/validation/jobs/{job_id}", tags=["Validation"])
+async def delete_validation_job_endpoint(job_id: str):
+    delete_validation_job(job_id)
+    return {"ok": True, "deleted": job_id}
+
+
+@router.post("/api/validation/jobs/{job_id}/stop", tags=["Validation"])
+async def stop_validation_job(job_id: str):
+    job = get_validation_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("state") in ("completed", "failed"):
+        return {"ok": True, "message": "Already finished."}
+    enqueue_command(job["worker_id"], "stop_validation", {"job_id": job_id})
+    fail_validation_job(job_id, "Cancelled by user")
+    return {"ok": True, "message": "Stop command sent."}

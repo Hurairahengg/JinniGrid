@@ -1,6 +1,6 @@
 """
 JINNI Grid - Worker Agent
-Heartbeat + Command polling + Strategy Runner management.
+Heartbeat + Command polling + Strategy Runner + Validation Runner management.
 worker/worker_agent.py
 """
 import os
@@ -19,6 +19,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from core.strategy_worker import StrategyRunner
+from core.validation_runner import ValidationRunner
 from trading.portfolio import TradeLedger
 
 
@@ -46,13 +47,17 @@ class WorkerAgent:
         self.worker_name = config["worker"].get("worker_name", self.worker_id)
         self.mother_url = config["mother_server"]["url"].rstrip("/")
         self.heartbeat_interval = config["heartbeat"].get("interval_seconds", 10)
-        self.agent_version = config["agent"].get("version", "0.1.0")
+        self.agent_version = config["agent"].get("version", "0.2.0")
         self.host = detect_host()
 
         self._runner: StrategyRunner | None = None
         self._runner_lock = threading.Lock()
 
-        # Local trade ledger for persistence (Bug 18 fix)
+        # Validation runners (can run multiple)
+        self._validation_runners: dict = {}  # job_id -> ValidationRunner
+        self._validation_lock = threading.Lock()
+
+        # Local trade ledger for persistence
         self._ledger = TradeLedger(self.worker_id)
         print(f"[AGENT] TradeLedger initialized for worker '{self.worker_id}'")
 
@@ -93,7 +98,6 @@ class WorkerAgent:
             "open_positions_count": diag.get("open_positions_count", 0),
             "floating_pnl": diag.get("floating_pnl", 0.0),
             "errors": errors,
-            # Pipeline
             "total_ticks": diag.get("total_ticks", 0),
             "total_bars": diag.get("total_bars", 0),
             "current_bars_in_memory": diag.get("current_bars_in_memory", 0),
@@ -101,7 +105,6 @@ class WorkerAgent:
             "signal_count": diag.get("signal_count", 0),
             "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
             "current_price": diag.get("current_price"),
-            # MT5 account data (for portfolio)
             "account_balance": diag.get("account_balance"),
             "account_equity": diag.get("account_equity"),
         }
@@ -119,23 +122,18 @@ class WorkerAgent:
         except Exception as e:
             print(f"[ERROR] Heartbeat: {type(e).__name__}: {e}")
 
-    # ── Trade Reporting (Bug 13/18/19 fix) ──────────────────
+    # ── Trade Reporting ─────────────────────────────────────
 
     def _report_trade(self, report: dict):
-        """Report a closed trade to Mother server AND save to local ledger."""
-        # 1. Save to local TradeLedger
         try:
             self._ledger.add_trade(
                 report,
                 deployment_id=report.get("deployment_id"),
                 strategy_id=report.get("strategy_id"),
             )
-            print(f"[TRADE] Saved locally: {report.get('direction')} "
-                  f"{report.get('symbol')} profit={report.get('profit', 0):.2f}")
         except Exception as e:
             print(f"[ERROR] Local trade save failed: {e}")
 
-        # 2. POST to Mother Server
         payload = {
             "trade_id": report.get("id"),
             "deployment_id": report.get("deployment_id"),
@@ -160,12 +158,35 @@ class WorkerAgent:
         try:
             resp = requests.post(endpoint, json=payload, timeout=10)
             if resp.status_code == 200:
-                print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
-                      f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+                print(f"[TRADE] Reported to Mother")
             else:
-                print(f"[ERROR] Trade report HTTP {resp.status_code}: {resp.text[:200]}")
+                print(f"[ERROR] Trade report HTTP {resp.status_code}")
         except Exception as e:
-            print(f"[ERROR] Trade report to Mother failed: {e}")
+            print(f"[ERROR] Trade report failed: {e}")
+
+    # ── Validation Callbacks ────────────────────────────────
+
+    def _validation_progress_cb(self, data: dict):
+        endpoint = f"{self.mother_url}/api/validation/jobs/{data['job_id']}/progress"
+        try:
+            requests.post(endpoint, json=data, timeout=10)
+        except Exception as e:
+            print(f"[VALIDATION] Progress report failed: {e}")
+
+    def _validation_results_cb(self, data: dict):
+        endpoint = f"{self.mother_url}/api/validation/jobs/{data['job_id']}/results"
+        try:
+            resp = requests.post(endpoint, json=data, timeout=30)
+            if resp.status_code == 200:
+                print(f"[VALIDATION] Results sent for job {data['job_id']}")
+            else:
+                print(f"[VALIDATION] Results POST failed: {resp.status_code}")
+        except Exception as e:
+            print(f"[VALIDATION] Results send failed: {e}")
+
+        # Cleanup runner
+        with self._validation_lock:
+            self._validation_runners.pop(data["job_id"], None)
 
     # ── Command Polling ─────────────────────────────────────
 
@@ -193,6 +214,10 @@ class WorkerAgent:
             self._handle_deploy(payload)
         elif cmd_type == "stop_strategy":
             self._handle_stop(payload)
+        elif cmd_type == "run_validation":
+            self._handle_validation(payload)
+        elif cmd_type == "stop_validation":
+            self._handle_stop_validation(payload)
         else:
             print(f"[COMMAND] Unknown command type: {cmd_type}")
 
@@ -200,7 +225,6 @@ class WorkerAgent:
         endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/ack"
         try:
             requests.post(endpoint, json={"command_id": command_id}, timeout=10)
-            print(f"[COMMAND] Ack sent: {command_id}")
         except Exception as e:
             print(f"[ERROR] Ack failed: {e}")
 
@@ -216,17 +240,10 @@ class WorkerAgent:
     def _handle_deploy(self, payload: dict):
         with self._runner_lock:
             if self._runner:
-                # Bug 20 fix: log clear warning when replacing existing runner
-                print(f"[WARNING] Replacing existing runner "
-                      f"(deployment={self._runner.deployment_id}) "
-                      f"with new deployment {payload.get('deployment_id')}. "
-                      f"Only one runner per worker is supported.")
+                print(f"[WARNING] Replacing existing runner")
                 self._runner.stop()
                 self._runner = None
-
-            # Inject worker_id so StrategyRunner can include it in trade reports
             payload["worker_id"] = self.worker_id
-
             runner = StrategyRunner(
                 deployment_config=payload,
                 status_callback=self._report_runner_status,
@@ -245,8 +262,38 @@ class WorkerAgent:
                 self._runner.stop()
                 self._runner = None
                 print(f"[RUNNER] Stopped deployment {dep_id}")
-            else:
-                print("[COMMAND] Stop received but no active runner.")
+
+    # ── Validation ──────────────────────────────────────────
+
+    def _handle_validation(self, payload: dict):
+        job_id = payload.get("job_id")
+        if not job_id:
+            print("[VALIDATION] No job_id in payload")
+            return
+
+        with self._validation_lock:
+            if job_id in self._validation_runners:
+                print(f"[VALIDATION] Job {job_id} already running")
+                return
+
+            runner = ValidationRunner(
+                job_config=payload,
+                progress_callback=self._validation_progress_cb,
+                results_callback=self._validation_results_cb,
+            )
+            self._validation_runners[job_id] = runner
+            runner.start()
+            print(f"[VALIDATION] Started job {job_id}")
+
+    def _handle_stop_validation(self, payload: dict):
+        job_id = payload.get("job_id")
+        if not job_id:
+            return
+        with self._validation_lock:
+            runner = self._validation_runners.pop(job_id, None)
+            if runner:
+                runner.stop()
+                print(f"[VALIDATION] Stopped job {job_id}")
 
     # ── Main Loop ───────────────────────────────────────────
 
@@ -261,7 +308,6 @@ class WorkerAgent:
         print(f"  Mother URL:   {self.mother_url}")
         print(f"  Heartbeat:    {self.heartbeat_interval}s")
         print(f"  Agent:        v{self.agent_version}")
-        print(f"  Trade Ledger: data/portfolio_{self.worker_id}.db")
         print("=" * 56)
         print("")
 
@@ -272,12 +318,15 @@ class WorkerAgent:
                 time.sleep(self.heartbeat_interval)
 
         except KeyboardInterrupt:
-            print("")
-            print(f"[SHUTDOWN] Stopping worker agent '{self.worker_id}'...")
+            print(f"\n[SHUTDOWN] Stopping worker agent '{self.worker_id}'...")
             with self._runner_lock:
                 if self._runner:
                     self._runner.stop()
+            with self._validation_lock:
+                for r in self._validation_runners.values():
+                    r.stop()
             sys.exit(0)
+
 
 def main():
     config = load_config()

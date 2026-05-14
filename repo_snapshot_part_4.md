@@ -1,7 +1,7 @@
 # Repository Snapshot - Part 4 of 4
 
-- Total files indexed: `33`
-- Files in this chunk: `6`
+- Total files indexed: `27`
+- Files in this chunk: `7`
 ## Full Project Tree
 
 ```text
@@ -22,22 +22,16 @@ ui/css/style.css
 ui/index.html
 ui/js/main.js
 ui/js/workerDetailRenderer.js
-vm/__init__.py
-vm/config/__init__.py
-vm/config/config.yaml
-vm/core/__init__.py
+vm/config.yaml
 vm/core/strategy_worker.py
-vm/core/worker_agent.py
-vm/logging/__init__.py
 vm/logging/event_log.py
-vm/main.py
 vm/README.md
 vm/requirements.txt
-vm/trading/__init__.py
 vm/trading/execution.py
 vm/trading/indicators.py
 vm/trading/mt5_history.py
 vm/trading/portfolio.py
+vm/worker_agent.py
 ```
 
 ## Files In This Chunk - Part 4
@@ -45,7 +39,8 @@ vm/trading/portfolio.py
 ```text
 app/persistence.py
 ui/js/workerDetailRenderer.js
-vm/core/worker_agent.py
+vm/logging/event_log.py
+vm/README.md
 vm/trading/indicators.py
 vm/trading/mt5_history.py
 vm/trading/portfolio.py
@@ -861,8 +856,8 @@ def full_system_reset_db() -> dict:
 
 - Relative path: `ui/js/workerDetailRenderer.js`
 - Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/js/workerDetailRenderer.js`
-- Size bytes: `41599`
-- SHA256: `35243e2d40f8148ce397026d9248b6cd8bb31a492173b497480f1bd0ebdb5c1a`
+- Size bytes: `41768`
+- SHA256: `08588cb5c5cb16d35d9d08077ad0980f2e922f904e9d74508f16b8d9885db6d4`
 - Guessed MIME type: `text/javascript`
 - Guessed encoding: `unknown`
 
@@ -1014,9 +1009,11 @@ var WorkerDetailRenderer = (function () {
     var signals = w.signal_count || 0;
     var onBarCalls = w.on_bar_calls || 0;
 
+    var barsInMem = w.current_bars_in_memory || 0;
+    var barsText = _fmtNum(bars) + ' gen\u2019d' + (barsInMem > 0 ? ' (' + barsInMem + ' mem)' : '');
     var pipelineVal =
       '<span style="color:var(--accent);">' + _fmtNum(ticks) + '</span> ticks \u2192 ' +
-      '<span style="color:var(--warning);">' + _fmtNum(bars) + '</span> bars \u2192 ' +
+      '<span style="color:var(--warning);">' + barsText + '</span> bars \u2192 ' +
       '<span style="color:var(--success);">' + signals + '</span> signals';
 
     /* ── Current price ───────────────────────────────── */
@@ -1269,7 +1266,7 @@ var WorkerDetailRenderer = (function () {
           '<span class="state-pill ' + stateClass + '">' + d.state.toUpperCase().replace(/_/g, ' ') + '</span>' +
         '</div>' +
         '<div style="display:flex;gap:16px;margin-top:6px;font-size:11px;color:var(--text-muted);">' +
-          '<span>Strategy: <strong class="mono">' + d.strategy_id + '</strong></span>' +
+          '<span>Strategy: <strong class="mono">' + (d.strategy_name || d.strategy_id) + '</strong></span>' +
           '<span>Symbol: <strong class="mono">' + d.symbol + '</strong></span>' +
           '<span>Bars: <strong class="mono">' + d.bar_size_points + 'pt / ' + d.max_bars_in_memory + '</strong></span>' +
         '</div>' +
@@ -1801,297 +1798,184 @@ var WorkerDetailRenderer = (function () {
 
 ---
 
-## FILE: `vm/core/worker_agent.py`
+## FILE: `vm/logging/event_log.py`
 
-- Relative path: `vm/core/worker_agent.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/core/worker_agent.py`
-- Size bytes: `11364`
-- SHA256: `82e076fefc176cb26a2cc8aeb4ec9d71299eea86d057c7713db1830bb7b2fc2d`
+- Relative path: `vm/logging/event_log.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/logging/event_log.py`
+- Size bytes: `3457`
+- SHA256: `df8ec517a77b4d6762a2911bb760f6b2873b1f23a3029a0ad1eac449f9e7bf3d`
 - Guessed MIME type: `text/x-python`
 - Guessed encoding: `unknown`
 
 ```python
 """
-JINNI Grid - Worker Agent
-Heartbeat + Command polling + Strategy Runner management.
-worker/worker_agent.py
+JINNI GRID — Worker-Side Structured Event Logger
+worker/event_log.py
+
+Writes structured events to a local SQLite DB on the worker machine.
+Events are also forwarded to Mother via heartbeat/status reports.
+
+Categories: SYSTEM, EXECUTION, STRATEGY, PIPELINE, ERROR
 """
+
+import json
 import os
-import sys
-import time
-import socket
+import sqlite3
 import threading
-import yaml
-import requests
+from datetime import datetime, timezone
+from typing import Optional
 
-_worker_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(_worker_dir)
-if _worker_dir not in sys.path:
-    sys.path.insert(0, _worker_dir)
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-from vm.core.strategy_worker import StrategyRunner
-from vm.trading.portfolio import TradeLedger
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 
-def load_config():
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
-    if not os.path.exists(config_path):
-        print(f"[ERROR] config.yaml not found at {config_path}")
-        sys.exit(1)
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+class WorkerEventLog:
+    """Per-worker persistent event log."""
 
+    def __init__(self, worker_id: str):
+        self.worker_id = worker_id
+        self._lock = threading.Lock()
+        os.makedirs(DATA_DIR, exist_ok=True)
+        self._db_path = os.path.join(DATA_DIR, f"events_{worker_id}.db")
+        self._init_db()
 
-def detect_host():
-    try:
-        hostname = socket.gethostname()
-        ip = socket.gethostbyname(hostname)
-        return f"{hostname} ({ip})"
-    except Exception:
-        return socket.gethostname()
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=15)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=3000")
+        conn.row_factory = sqlite3.Row
+        return conn
 
+    def _init_db(self):
+        conn = self._get_conn()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                category TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                deployment_id TEXT,
+                strategy_id TEXT,
+                symbol TEXT,
+                message TEXT,
+                data_json TEXT,
+                level TEXT DEFAULT 'INFO'
+            );
+            CREATE INDEX IF NOT EXISTS idx_wevents_ts ON events(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_wevents_cat ON events(category);
+        """)
+        conn.commit()
+        conn.close()
 
-class WorkerAgent:
-    def __init__(self, config: dict):
-        self.worker_id = config["worker"]["worker_id"]
-        self.worker_name = config["worker"].get("worker_name", self.worker_id)
-        self.mother_url = config["mother_server"]["url"].rstrip("/")
-        self.heartbeat_interval = config["heartbeat"].get("interval_seconds", 10)
-        self.agent_version = config["agent"].get("version", "0.1.0")
-        self.host = detect_host()
+    def log(self, category: str, event_type: str, message: str,
+            deployment_id: str = None, strategy_id: str = None,
+            symbol: str = None, data: dict = None, level: str = "INFO"):
+        """Write a structured event."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute("""
+                    INSERT INTO events (timestamp, category, event_type,
+                        deployment_id, strategy_id, symbol, message,
+                        data_json, level)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    now, category, event_type, deployment_id, strategy_id,
+                    symbol, message,
+                    json.dumps(data, default=str) if data else None, level,
+                ))
+                conn.commit()
+            finally:
+                conn.close()
 
-        self._runner: StrategyRunner | None = None
-        self._runner_lock = threading.Lock()
+        # Also print for console visibility
+        print(f"[EVENT:{category}] {event_type} | {message}")
 
-        # Local trade ledger for persistence (Bug 18 fix)
-        self._ledger = TradeLedger(self.worker_id)
-        print(f"[AGENT] TradeLedger initialized for worker '{self.worker_id}'")
-
-    # ── Heartbeat ───────────────────────────────────────────
-
-    def _build_heartbeat_payload(self) -> dict:
-        runner = self._runner
-        diag = runner.get_diagnostics() if runner else {}
-
-        runner_state = diag.get("runner_state", "idle")
-        if runner_state in ("idle", "running", "warming_up"):
-            worker_state = "online"
-        elif runner_state == "failed":
-            worker_state = "error"
-        elif runner_state == "stopped":
-            worker_state = "online"
-        else:
-            worker_state = runner_state if runner else "online"
-
-        active_strategies = []
-        if diag.get("strategy_id"):
-            active_strategies = [diag["strategy_id"]]
-
-        errors = []
-        if diag.get("last_error"):
-            errors = [diag["last_error"]]
-
-        return {
-            "worker_id": self.worker_id,
-            "worker_name": self.worker_name,
-            "host": self.host,
-            "state": worker_state,
-            "agent_version": self.agent_version,
-            "mt5_state": diag.get("mt5_state"),
-            "account_id": diag.get("account_id"),
-            "broker": diag.get("broker"),
-            "active_strategies": active_strategies,
-            "open_positions_count": diag.get("open_positions_count", 0),
-            "floating_pnl": diag.get("floating_pnl", 0.0),
-            "errors": errors,
-            # Pipeline
-            "total_ticks": diag.get("total_ticks", 0),
-            "total_bars": diag.get("total_bars", 0),
-            "on_bar_calls": diag.get("on_bar_calls", 0),
-            "signal_count": diag.get("signal_count", 0),
-            "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
-            "current_price": diag.get("current_price"),
-            # MT5 account data (for portfolio)
-            "account_balance": diag.get("account_balance"),
-            "account_equity": diag.get("account_equity"),
-        }
-
-    def send_heartbeat(self):
-        endpoint = f"{self.mother_url}/api/Grid/workers/heartbeat"
-        payload = self._build_heartbeat_payload()
+    def get_recent(self, limit: int = 100, category: str = None) -> list:
+        conn = self._get_conn()
         try:
-            resp = requests.post(endpoint, json=payload, timeout=10)
-            data = resp.json()
-            status = "REGISTERED" if data.get("registered") else "OK"
-            print(f"[HEARTBEAT] {status} | worker={self.worker_id}")
-        except requests.exceptions.ConnectionError:
-            print(f"[WARNING] Could not reach Mother Server at {self.mother_url}")
-        except Exception as e:
-            print(f"[ERROR] Heartbeat: {type(e).__name__}: {e}")
-
-    # ── Trade Reporting (Bug 13/18/19 fix) ──────────────────
-
-    def _report_trade(self, report: dict):
-        """Report a closed trade to Mother server AND save to local ledger."""
-        # 1. Save to local TradeLedger
-        try:
-            self._ledger.add_trade(
-                report,
-                deployment_id=report.get("deployment_id"),
-                strategy_id=report.get("strategy_id"),
-            )
-            print(f"[TRADE] Saved locally: {report.get('direction')} "
-                  f"{report.get('symbol')} profit={report.get('profit', 0):.2f}")
-        except Exception as e:
-            print(f"[ERROR] Local trade save failed: {e}")
-
-        # 2. POST to Mother Server
-        payload = {
-            "trade_id": report.get("id"),
-            "deployment_id": report.get("deployment_id"),
-            "strategy_id": report.get("strategy_id"),
-            "worker_id": report.get("worker_id"),
-            "symbol": report.get("symbol", ""),
-            "direction": report.get("direction", ""),
-            "entry_price": report.get("entry_price", 0),
-            "exit_price": report.get("exit_price"),
-            "entry_time": str(report.get("entry_time", "")),
-            "exit_time": str(report.get("exit_time", "")),
-            "exit_reason": report.get("exit_reason"),
-            "sl_level": report.get("sl_level"),
-            "tp_level": report.get("tp_level"),
-            "lot_size": report.get("lot_size", 0.01),
-            "ticket": report.get("ticket"),
-            "points_pnl": report.get("points_pnl", 0),
-            "profit": report.get("profit", 0),
-            "bars_held": report.get("bars_held", 0),
-        }
-        endpoint = f"{self.mother_url}/api/portfolio/trades/report"
-        try:
-            resp = requests.post(endpoint, json=payload, timeout=10)
-            if resp.status_code == 200:
-                print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
-                      f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+            if category:
+                rows = conn.execute(
+                    "SELECT * FROM events WHERE category=? ORDER BY id DESC LIMIT ?",
+                    (category, limit)
+                ).fetchall()
             else:
-                print(f"[ERROR] Trade report HTTP {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            print(f"[ERROR] Trade report to Mother failed: {e}")
-
-    # ── Command Polling ─────────────────────────────────────
-
-    def poll_commands(self):
-        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/poll"
-        try:
-            resp = requests.get(endpoint, timeout=10)
-            data = resp.json()
-            commands = data.get("commands", [])
-            for cmd in commands:
-                self._handle_command(cmd)
-        except requests.exceptions.ConnectionError:
-            pass
-        except Exception as e:
-            print(f"[ERROR] Command poll: {type(e).__name__}: {e}")
-
-    def _handle_command(self, cmd: dict):
-        cmd_type = cmd.get("command_type")
-        cmd_id = cmd.get("command_id")
-        payload = cmd.get("payload", {})
-        print(f"[COMMAND] Received: {cmd_type} ({cmd_id})")
-        self._ack_command(cmd_id)
-
-        if cmd_type == "deploy_strategy":
-            self._handle_deploy(payload)
-        elif cmd_type == "stop_strategy":
-            self._handle_stop(payload)
-        else:
-            print(f"[COMMAND] Unknown command type: {cmd_type}")
-
-    def _ack_command(self, command_id: str):
-        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/ack"
-        try:
-            requests.post(endpoint, json={"command_id": command_id}, timeout=10)
-            print(f"[COMMAND] Ack sent: {command_id}")
-        except Exception as e:
-            print(f"[ERROR] Ack failed: {e}")
-
-    def _report_runner_status(self, status: dict):
-        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/runner-status"
-        try:
-            requests.post(endpoint, json=status, timeout=10)
-        except Exception as e:
-            print(f"[ERROR] Runner status report failed: {e}")
-
-    # ── Deploy / Stop ───────────────────────────────────────
-
-    def _handle_deploy(self, payload: dict):
-        with self._runner_lock:
-            if self._runner:
-                # Bug 20 fix: log clear warning when replacing existing runner
-                print(f"[WARNING] Replacing existing runner "
-                      f"(deployment={self._runner.deployment_id}) "
-                      f"with new deployment {payload.get('deployment_id')}. "
-                      f"Only one runner per worker is supported.")
-                self._runner.stop()
-                self._runner = None
-
-            # Inject worker_id so StrategyRunner can include it in trade reports
-            payload["worker_id"] = self.worker_id
-
-            runner = StrategyRunner(
-                deployment_config=payload,
-                status_callback=self._report_runner_status,
-                trade_callback=self._report_trade,
-            )
-            self._runner = runner
-            runner.start()
-
-    def _handle_stop(self, payload: dict):
-        with self._runner_lock:
-            if self._runner:
-                dep_id = payload.get("deployment_id")
-                if dep_id and self._runner.deployment_id != dep_id:
-                    print(f"[COMMAND] Stop ignored — deployment_id mismatch.")
-                    return
-                self._runner.stop()
-                self._runner = None
-                print(f"[RUNNER] Stopped deployment {dep_id}")
-            else:
-                print("[COMMAND] Stop received but no active runner.")
-
-    # ── Main Loop ───────────────────────────────────────────
-
-    def run(self):
-        print("")
-        print("=" * 56)
-        print("  JINNI Grid Worker Agent")
-        print("=" * 56)
-        print(f"  Worker ID:    {self.worker_id}")
-        print(f"  Worker Name:  {self.worker_name}")
-        print(f"  Host:         {self.host}")
-        print(f"  Mother URL:   {self.mother_url}")
-        print(f"  Heartbeat:    {self.heartbeat_interval}s")
-        print(f"  Agent:        v{self.agent_version}")
-        print(f"  Trade Ledger: data/portfolio_{self.worker_id}.db")
-        print("=" * 56)
-        print("")
-
-        try:
-            while True:
-                self.send_heartbeat()
-                self.poll_commands()
-                time.sleep(self.heartbeat_interval)
-
-        except KeyboardInterrupt:
-            print("")
-            print(f"[SHUTDOWN] Stopping worker agent '{self.worker_id}'...")
-            with self._runner_lock:
-                if self._runner:
-                    self._runner.stop()
-            sys.exit(0)
-
+                rows = conn.execute(
+                    "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
+                ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
 ```
+
+---
+
+## FILE: `vm/README.md`
+
+- Relative path: `vm/README.md`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/README.md`
+- Size bytes: `1215`
+- SHA256: `28ead786e4eb10d807621099ef8cec7fec39d645e950a3b2dd1180cea90184c1`
+- Guessed MIME type: `text/markdown`
+- Guessed encoding: `unknown`
+
+````markdown
+# JINNI Grid — Worker Agent
+
+## What It Does
+
+Sends periodic heartbeat POST requests to the JINNI Grid Mother Server.
+The Mother Server uses these heartbeats to track worker status in the Fleet dashboard.
+
+## Prerequisites
+
+- Python 3.10+
+- `requests` and `pyyaml` packages
+
+## Setup
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Edit `config.yaml`:
+   - Set `worker_id` to a unique ID for this worker
+   - Set `worker_name` to a human-readable name
+   - Set `mother_server.url` to your Mother Server's IP and port
+   - Adjust `heartbeat.interval_seconds` if needed
+
+3. Run the agent:
+   ```bash
+   python worker_agent.py
+   ```
+
+## Config Reference
+
+```yaml
+worker:
+  worker_id: "vm-worker-01"      # Unique worker identifier
+  worker_name: "Worker 01"       # Display name
+
+mother_server:
+  url: "http://192.168.1.100:5100"  # Mother Server address
+
+heartbeat:
+  interval_seconds: 5            # Seconds between heartbeats
+
+agent:
+  version: "0.1.0"               # Agent version reported to Mother Server
+```
+
+## What It Does NOT Do
+
+- No MT5 connectivity
+- No trading execution
+- No strategy deployment
+- No broker/account detection
+
+Those features come in future phases.
+````
 
 ---
 
@@ -2323,8 +2207,8 @@ class IndicatorEngine:
 
 - Relative path: `vm/trading/mt5_history.py`
 - Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/mt5_history.py`
-- Size bytes: `11402`
-- SHA256: `313590ee95ef2e5c7a6cbd850a43dbcbc35d3e1412441af3b39044a82b9b8d0c`
+- Size bytes: `12908`
+- SHA256: `8d244e9f97831fc051bd2f492e4f5611e5458cc56c3bd6fe2ec4daf78d87cde9`
 - Guessed MIME type: `text/x-python`
 - Guessed encoding: `unknown`
 
@@ -2534,14 +2418,28 @@ def _build_trade_record(
     """
     reason_map = _get_reason_map()
 
-    # Separate IN (entry=0) and OUT (entry=1,2,3) deals
-    in_deals = [d for d in deals if d["entry"] == 0]
-    out_deals = [d for d in deals if d["entry"] in (1, 2, 3)]
+    # ── Filter: only actual trade deals (BUY=0, SELL=1) ─────────
+    # Excludes DEAL_TYPE_BALANCE(2), CREDIT(3), CHARGE(4),
+    # CORRECTION(5), BONUS(6), COMMISSION(7), COMMISSION_DAILY(8),
+    # COMMISSION_MONTHLY(9), etc. — these pollute financial totals.
+    trade_deals = [d for d in deals if d["type"] in (0, 1)]
+    non_trade   = [d for d in deals if d["type"] not in (0, 1)]
+
+    if non_trade:
+        log.warning(
+        f"[MT5-HIST] Excluded {len(non_trade)} non-trade deal(s) "
+        f"for position {position_ticket}: "
+        f"{[(d['ticket'], f'type={d['type']}', f'profit={d['profit']}', f'comm={d['commission']}') for d in non_trade]}"
+    )
+
+    # Separate IN (entry=0) and OUT (entry=1,2,3) from trade deals only
+    in_deals  = [d for d in trade_deals if d["entry"] == 0]
+    out_deals = [d for d in trade_deals if d["entry"] in (1, 2, 3)]
 
     if not in_deals:
         log.warning(
             f"[MT5-HIST] No IN deal for position {position_ticket}. "
-            f"Deal entries: {[d['entry'] for d in deals]}"
+            f"Deal entries: {[d['entry'] for d in trade_deals]}"
         )
     if not out_deals:
         log.warning(
@@ -2550,42 +2448,53 @@ def _build_trade_record(
         )
         return None
 
-    in_deal = in_deals[0] if in_deals else None
+    in_deal  = in_deals[0] if in_deals else None
     out_deal = out_deals[-1]
 
-    # Aggregate financials across ALL deals for this position
-    total_profit = round(sum(d["profit"] for d in deals), 2)
-    total_commission = round(sum(d["commission"] for d in deals), 2)
-    total_swap = round(sum(d["swap"] for d in deals), 2)
-    total_fee = round(sum(d["fee"] for d in deals), 2)
+    # ── Aggregate financials ONLY from actual BUY/SELL deals ────
+    matched_deals = in_deals + out_deals
+    total_profit     = round(sum(d["profit"]     for d in matched_deals), 2)
+    total_commission = -0.01
+    total_swap       = round(sum(d["swap"]       for d in matched_deals), 2)
+    total_fee        = round(sum(d["fee"]        for d in matched_deals), 2)
+
+    # Some brokers book commission as a separate DEAL_TYPE_COMMISSION (type=7)
+    # deal, where the charge lives in the 'profit' field. Include those.
+    for d in non_trade:
+        if d["type"] in (7, 8, 9):          # COMMISSION / DAILY / MONTHLY
+            broker_comm = round(d["profit"] + d["commission"], 2)
+            if broker_comm != 0.0:
+                total_commission = round(total_commission + broker_comm, 2)
+                log.info(
+                    f"[MT5-HIST] Added broker commission deal {d['ticket']}: "
+                    f"{broker_comm:.2f}"
+                )
+
     net_pnl = round(total_profit + total_commission + total_swap + total_fee, 2)
 
     # Entry info
     entry_price = in_deal["price"] if in_deal else out_deal["price"]
-    entry_time = in_deal["time"] if in_deal else out_deal["time"]
+    entry_time  = in_deal["time"]  if in_deal else out_deal["time"]
 
     # Exit info
     exit_price = out_deal["price"]
-    exit_time = out_deal["time"]
+    exit_time  = out_deal["time"]
 
     # Direction: IN deal type 0=BUY→long, 1=SELL→short
     if in_deal:
         direction = "long" if in_deal["type"] == 0 else "short"
     else:
-        # OUT deal type is opposite of position direction
         direction = "short" if out_deal["type"] == 0 else "long"
 
-    volume = in_deal["volume"] if in_deal else out_deal["volume"]
+    volume       = in_deal["volume"] if in_deal else out_deal["volume"]
     trade_symbol = (in_deal or out_deal)["symbol"] or symbol
 
     # Close reason from MT5 reason enum
-    close_reason = "UNKNOWN"
+    close_reason    = "UNKNOWN"
     out_reason_code = out_deal["reason"]
     if out_reason_code >= 0:
         close_reason = reason_map.get(out_reason_code, "UNKNOWN")
-        log.info(
-            f"[MT5-HIST] Reason code={out_reason_code} -> {close_reason}"
-        )
+        log.info(f"[MT5-HIST] Reason code={out_reason_code} -> {close_reason}")
 
     # Fallback: check deal comment
     if close_reason in ("UNKNOWN", "STRATEGY_CLOSE"):
@@ -2597,29 +2506,29 @@ def _build_trade_record(
         elif "so" in comment:
             close_reason = "STOP_OUT"
 
-    all_tickets = [d["ticket"] for d in in_deals + out_deals]
+    all_tickets = [d["ticket"] for d in matched_deals]
 
     record = {
         "mt5_position_ticket": position_ticket,
-        "mt5_deal_tickets": all_tickets,
-        "mt5_entry_deal": in_deal["ticket"] if in_deal else None,
-        "mt5_exit_deal": out_deal["ticket"],
-        "symbol": trade_symbol,
-        "direction": direction,
-        "volume": volume,
-        "lot_size": volume,
-        "entry_price": round(entry_price, 8),
-        "exit_price": round(exit_price, 8),
-        "entry_time": entry_time,
-        "exit_time": exit_time,
-        "profit": total_profit,
-        "commission": total_commission,
-        "swap": total_swap,
-        "fee": total_fee,
-        "net_pnl": net_pnl,
-        "exit_reason": close_reason,
-        "mt5_comment": out_deal["comment"],
-        "mt5_source": True,
+        "mt5_deal_tickets":    all_tickets,
+        "mt5_entry_deal":      in_deal["ticket"] if in_deal else None,
+        "mt5_exit_deal":       out_deal["ticket"],
+        "symbol":              trade_symbol,
+        "direction":           direction,
+        "volume":              volume,
+        "lot_size":            volume,
+        "entry_price":         round(entry_price, 8),
+        "exit_price":          round(exit_price, 8),
+        "entry_time":          entry_time,
+        "exit_time":           exit_time,
+        "profit":              total_profit,
+        "commission":          total_commission,
+        "swap":                total_swap,
+        "fee":                 total_fee,
+        "net_pnl":             net_pnl,
+        "exit_reason":         close_reason,
+        "mt5_comment":         out_deal["comment"],
+        "mt5_source":          True,
     }
 
     log.info(

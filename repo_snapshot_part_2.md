@@ -1,7 +1,39 @@
 # Repository Snapshot - Part 2 of 4
 
-- Total files indexed: `33`
+
+- Total files indexed: `27`
 - Files in this chunk: `5`
+## Full Project Tree
+
+```text
+app/__init__.py
+app/config.py
+app/logging_config.py
+app/persistence.py
+app/routes/__init__.py
+app/routes/mainRoutes.py
+app/services/__init__.py
+app/services/mainServices.py
+app/services/strategy_registry.py
+config.yaml
+main.py
+README.md
+requirements.txt
+ui/css/style.css
+ui/index.html
+ui/js/main.js
+ui/js/workerDetailRenderer.js
+vm/config.yaml
+vm/core/strategy_worker.py
+vm/logging/event_log.py
+vm/README.md
+vm/requirements.txt
+vm/trading/execution.py
+vm/trading/indicators.py
+vm/trading/mt5_history.py
+vm/trading/portfolio.py
+vm/worker_agent.py
+```
 
 ## Files In This Chunk - Part 2
 
@@ -16,239 +48,16 @@ ui/js/main.js
 ## File Contents
 
 
----
-
-## FILE: `app/config.py`
-
-```python
-"""
-JINNI Grid - Configuration Loader
-Reads config.yaml from project root. Falls back to safe defaults.
-app/config.py
-"""
-import os, yaml
-
-_config_cache = None
-
-_DEFAULTS = {
-    "server": {"host": "0.0.0.0", "port": 5100, "debug": False, "cors_origins": ["*"]},
-    "app": {"name": "JINNI Grid Mother Server", "version": "0.2.0"},
-    "fleet": {"stale_threshold_seconds": 30, "offline_threshold_seconds": 90},
-}
-
-
-def _load_config() -> dict:
-    global _config_cache
-    if _config_cache is not None:
-        return _config_cache
-    config_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(config_dir)
-    config_path = os.path.join(project_root, "config.yaml")
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            _config_cache = yaml.safe_load(f)
-        print(f"[CONFIG] Loaded config from: {config_path}")
-    else:
-        print(f"[CONFIG] WARNING: config.yaml not found at {config_path}")
-        print("[CONFIG] Using fallback defaults.")
-        _config_cache = _DEFAULTS
-    return _config_cache
-
-
-class Config:
-    @classmethod
-    def get_server_config(cls) -> dict:
-        return _load_config().get("server", _DEFAULTS["server"])
-
-    @classmethod
-    def get_app_config(cls) -> dict:
-        return _load_config().get("app", _DEFAULTS["app"])
-
-    @classmethod
-    def get_cors_origins(cls) -> list:
-        return cls.get_server_config().get("cors_origins", ["*"])
-
-    @classmethod
-    def get_fleet_config(cls) -> dict:
-        return _load_config().get("fleet", _DEFAULTS["fleet"])
-```
-
----
-
-## FILE: `app/routes/__init__.py`
-is empty no need for u
-
-## FILE: `app/routes/mainRoutes.py`
-I WILL GIVE U THIS CODE AFTER THIS S OCALL THAT 2.5 BECAUSE THIS SNAP IS TOO BIG
-
-# =============================================================================
-# Settings
-# =============================================================================
-
-@router.get("/api/settings", tags=["Settings"])
-async def get_settings():
-    return {"ok": True, "settings": get_system_settings()}
-
-
-class SettingsUpdate(BaseModel):
-    settings: Dict[str, Any]
-
-
-@router.put("/api/settings", tags=["Settings"])
-async def update_settings(payload: SettingsUpdate):
-    result = save_system_settings(payload.settings)
-    return {"ok": True, "settings": result}
-
-
-# =============================================================================
-# Admin
-# =============================================================================
-
-@router.get("/api/admin/stats", tags=["Admin"])
-async def admin_stats():
-    return {"ok": True, "stats": admin_get_stats()}
-
-
-@router.post("/api/admin/strategies/{strategy_id}/delete", tags=["Admin"])
-async def admin_delete_strategy_endpoint(strategy_id: str):
-    result = admin_delete_strategy(strategy_id)
-    return {"ok": True, **result}
-
-
-@router.post("/api/admin/portfolio/reset", tags=["Admin"])
-async def admin_reset_portfolio_endpoint():
-    result = admin_reset_portfolio()
-    return {"ok": True, **result}
-
-
-@router.post("/api/admin/trades/clear", tags=["Admin"])
-async def admin_clear_trades_endpoint():
-    result = admin_clear_trades()
-    return {"ok": True, **result}
-
-
-@router.post("/api/admin/workers/{worker_id}/remove", tags=["Admin"])
-async def admin_remove_worker_endpoint(worker_id: str):
-    result = admin_remove_worker(worker_id)
-    return {"ok": True, **result}
-
-
-@router.post("/api/admin/workers/stale/remove", tags=["Admin"])
-async def admin_remove_stale_workers_endpoint():
-    result = admin_remove_stale_workers()
-    return {"ok": True, **result}
-
-
-@router.post("/api/admin/events/clear", tags=["Admin"])
-async def admin_clear_events_endpoint():
-    result = admin_clear_events()
-    return {"ok": True, **result}
-
-
-class SystemResetConfirm(BaseModel):
-    confirm: str
-
-
-@router.post("/api/admin/system/reset", tags=["Admin"])
-async def admin_full_reset_endpoint(payload: SystemResetConfirm):
-    if payload.confirm != "RESET_EVERYTHING":
-        raise HTTPException(
-            status_code=400,
-            detail="Must send confirm='RESET_EVERYTHING'",
-        )
-    result = admin_full_reset()
-    return {"ok": True, "cleared": result}
-
-
-@router.post("/api/admin/emergency-stop", tags=["Admin"])
-async def emergency_stop():
-    """Stop all strategies + close all positions across all workers."""
-    result = emergency_stop_all()
-    return result
-```
-
----
-
-## FILE: `ui/index.html`
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>JINNI GRID — Mother Server Dashboard</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
-  <link rel="stylesheet" href="/css/style.css" />
-</head>
-<body data-theme="dark">
-
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-      <div class="brand-mark">JG</div>
-      <div class="brand-text">
-        <span class="brand-name">JINNI GRID</span>
-        <span class="brand-sub">Mother Server</span>
-      </div>
-    </div>
-    <nav class="sidebar-nav" id="sidebar-nav">
-      <a href="#" class="nav-item active" data-page="dashboard">
-        <i class="fa-solid fa-grip"></i><span>Dashboard</span>
-      </a>
-      <a href="#" class="nav-item" data-page="fleet">
-        <i class="fa-solid fa-server"></i><span>Fleet</span>
-      </a>
-      <a href="#" class="nav-item" data-page="portfolio">
-        <i class="fa-solid fa-chart-line"></i><span>Portfolio</span>
-      </a>
-      <a href="#" class="nav-item" data-page="strategies">
-        <i class="fa-solid fa-crosshairs"></i><span>Strategies</span>
-      </a>
-      <a href="#" class="nav-item" data-page="logs">
-        <i class="fa-solid fa-scroll"></i><span>Logs</span>
-      </a>
-      <a href="#" class="nav-item" data-page="settings">
-        <i class="fa-solid fa-gear"></i><span>Settings</span>
-      </a>
-    </nav>
-    <div class="sidebar-footer">
-      <button class="theme-toggle" id="theme-toggle" title="Toggle Theme">
-        <i class="fa-solid fa-sun"></i><span>Light Mode</span>
-      </button>
-    </div>
-  </aside>
-
-  <div class="main-wrapper">
-    <header class="topbar" id="topbar">
-      <div class="topbar-left">
-        <h1 class="topbar-title" id="topbar-title">Dashboard</h1>
-        <span class="topbar-subtitle">Mother Server Control Panel</span>
-      </div>
-      <div class="topbar-right">
-        <div class="topbar-status">
-          <span class="status-dot status-dot--online pulse"></span>
-          <span class="status-label">System Online</span>
-        </div>
-        <div class="topbar-clock" id="topbar-clock">00:00:00</div>
-      </div>
-    </header>
-    <main class="content" id="main-content"></main>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="/js/main.js"></script>
-  <script src="/js/workerDetailRenderer.js"></script>
-</body>
-</html>
-```
-
----
+-MOST FILES ARE TOO BIG I WILL GIVE IT AFTER THIS IN 2.5
 
 ## FILE: `ui/js/main.js`
 
+- Relative path: `ui/js/main.js`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/js/main.js`
+- Size bytes: `108010`
+- SHA256: `39f7cabcdfce42871077e689bc13b0d35870061cf87905020e01f73cb9bd2912`
+- Guessed MIME type: `text/javascript`
+- Guessed encoding: `unknown`
 
 ```javascript
 /* ================================================================
@@ -643,6 +452,13 @@ function _metricItem(label, value, colorClass) {
     '</div>';
 }
 
+function _metricPill(label, value, colorClass) {
+  return '<div class="metric-pill">' +
+    '<div class="metric-pill-value mono' + (colorClass ? ' ' + colorClass : '') + '">' + value + '</div>' +
+    '<div class="metric-pill-label">' + label + '</div>' +
+    '</div>';
+}
+
 function _statPill(text, type) {
   return '<span class="state-pill ' + (type || '') + '">' + text + '</span>';
 }
@@ -678,7 +494,7 @@ var DashboardRenderer = (function () {
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;" id="dash-top-strip">';
 
     /* Left: Portfolio */
-    html += '<div style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">';
+    html += '<div class="dash-panel">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
     html += '<div style="display:flex;align-items:center;gap:8px;"><i class="fa-solid fa-briefcase" style="color:var(--accent);font-size:13px;"></i><span style="font-weight:600;font-size:13px;">Portfolio</span><span class="section-badge">LIVE</span></div>';
     html += '<button class="wd-btn wd-btn-ghost" onclick="App.navigateTo(\'portfolio\')" style="font-size:10px;padding:3px 8px;">Analytics <i class="fa-solid fa-arrow-right" style="margin-left:3px;"></i></button>';
@@ -687,7 +503,7 @@ var DashboardRenderer = (function () {
     html += '</div>';
 
     /* Right: System Health */
-    html += '<div style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">';
+    html += '<div class="dash-panel">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
     html += '<div style="display:flex;align-items:center;gap:8px;"><i class="fa-solid fa-gauge-high" style="color:var(--accent);font-size:13px;"></i><span style="font-weight:600;font-size:13px;">System Health</span><span class="section-badge">LIVE</span></div>';
     html += '<button class="wd-btn" id="dash-emergency-stop" style="background:rgba(239,68,68,0.1);color:var(--danger);font-size:10px;padding:3px 8px;border:1px solid rgba(239,68,68,0.3);font-weight:600;"><i class="fa-solid fa-circle-stop"></i> STOP</button>';
@@ -699,23 +515,23 @@ var DashboardRenderer = (function () {
 
     /* ── Charts Row ──────────────────────────────────────────── */
     html += '<div class="dash-split-row">';
-    html += '<section class="dash-chart-section">' + _sectionHeader('fa-chart-area', 'Equity Curve');
-    html += '<div class="chart-container"><div class="chart-wrapper" id="dash-equity-wrap"><canvas id="dash-equity-chart"></canvas></div></div></section>';
-    html += '<section class="dash-stats-section">' + _sectionHeader('fa-chart-pie', 'Portfolio Stats');
+    html += '<section class="dash-chart-section dash-panel">' + _sectionHeader('fa-chart-area', 'Equity Curve');
+    html += '<div style="margin-top:12px;"><div class="chart-wrapper" id="dash-equity-wrap"><canvas id="dash-equity-chart"></canvas></div></div></section>';
+    html += '<section class="dash-stats-section dash-panel">' + _sectionHeader('fa-chart-pie', 'Portfolio Stats');
     html += '<div id="dash-port-stats" class="dash-stats-grid">' + _spinner(200) + '</div></section>';
     html += '</div>';
 
     /* ── Fleet + Pipeline + Strategies Row ────────────────────── */
     html += '<div class="dash-triple-row">';
-    html += '<section>' + _sectionHeader('fa-server', 'Fleet Health', 'LIVE') + '<div id="dash-fleet" class="dash-panel-body">' + _spinner() + '</div></section>';
-    html += '<section>' + _sectionHeader('fa-diagram-project', 'Pipeline') + '<div id="dash-pipeline" class="dash-panel-body">' + _spinner() + '</div></section>';
-    html += '<section>' + _sectionHeader('fa-crosshairs', 'Active Strategies') + '<div id="dash-strategies" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-server', 'Fleet Health', 'LIVE') + '<div id="dash-fleet" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-diagram-project', 'Pipeline') + '<div id="dash-pipeline" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-crosshairs', 'Active Strategies') + '<div id="dash-strategies" class="dash-panel-body">' + _spinner() + '</div></section>';
     html += '</div>';
 
     /* ── Trades + Deployments Row ─────────────────────────────── */
     html += '<div class="dash-dual-row">';
-    html += '<section style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades">' + _spinner() + '</div></section>';
-    html += '<section style="background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border);padding:16px 20px;">' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys" class="dash-panel-body">' + _spinner() + '</div></section>';
     html += '</div>';
 
     html += '</div>';
@@ -772,18 +588,17 @@ var DashboardRenderer = (function () {
       if (!el) return;
       var hasAcc = p.has_account_data;
       el.innerHTML =
-        _metricItem('Equity', hasAcc ? ('$' + _fmtNum(p.total_equity || 0)) : (p.net_pnl ? _fmtMoney(p.net_pnl) : 'N/A'), hasAcc ? '' : ((p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger')) +
-        _metricItem('Balance', hasAcc ? ('$' + _fmtNum(p.total_balance || 0)) : '\u2014') +
-        _metricItem('Realized', _fmtMoney(p.net_pnl), (p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Floating', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
-        _metricItem('PF', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
-        _metricItem('Expectancy', _fmtMoney(p.expectancy), (p.expectancy || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Trades', String(p.total_trades || 0));
+        _metricPill('Equity', hasAcc ? ('$' + _fmtNum(p.total_equity || 0)) : (p.net_pnl ? _fmtMoney(p.net_pnl) : 'N/A'), hasAcc ? '' : ((p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger')) +
+        _metricPill('Balance', hasAcc ? ('$' + _fmtNum(p.total_balance || 0)) : '\u2014') +
+        _metricPill('Realized', _fmtMoney(p.net_pnl), (p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Floating', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
+        _metricPill('PF', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
+        _metricPill('Expectancy', _fmtMoney(p.expectancy), (p.expectancy || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Trades', String(p.total_trades || 0));
     });
   }
 
-  /* ── System KPIs ──────────────────────────────────────────── */
   function _fetchKPIs() {
     Promise.all([
       ApiClient.getFleetWorkers().catch(function () { return { workers: [], summary: {} }; }),
@@ -802,6 +617,7 @@ var DashboardRenderer = (function () {
       var totalPositions = 0;
       var totalTicks = 0;
       var totalBars = 0;
+      var totalBarsInMem = 0;
       var totalSignals = 0;
       var totalOnBar = 0;
       var mt5Connected = 0;
@@ -812,6 +628,7 @@ var DashboardRenderer = (function () {
         totalPositions += (w.open_positions_count || 0);
         totalTicks += (w.total_ticks || 0);
         totalBars += (w.total_bars || 0);
+        totalBarsInMem += (w.current_bars_in_memory || 0);
         totalSignals += (w.signal_count || 0);
         totalOnBar += (w.on_bar_calls || 0);
         if (w.mt5_state === 'connected') mt5Connected++;
@@ -821,19 +638,28 @@ var DashboardRenderer = (function () {
       });
 
       var hbLabel = workers.length === 0 ? 'N/A' : (freshestHb < 60 ? Math.round(freshestHb) + 's' : Math.round(freshestHb / 60) + 'm');
-      var lastErrLabel = lastErrors.length > 0 ? lastErrors[0].timestamp.replace('T', ' ').substring(11, 19) : 'None';
+      var lastErrLabel = 'None';
+      if (lastErrors.length > 0 && lastErrors[0].timestamp) {
+        try { lastErrLabel = lastErrors[0].timestamp.replace('T', ' ').substring(11, 19); } catch (e) { lastErrLabel = 'Error'; }
+      }
+
+      var barsLabel = _fmtNum(totalBars) + (totalBarsInMem > 0 ? ' (' + totalBarsInMem + ')' : '');
 
       el.innerHTML =
-        _metricItem('Workers', (fleet.online_workers || 0) + '/' + (fleet.total_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
-        _metricItem('MT5', mt5Connected + '/' + workers.length, mt5Connected === workers.length && workers.length > 0 ? 'text-success' : mt5Connected > 0 ? 'text-warning' : '') +
-        _metricItem('Strategies', running + ' running', running > 0 ? 'text-success' : '') +
-        _metricItem('Deploys', totalDeps + ' total') +
-        _metricItem('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
-        _metricItem('Ticks', _fmtNum(totalTicks)) +
-        _metricItem('Bars', _fmtNum(totalBars)) +
-        _metricItem('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
-        _metricItem('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
-        _metricItem('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
+        _metricPill('Workers', (fleet.online_workers || 0) + '/' + (fleet.total_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
+        _metricPill('MT5', mt5Connected + '/' + workers.length, mt5Connected === workers.length && workers.length > 0 ? 'text-success' : mt5Connected > 0 ? 'text-warning' : '') +
+        _metricPill('Strategies', running + ' running', running > 0 ? 'text-success' : '') +
+        _metricPill('Deploys', totalDeps + ' total') +
+        _metricPill('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
+        _metricPill('Ticks', _fmtNum(totalTicks)) +
+        _metricPill('Bars', barsLabel) +
+        _metricPill('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
+        _metricPill('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
+        _metricPill('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
+    }).catch(function (err) {
+      console.error('[DASHBOARD] System Health KPIs failed:', err);
+      var el = document.getElementById('dash-kpi');
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:11px;padding:8px;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Failed to load system health.</div>';
     });
   }
 
@@ -860,7 +686,7 @@ var DashboardRenderer = (function () {
         data: { labels: labels, datasets: [{ data: values, borderColor: ChartHelper.accentColor(), backgroundColor: gradient, borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10 }] },
         options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return '$' + v.toFixed(0); } } } } })
       });
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Equity fetch failed:', err); });
   }
 
   /* ── Portfolio Stats Grid ─────────────────────────────────── */
@@ -870,19 +696,19 @@ var DashboardRenderer = (function () {
       var el = document.getElementById('dash-port-stats');
       if (!el) return;
       el.innerHTML =
-        _metricItem('Trades', p.total_trades || 0) +
-        _metricItem('Win Rate', _fmtPct(p.win_rate)) +
-        _metricItem('PF', p.profit_factor || 0, (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
-        _metricItem('Sharpe', p.sharpe_estimate || 0) +
-        _metricItem('Sortino', p.sortino_estimate || 0) +
-        _metricItem('Avg Trade', _fmtMoney(p.avg_trade), (p.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger') +
-        _metricItem('Avg Winner', _fmtMoney(p.avg_winner), 'text-success') +
-        _metricItem('Avg Loser', _fmtMoney(p.avg_loser), 'text-danger') +
-        _metricItem('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
-        _metricItem('Best', _fmtMoney(p.best_trade), 'text-success') +
-        _metricItem('Worst', _fmtMoney(p.worst_trade), 'text-danger') +
-        _metricItem('Open Pos', p.open_positions || 0);
-    }).catch(function () {});
+        _metricPill('Trades', p.total_trades || 0) +
+        _metricPill('Win Rate', _fmtPct(p.win_rate)) +
+        _metricPill('PF', p.profit_factor || 0, (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
+        _metricPill('Sharpe', p.sharpe_estimate || 0) +
+        _metricPill('Sortino', p.sortino_estimate || 0) +
+        _metricPill('Avg Trade', _fmtMoney(p.avg_trade), (p.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Avg Winner', _fmtMoney(p.avg_winner), 'text-success') +
+        _metricPill('Avg Loser', _fmtMoney(p.avg_loser), 'text-danger') +
+        _metricPill('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
+        _metricPill('Best', _fmtMoney(p.best_trade), 'text-success') +
+        _metricPill('Worst', _fmtMoney(p.worst_trade), 'text-danger') +
+        _metricPill('Open Pos', p.open_positions || 0);
+    }).catch(function (err) { console.error('[DASHBOARD] Portfolio stats failed:', err); });
   }
 
   /* ── Fleet Panel ──────────────────────────────────────────── */
@@ -905,7 +731,7 @@ var DashboardRenderer = (function () {
       html += _fleetBadge(s.offline_workers || 0, 'Offline', 'offline');
       html += '</div>';
 
-      html += '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Worker</th><th>State</th><th>Balance</th><th>Heartbeat</th></tr></thead><tbody>';
+      html += '<table class="compact-fleet-table" style="margin-top:8px;"><thead><tr><th>Worker</th><th>State</th><th>Balance</th><th>Heartbeat</th></tr></thead><tbody>';
       workers.slice(0, 6).forEach(function (w) {
         var name = w.worker_name || w.worker_id;
         var state = w.state || 'unknown';
@@ -916,10 +742,10 @@ var DashboardRenderer = (function () {
           '<td class="mono">' + bal + '</td>' +
           '<td class="mono" style="font-size:10px;">' + _fmtAge(w.heartbeat_age_seconds) + '</td></tr>';
       });
-      html += '</tbody></table></div>';
-      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';
+      html += '</tbody></table>';
+      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';''
       el.innerHTML = html;
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Fleet fetch failed:', err); });
   }
 
   /* ── Pipeline Panel ───────────────────────────────────────── */
@@ -928,10 +754,11 @@ var DashboardRenderer = (function () {
       var workers = data.workers || [];
       var el = document.getElementById('dash-pipeline');
       if (!el) return;
-      var totalTicks = 0, totalBars = 0, totalSignals = 0, totalOnBar = 0;
+      var totalTicks = 0, totalBars = 0, totalBarsInMem = 0, totalSignals = 0, totalOnBar = 0;
       workers.forEach(function (w) {
         totalTicks += (w.total_ticks || 0);
         totalBars += (w.total_bars || 0);
+        totalBarsInMem += (w.current_bars_in_memory || 0);
         totalSignals += (w.signal_count || 0);
         totalOnBar += (w.on_bar_calls || 0);
       });
@@ -939,15 +766,16 @@ var DashboardRenderer = (function () {
         el.innerHTML = _emptyState('fa-diagram-project', 'No Pipeline Data', 'Connect worker agents to see live flow.');
         return;
       }
+      var barsMemNote = totalBarsInMem > 0 ? '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + totalBarsInMem + ' in mem</div>' : '';
       el.innerHTML = '<div class="pipeline-flow">' +
         '<div class="pipeline-node"><span class="pipeline-val accent">' + _fmtNum(totalTicks) + '</span><span class="pipeline-lbl">Ticks</span></div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
-        '<div class="pipeline-node"><span class="pipeline-val warning">' + _fmtNum(totalBars) + '</span><span class="pipeline-lbl">Bars</span></div>' +
+        '<div class="pipeline-node"><span class="pipeline-val warning">' + _fmtNum(totalBars) + '</span><span class="pipeline-lbl">Bars Gen\u2019d</span>' + barsMemNote + '</div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
         '<div class="pipeline-node"><span class="pipeline-val success">' + _fmtNum(totalOnBar) + '</span><span class="pipeline-lbl">on_bar()</span></div>' +
         '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
         '<div class="pipeline-node"><span class="pipeline-val danger">' + _fmtNum(totalSignals) + '</span><span class="pipeline-lbl">Signals</span></div></div>';
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Pipeline fetch failed:', err); });
   }
 
   /* ── Strategies Panel ─────────────────────────────────────── */
@@ -993,7 +821,7 @@ var DashboardRenderer = (function () {
         el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No trades yet.</div>';
         return;
       }
-      var html = '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Symbol</th><th>Dir</th><th>P&L</th><th>Reason</th></tr></thead><tbody>';
+      var html = '<table class="compact-fleet-table"><thead><tr><th>Symbol</th><th>Dir</th><th>P&L</th><th>Reason</th></tr></thead><tbody>';
       trades.slice(0, 8).forEach(function (t) {
         var pnlClass = t.profit >= 0 ? 'text-success' : 'text-danger';
         html += '<tr>' +
@@ -1002,10 +830,10 @@ var DashboardRenderer = (function () {
           '<td class="mono ' + pnlClass + '">' + _fmtMoney(t.profit) + '</td>' +
           '<td class="mono" style="font-size:10px;">' + (t.exit_reason || '\u2014') + '</td></tr>';
       });
-      html += '</tbody></table></div>';
+      html += '</tbody></table>';
       html += '<span class="view-fleet-link" onclick="App.navigateTo(\'portfolio\')">View Portfolio <i class="fa-solid fa-arrow-right"></i></span>';
       el.innerHTML = html;
-    }).catch(function () {});
+    }).catch(function (err) { console.error('[DASHBOARD] Trades fetch failed:', err); });
   }
 
   /* ── Recent Deployments Panel ─────────────────────────────── */
@@ -1018,19 +846,29 @@ var DashboardRenderer = (function () {
         el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No deployments yet.</div>';
         return;
       }
-      deps = deps.slice().reverse().slice(0, 6);
-      var html = '<div class="compact-fleet-wrapper" style="margin-top:0;"><table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th></tr></thead><tbody>';
+      /* API returns DESC by created_at — take newest 6 directly */
+      deps = deps.slice(0, 6);
+      var html = '<table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th><th>Created</th></tr></thead><tbody>';
       deps.forEach(function (d) {
-        var sc = d.state === 'running' ? 'online' : d.state === 'failed' ? 'error' : d.state === 'stopped' ? 'offline' : 'stale';
+        var state = d.state || 'unknown';
+        var sc = state === 'running' ? 'online' : state === 'failed' ? 'error' : state === 'stopped' ? 'offline' : 'stale';
+        var created = d.created_at ? d.created_at.replace('T', ' ').substring(0, 16) : '\u2014';
+        var stratLabel = d.strategy_name || d.strategy_id || '\u2014';
+        if (d.strategy_version) stratLabel += ' v' + d.strategy_version;
         html += '<tr>' +
-          '<td class="mono">' + d.strategy_id + '</td>' +
-          '<td class="mono">' + d.worker_id + '</td>' +
-          '<td class="mono">' + d.symbol + '</td>' +
-          '<td>' + _statPill(d.state.toUpperCase().replace(/_/g, ' '), sc) + '</td></tr>';
+          '<td class="mono">' + stratLabel + '</td>' +
+          '<td class="mono">' + (d.worker_id || '\u2014') + '</td>' +
+          '<td class="mono">' + (d.symbol || '\u2014') + '</td>' +
+          '<td>' + _statPill(state.toUpperCase().replace(/_/g, ' '), sc) + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + created + '</td></tr>';
       });
-      html += '</tbody></table></div>';
+      html += '</tbody></table>';
       el.innerHTML = html;
-    }).catch(function () {});
+    }).catch(function (err) {
+      console.error('[DASHBOARD] Failed to load deployments:', err);
+      var el = document.getElementById('dash-deploys');
+      if (el) el.innerHTML = '<div style="padding:16px 0;color:var(--danger);font-size:12px;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Failed to load deployments. Check console.</div>';
+    });
   }
 
   function _openWorker(workerId) {
@@ -1083,7 +921,7 @@ var FleetRenderer = (function () {
         _row('Balance', bal) +
         _row('Positions', '<span style="color:var(--accent);">' + (w.open_positions_count || 0) + '</span>') +
         _row('Float PnL', '<span style="' + pnlStyle + '">' + pnlVal + '</span>') +
-        _row('Pipeline', '<span class="mono" style="font-size:10px;">' + (w.total_ticks || 0) + ' ticks / ' + (w.total_bars || 0) + ' bars / ' + (w.signal_count || 0) + ' sig</span>') +
+        _row('Pipeline', '<span class="mono" style="font-size:10px;">' + (w.total_ticks || 0) + ' ticks / ' + (w.total_bars || 0) + ' bars (' + (w.current_bars_in_memory || 0) + ' mem) / ' + (w.signal_count || 0) + ' sig</span>') +
         _row('Heartbeat', _fmtAge(w.heartbeat_age_seconds)) +
         '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Deploy</div>' +
       '</div></div>';

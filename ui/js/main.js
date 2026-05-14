@@ -2026,6 +2026,7 @@ var App = (function () {
     if (currentPage === 'portfolio') PortfolioRenderer.destroy();
     if (currentPage === 'logs') LogsRenderer.destroy();
     if (currentPage === 'settings') SettingsRenderer.destroy();
+    if (currentPage === 'validation' && typeof ValidationRenderer !== 'undefined') ValidationRenderer.destroy();
 
     currentPage = page;
 
@@ -2043,7 +2044,8 @@ var App = (function () {
       strategies: 'Strategy Registry',
       portfolio: 'Portfolio Analytics',
       logs: 'Event Logs',
-      settings: 'Settings & Admin'
+      settings: 'Settings & Admin',
+      validation: 'Strategy Validation',
     };
     document.getElementById('topbar-title').textContent = titleMap[page] || (page.charAt(0).toUpperCase() + page.slice(1));
 
@@ -2066,6 +2068,12 @@ var App = (function () {
       LogsRenderer.render();
     } else if (page === 'settings') {
       SettingsRenderer.render();
+    } else if (page === 'validation') {
+      if (typeof ValidationRenderer !== 'undefined') {
+        ValidationRenderer.render();
+      } else {
+        document.getElementById('main-content').innerHTML = _emptyState('fa-flask-vial', 'Validation Unavailable', 'validationRenderer.js not loaded.');
+      }
     } else {
       renderPlaceholder(page);
     }

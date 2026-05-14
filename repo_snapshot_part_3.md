@@ -1,4 +1,8 @@
 # Repository Snapshot - Part 3 of 4
+
+
+- Total files indexed: `27`
+- Files in this chunk: `10`
 ## Full Project Tree
 
 ```text
@@ -19,22 +23,16 @@ ui/css/style.css
 ui/index.html
 ui/js/main.js
 ui/js/workerDetailRenderer.js
-vm/__init__.py
-vm/config/__init__.py
-vm/config/config.yaml
-vm/core/__init__.py
+vm/config.yaml
 vm/core/strategy_worker.py
-vm/core/worker_agent.py
-vm/logging/__init__.py
 vm/logging/event_log.py
-vm/main.py
 vm/README.md
 vm/requirements.txt
-vm/trading/__init__.py
 vm/trading/execution.py
 vm/trading/indicators.py
 vm/trading/mt5_history.py
 vm/trading/portfolio.py
+vm/worker_agent.py
 ```
 
 ## Files In This Chunk - Part 3
@@ -47,13 +45,9 @@ main.py
 README.md
 requirements.txt
 ui/css/style.css
-vm/logging/__init__.py
-vm/logging/event_log.py
-vm/main.py
-vm/README.md
 vm/requirements.txt
-vm/trading/__init__.py
 vm/trading/execution.py
+vm/worker_agent.py
 ```
 
 ## File Contents
@@ -829,8 +823,8 @@ python-multipart>=0.0.9
 
 - Relative path: `ui/css/style.css`
 - Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/css/style.css`
-- Size bytes: `50131`
-- SHA256: `052e2a4c126ea410724237b69176b5cd2067f579ea375c652acbb1ed98c9c553`
+- Size bytes: `51696`
+- SHA256: `5869695573180a051605f5cf3d51ca577451c9fac39d454b891c2b94d24e34ce`
 - Guessed MIME type: `text/css`
 - Guessed encoding: `unknown`
 
@@ -1769,12 +1763,12 @@ body,.topbar,.content,.portfolio-card,.node-card,.section-header,.fleet-summary,
 
 /* ── Pipeline Flow ────────────────────────────────────────── */
 .pipeline-flow {
-  display: flex; align-items: center; justify-content: center;
-  gap: 12px; flex-wrap: wrap; padding: 12px 0;
+  display: flex; align-items: stretch; gap: 8px; padding: 8px 0;
 }
 .pipeline-node {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  background: var(--bg-secondary); border-radius: 8px; padding: 14px 18px; min-width: 80px;
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; background: var(--bg-secondary); border-radius: 8px; padding: 14px 8px;
 }
 .pipeline-val { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 700; }
 .pipeline-val.accent { color: var(--accent); }
@@ -1785,7 +1779,46 @@ body,.topbar,.content,.portfolio-card,.node-card,.section-header,.fleet-summary,
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
   color: var(--text-muted); font-weight: 500;
 }
-.pipeline-arrow { color: var(--text-muted); font-size: 14px; opacity: 0.4; }
+.pipeline-arrow { flex: 0 0 auto; display: flex; align-items: center; color: var(--text-muted); font-size: 10px; opacity: 0.3; }
+
+/* ── Metric Pill (stat card inside panels) ────────────────── */
+.metric-pill {
+  background: var(--bg-secondary); border-radius: 8px; padding: 10px 8px;
+  text-align: center; min-width: 0;
+  transition: background-color 0.3s ease;
+}
+.metric-pill-value {
+  font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700;
+  line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.metric-pill-label {
+  font-size: 9.5px; color: var(--text-muted); margin-top: 4px;
+  text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap;
+}
+
+/* ── Dashboard Panel (unified card style) ─────────────────── */
+.dash-panel {
+  background: var(--bg-card); border: 1px solid var(--border-primary);
+  border-radius: 10px; padding: 16px 20px; box-shadow: var(--shadow-sm);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* ── Remove double-card when tables are inside panels ─────── */
+.dash-panel-body .compact-fleet-wrapper,
+.dash-panel .compact-fleet-wrapper {
+  background: transparent; border: none; box-shadow: none; padding: 0; margin-top: 8px;
+  border-radius: 0;
+}
+
+/* ── Section alignment (equal heights in grid rows) ───────── */
+.dash-triple-row > section,
+.dash-dual-row > section {
+  display: flex; flex-direction: column;
+}
+.dash-triple-row > section > .dash-panel-body,
+.dash-dual-row > section > .dash-panel-body {
+  flex: 1;
+}
 
 /* ── Strategy Row (Dashboard) ─────────────────────────────── */
 .dash-strat-row {
@@ -1855,228 +1888,6 @@ body,.topbar,.content,.portfolio-card,.node-card,.section-header,.fleet-summary,
 
 ---
 
-## FILE: `vm/logging/__init__.py`
-
-- Relative path: `vm/logging/__init__.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/logging/__init__.py`
-- Size bytes: `0`
-- SHA256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-
-```
-
----
-
-## FILE: `vm/logging/event_log.py`
-
-- Relative path: `vm/logging/event_log.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/logging/event_log.py`
-- Size bytes: `3457`
-- SHA256: `df8ec517a77b4d6762a2911bb760f6b2873b1f23a3029a0ad1eac449f9e7bf3d`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI GRID — Worker-Side Structured Event Logger
-worker/event_log.py
-
-Writes structured events to a local SQLite DB on the worker machine.
-Events are also forwarded to Mother via heartbeat/status reports.
-
-Categories: SYSTEM, EXECUTION, STRATEGY, PIPELINE, ERROR
-"""
-
-import json
-import os
-import sqlite3
-import threading
-from datetime import datetime, timezone
-from typing import Optional
-
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-
-
-class WorkerEventLog:
-    """Per-worker persistent event log."""
-
-    def __init__(self, worker_id: str):
-        self.worker_id = worker_id
-        self._lock = threading.Lock()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        self._db_path = os.path.join(DATA_DIR, f"events_{worker_id}.db")
-        self._init_db()
-
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=15)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=3000")
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_db(self):
-        conn = self._get_conn()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                category TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                deployment_id TEXT,
-                strategy_id TEXT,
-                symbol TEXT,
-                message TEXT,
-                data_json TEXT,
-                level TEXT DEFAULT 'INFO'
-            );
-            CREATE INDEX IF NOT EXISTS idx_wevents_ts ON events(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_wevents_cat ON events(category);
-        """)
-        conn.commit()
-        conn.close()
-
-    def log(self, category: str, event_type: str, message: str,
-            deployment_id: str = None, strategy_id: str = None,
-            symbol: str = None, data: dict = None, level: str = "INFO"):
-        """Write a structured event."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                conn.execute("""
-                    INSERT INTO events (timestamp, category, event_type,
-                        deployment_id, strategy_id, symbol, message,
-                        data_json, level)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    now, category, event_type, deployment_id, strategy_id,
-                    symbol, message,
-                    json.dumps(data, default=str) if data else None, level,
-                ))
-                conn.commit()
-            finally:
-                conn.close()
-
-        # Also print for console visibility
-        print(f"[EVENT:{category}] {event_type} | {message}")
-
-    def get_recent(self, limit: int = 100, category: str = None) -> list:
-        conn = self._get_conn()
-        try:
-            if category:
-                rows = conn.execute(
-                    "SELECT * FROM events WHERE category=? ORDER BY id DESC LIMIT ?",
-                    (category, limit)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-```
-
----
-
-## FILE: `vm/main.py`
-
-- Relative path: `vm/main.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/main.py`
-- Size bytes: `187`
-- SHA256: `0cd0547536acb075a8611d1ec123da8dcda200827f8f481406398060cebfd253`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-
-
-from vm.core.worker_agent import WorkerAgent, load_config
-
-def main():
-    config = load_config()
-    agent = WorkerAgent(config)
-    agent.run()
-
-
-if __name__ == "__main__":
-    main()
-```
-
----
-
-## FILE: `vm/README.md`
-
-- Relative path: `vm/README.md`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/README.md`
-- Size bytes: `1215`
-- SHA256: `28ead786e4eb10d807621099ef8cec7fec39d645e950a3b2dd1180cea90184c1`
-- Guessed MIME type: `text/markdown`
-- Guessed encoding: `unknown`
-
-````markdown
-# JINNI Grid — Worker Agent
-
-## What It Does
-
-Sends periodic heartbeat POST requests to the JINNI Grid Mother Server.
-The Mother Server uses these heartbeats to track worker status in the Fleet dashboard.
-
-## Prerequisites
-
-- Python 3.10+
-- `requests` and `pyyaml` packages
-
-## Setup
-
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Edit `config.yaml`:
-   - Set `worker_id` to a unique ID for this worker
-   - Set `worker_name` to a human-readable name
-   - Set `mother_server.url` to your Mother Server's IP and port
-   - Adjust `heartbeat.interval_seconds` if needed
-
-3. Run the agent:
-   ```bash
-   python worker_agent.py
-   ```
-
-## Config Reference
-
-```yaml
-worker:
-  worker_id: "vm-worker-01"      # Unique worker identifier
-  worker_name: "Worker 01"       # Display name
-
-mother_server:
-  url: "http://192.168.1.100:5100"  # Mother Server address
-
-heartbeat:
-  interval_seconds: 5            # Seconds between heartbeats
-
-agent:
-  version: "0.1.0"               # Agent version reported to Mother Server
-```
-
-## What It Does NOT Do
-
-- No MT5 connectivity
-- No trading execution
-- No strategy deployment
-- No broker/account detection
-
-Those features come in future phases.
-````
-
----
-
 ## FILE: `vm/requirements.txt`
 
 - Relative path: `vm/requirements.txt`
@@ -2090,21 +1901,6 @@ Those features come in future phases.
 pyyaml>=6.0
 requests>=2.31.0
 MetaTrader5>=5.0.45
-```
-
----
-
-## FILE: `vm/trading/__init__.py`
-
-- Relative path: `vm/trading/__init__.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/__init__.py`
-- Size bytes: `0`
-- SHA256: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-
 ```
 
 ---
@@ -2801,4 +2597,307 @@ def build_trade_record(
         "profit": profit,
         "bars_held": exit_bar - entry_bar,
     }
+```
+
+---
+
+## FILE: `vm/worker_agent.py`
+
+- Relative path: `vm/worker_agent.py`
+- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/worker_agent.py`
+- Size bytes: `11561`
+- SHA256: `958a713d138bf7452c367e866746e478b543da570aa73750dfeb239be915e80a`
+- Guessed MIME type: `text/x-python`
+- Guessed encoding: `unknown`
+
+```python
+"""
+JINNI Grid - Worker Agent
+Heartbeat + Command polling + Strategy Runner management.
+worker/worker_agent.py
+"""
+import os
+import sys
+import time
+import socket
+import threading
+import yaml
+import requests
+
+_worker_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_worker_dir)
+if _worker_dir not in sys.path:
+    sys.path.insert(0, _worker_dir)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from core.strategy_worker import StrategyRunner
+from trading.portfolio import TradeLedger
+
+
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+    if not os.path.exists(config_path):
+        print(f"[ERROR] config.yaml not found at {config_path}")
+        sys.exit(1)
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def detect_host():
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        return f"{hostname} ({ip})"
+    except Exception:
+        return socket.gethostname()
+
+
+class WorkerAgent:
+    def __init__(self, config: dict):
+        self.worker_id = config["worker"]["worker_id"]
+        self.worker_name = config["worker"].get("worker_name", self.worker_id)
+        self.mother_url = config["mother_server"]["url"].rstrip("/")
+        self.heartbeat_interval = config["heartbeat"].get("interval_seconds", 10)
+        self.agent_version = config["agent"].get("version", "0.1.0")
+        self.host = detect_host()
+
+        self._runner: StrategyRunner | None = None
+        self._runner_lock = threading.Lock()
+
+        # Local trade ledger for persistence (Bug 18 fix)
+        self._ledger = TradeLedger(self.worker_id)
+        print(f"[AGENT] TradeLedger initialized for worker '{self.worker_id}'")
+
+    # ── Heartbeat ───────────────────────────────────────────
+
+    def _build_heartbeat_payload(self) -> dict:
+        runner = self._runner
+        diag = runner.get_diagnostics() if runner else {}
+
+        runner_state = diag.get("runner_state", "idle")
+        if runner_state in ("idle", "running", "warming_up"):
+            worker_state = "online"
+        elif runner_state == "failed":
+            worker_state = "error"
+        elif runner_state == "stopped":
+            worker_state = "online"
+        else:
+            worker_state = runner_state if runner else "online"
+
+        active_strategies = []
+        if diag.get("strategy_id"):
+            active_strategies = [diag["strategy_id"]]
+
+        errors = []
+        if diag.get("last_error"):
+            errors = [diag["last_error"]]
+
+        return {
+            "worker_id": self.worker_id,
+            "worker_name": self.worker_name,
+            "host": self.host,
+            "state": worker_state,
+            "agent_version": self.agent_version,
+            "mt5_state": diag.get("mt5_state"),
+            "account_id": diag.get("account_id"),
+            "broker": diag.get("broker"),
+            "active_strategies": active_strategies,
+            "open_positions_count": diag.get("open_positions_count", 0),
+            "floating_pnl": diag.get("floating_pnl", 0.0),
+            "errors": errors,
+            # Pipeline
+            "total_ticks": diag.get("total_ticks", 0),
+            "total_bars": diag.get("total_bars", 0),
+            "current_bars_in_memory": diag.get("current_bars_in_memory", 0),
+            "on_bar_calls": diag.get("on_bar_calls", 0),
+            "signal_count": diag.get("signal_count", 0),
+            "last_bar_time": str(diag["last_bar_time"]) if diag.get("last_bar_time") else None,
+            "current_price": diag.get("current_price"),
+            # MT5 account data (for portfolio)
+            "account_balance": diag.get("account_balance"),
+            "account_equity": diag.get("account_equity"),
+        }
+
+    def send_heartbeat(self):
+        endpoint = f"{self.mother_url}/api/Grid/workers/heartbeat"
+        payload = self._build_heartbeat_payload()
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=10)
+            data = resp.json()
+            status = "REGISTERED" if data.get("registered") else "OK"
+            print(f"[HEARTBEAT] {status} | worker={self.worker_id}")
+        except requests.exceptions.ConnectionError:
+            print(f"[WARNING] Could not reach Mother Server at {self.mother_url}")
+        except Exception as e:
+            print(f"[ERROR] Heartbeat: {type(e).__name__}: {e}")
+
+    # ── Trade Reporting (Bug 13/18/19 fix) ──────────────────
+
+    def _report_trade(self, report: dict):
+        """Report a closed trade to Mother server AND save to local ledger."""
+        # 1. Save to local TradeLedger
+        try:
+            self._ledger.add_trade(
+                report,
+                deployment_id=report.get("deployment_id"),
+                strategy_id=report.get("strategy_id"),
+            )
+            print(f"[TRADE] Saved locally: {report.get('direction')} "
+                  f"{report.get('symbol')} profit={report.get('profit', 0):.2f}")
+        except Exception as e:
+            print(f"[ERROR] Local trade save failed: {e}")
+
+        # 2. POST to Mother Server
+        payload = {
+            "trade_id": report.get("id"),
+            "deployment_id": report.get("deployment_id"),
+            "strategy_id": report.get("strategy_id"),
+            "worker_id": report.get("worker_id"),
+            "symbol": report.get("symbol", ""),
+            "direction": report.get("direction", ""),
+            "entry_price": report.get("entry_price", 0),
+            "exit_price": report.get("exit_price"),
+            "entry_time": str(report.get("entry_time", "")),
+            "exit_time": str(report.get("exit_time", "")),
+            "exit_reason": report.get("exit_reason"),
+            "sl_level": report.get("sl_level"),
+            "tp_level": report.get("tp_level"),
+            "lot_size": report.get("lot_size", 0.01),
+            "ticket": report.get("ticket"),
+            "points_pnl": report.get("points_pnl", 0),
+            "profit": report.get("profit", 0),
+            "bars_held": report.get("bars_held", 0),
+        }
+        endpoint = f"{self.mother_url}/api/portfolio/trades/report"
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=10)
+            if resp.status_code == 200:
+                print(f"[TRADE] Reported to Mother: {payload.get('direction')} "
+                      f"{payload.get('symbol')} profit={payload.get('profit', 0):.2f}")
+            else:
+                print(f"[ERROR] Trade report HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            print(f"[ERROR] Trade report to Mother failed: {e}")
+
+    # ── Command Polling ─────────────────────────────────────
+
+    def poll_commands(self):
+        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/poll"
+        try:
+            resp = requests.get(endpoint, timeout=10)
+            data = resp.json()
+            commands = data.get("commands", [])
+            for cmd in commands:
+                self._handle_command(cmd)
+        except requests.exceptions.ConnectionError:
+            pass
+        except Exception as e:
+            print(f"[ERROR] Command poll: {type(e).__name__}: {e}")
+
+    def _handle_command(self, cmd: dict):
+        cmd_type = cmd.get("command_type")
+        cmd_id = cmd.get("command_id")
+        payload = cmd.get("payload", {})
+        print(f"[COMMAND] Received: {cmd_type} ({cmd_id})")
+        self._ack_command(cmd_id)
+
+        if cmd_type == "deploy_strategy":
+            self._handle_deploy(payload)
+        elif cmd_type == "stop_strategy":
+            self._handle_stop(payload)
+        else:
+            print(f"[COMMAND] Unknown command type: {cmd_type}")
+
+    def _ack_command(self, command_id: str):
+        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/commands/ack"
+        try:
+            requests.post(endpoint, json={"command_id": command_id}, timeout=10)
+            print(f"[COMMAND] Ack sent: {command_id}")
+        except Exception as e:
+            print(f"[ERROR] Ack failed: {e}")
+
+    def _report_runner_status(self, status: dict):
+        endpoint = f"{self.mother_url}/api/grid/workers/{self.worker_id}/runner-status"
+        try:
+            requests.post(endpoint, json=status, timeout=10)
+        except Exception as e:
+            print(f"[ERROR] Runner status report failed: {e}")
+
+    # ── Deploy / Stop ───────────────────────────────────────
+
+    def _handle_deploy(self, payload: dict):
+        with self._runner_lock:
+            if self._runner:
+                # Bug 20 fix: log clear warning when replacing existing runner
+                print(f"[WARNING] Replacing existing runner "
+                      f"(deployment={self._runner.deployment_id}) "
+                      f"with new deployment {payload.get('deployment_id')}. "
+                      f"Only one runner per worker is supported.")
+                self._runner.stop()
+                self._runner = None
+
+            # Inject worker_id so StrategyRunner can include it in trade reports
+            payload["worker_id"] = self.worker_id
+
+            runner = StrategyRunner(
+                deployment_config=payload,
+                status_callback=self._report_runner_status,
+                trade_callback=self._report_trade,
+            )
+            self._runner = runner
+            runner.start()
+
+    def _handle_stop(self, payload: dict):
+        with self._runner_lock:
+            if self._runner:
+                dep_id = payload.get("deployment_id")
+                if dep_id and self._runner.deployment_id != dep_id:
+                    print(f"[COMMAND] Stop ignored — deployment_id mismatch.")
+                    return
+                self._runner.stop()
+                self._runner = None
+                print(f"[RUNNER] Stopped deployment {dep_id}")
+            else:
+                print("[COMMAND] Stop received but no active runner.")
+
+    # ── Main Loop ───────────────────────────────────────────
+
+    def run(self):
+        print("")
+        print("=" * 56)
+        print("  JINNI Grid Worker Agent")
+        print("=" * 56)
+        print(f"  Worker ID:    {self.worker_id}")
+        print(f"  Worker Name:  {self.worker_name}")
+        print(f"  Host:         {self.host}")
+        print(f"  Mother URL:   {self.mother_url}")
+        print(f"  Heartbeat:    {self.heartbeat_interval}s")
+        print(f"  Agent:        v{self.agent_version}")
+        print(f"  Trade Ledger: data/portfolio_{self.worker_id}.db")
+        print("=" * 56)
+        print("")
+
+        try:
+            while True:
+                self.send_heartbeat()
+                self.poll_commands()
+                time.sleep(self.heartbeat_interval)
+
+        except KeyboardInterrupt:
+            print("")
+            print(f"[SHUTDOWN] Stopping worker agent '{self.worker_id}'...")
+            with self._runner_lock:
+                if self._runner:
+                    self._runner.stop()
+            sys.exit(0)
+
+def main():
+    config = load_config()
+    agent = WorkerAgent(config)
+    agent.run()
+
+
+if __name__ == "__main__":
+    main()
 ```
