@@ -3,7 +3,7 @@
    ui/js/validationRenderer.js
 
    Sections:
-   1. Job Creation Form (strategy, symbol, month, year, VM, config)
+   1. Job Creation Form (strategy + dynamic params, symbol, month, year, VM, config)
    2. Job History List (with status polling)
    3. Job Results View (equity chart, stats, trade table, download)
    ================================================================ */
@@ -13,10 +13,13 @@ var ValidationRenderer = (function () {
 
   var _refreshInterval = null;
   var _charts = {};
-  var _currentView = 'list'; // 'list' | 'results'
+  var _currentView = 'list';
   var _currentJobId = null;
   var _strategies = [];
   var _workers = [];
+  var _selectedStrategy = null;
+  var _parameterValues = {};
+  var _parameterDefaults = {};
 
   function _destroyCharts() {
     for (var k in _charts) { if (_charts[k]) { _charts[k].destroy(); delete _charts[k]; } }
@@ -28,6 +31,9 @@ var ValidationRenderer = (function () {
   function render() {
     _currentView = 'list';
     _currentJobId = null;
+    _selectedStrategy = null;
+    _parameterValues = {};
+    _parameterDefaults = {};
     _destroyCharts();
 
     var html = '<div class="fleet-page" id="validation-page">';
@@ -43,6 +49,12 @@ var ValidationRenderer = (function () {
     html += '<div class="wd-panel" id="val-create-panel">';
     html += '<div class="wd-panel-header">New Validation Job<span class="panel-badge">BACKTEST</span></div>';
     html += '<div class="wd-panel-body" id="val-form-body">' + _spinner(80) + '</div>';
+    html += '</div>';
+
+    /* Strategy Parameters Panel (shown after strategy selection) */
+    html += '<div class="wd-panel" id="val-params-panel" style="display:none;">';
+    html += '<div class="wd-panel-header">Strategy Parameters<span class="panel-badge" id="val-param-count">0 PARAMS</span></div>';
+    html += '<div class="wd-panel-body" id="val-params-body"></div>';
     html += '</div>';
 
     /* Jobs List */
@@ -82,14 +94,14 @@ var ValidationRenderer = (function () {
 
     var now = new Date();
     var curYear = now.getFullYear();
-    var curMonth = now.getMonth(); // 0-indexed
+    var curMonth = now.getMonth();
 
     var html = '<div class="wd-form-grid" style="grid-template-columns:1fr 1fr 1fr;">';
 
     /* Strategy */
     html += '<div class="wd-form-group"><label class="wd-form-label">Strategy</label>';
     html += '<select class="wd-form-select" id="val-strategy">';
-    html += '<option value="">-- Select --</option>';
+    html += '<option value="">-- Select Strategy --</option>';
     _strategies.forEach(function (s) {
       html += '<option value="' + s.strategy_id + '">' + (s.strategy_name || s.strategy_id) + ' v' + (s.version || '?') + '</option>';
     });
@@ -102,7 +114,7 @@ var ValidationRenderer = (function () {
     /* Worker VM */
     html += '<div class="wd-form-group"><label class="wd-form-label">Worker VM</label>';
     html += '<select class="wd-form-select" id="val-worker">';
-    html += '<option value="">-- Select --</option>';
+    html += '<option value="">-- Select Worker --</option>';
     _workers.forEach(function (w) {
       var name = w.worker_name || w.worker_id;
       var st = w.state || 'unknown';
@@ -156,12 +168,211 @@ var ValidationRenderer = (function () {
 
     el.innerHTML = html;
 
+    /* Events */
     document.getElementById('val-run-btn').addEventListener('click', _handleRun);
 
-    /* Auto-uppercase symbol */
     var symInput = document.getElementById('val-symbol');
     symInput.addEventListener('input', function () {
       symInput.value = symInput.value.toUpperCase().replace(/\s/g, '');
+    });
+
+    /* Strategy change → load parameters */
+    document.getElementById('val-strategy').addEventListener('change', _onStrategyChange);
+  }
+
+  /* ── Strategy Selection → Load Parameters ─────────────────── */
+  function _onStrategyChange() {
+    var sid = document.getElementById('val-strategy').value;
+    var paramsPanel = document.getElementById('val-params-panel');
+    var paramsBody = document.getElementById('val-params-body');
+    var paramCount = document.getElementById('val-param-count');
+
+    _selectedStrategy = null;
+    _parameterValues = {};
+    _parameterDefaults = {};
+
+    if (!sid) {
+      if (paramsPanel) paramsPanel.style.display = 'none';
+      return;
+    }
+
+    /* Find in loaded list */
+    var found = null;
+    for (var i = 0; i < _strategies.length; i++) {
+      if (_strategies[i].strategy_id === sid) {
+        found = _strategies[i];
+        break;
+      }
+    }
+
+    if (!found) {
+      if (paramsPanel) paramsPanel.style.display = 'none';
+      return;
+    }
+
+    /* If parameters are empty/missing, fetch detail from backend */
+    if (!found.parameters || Object.keys(found.parameters).length === 0) {
+      if (paramsBody) paramsBody.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;"><i class="fa-solid fa-spinner fa-spin" style="margin-right:6px;"></i>Loading parameters\u2026</div>';
+      if (paramsPanel) paramsPanel.style.display = '';
+
+      ApiClient.getStrategy(sid).then(function (data) {
+        if (data.ok && data.strategy) {
+          var detail = data.strategy;
+          if (detail.parameters && typeof detail.parameters === 'object') {
+            found.parameters = detail.parameters;
+            found.parameter_count = Object.keys(detail.parameters).length;
+          }
+        }
+        _selectedStrategy = found;
+        _initParamsFromSchema();
+        _renderParams();
+      }).catch(function () {
+        _selectedStrategy = found;
+        _initParamsFromSchema();
+        _renderParams();
+      });
+    } else {
+      _selectedStrategy = found;
+      _initParamsFromSchema();
+      _renderParams();
+    }
+  }
+
+  /* ── Initialize Parameter Values from Schema ──────────────── */
+  function _initParamsFromSchema() {
+    _parameterValues = {};
+    _parameterDefaults = {};
+
+    if (!_selectedStrategy || !_selectedStrategy.parameters) return;
+
+    var schema = _selectedStrategy.parameters;
+    var keys = Object.keys(schema);
+    keys.forEach(function (key) {
+      var spec = schema[key];
+      if (typeof spec === 'object' && spec.default !== undefined) {
+        _parameterValues[key] = spec.default;
+        _parameterDefaults[key] = spec.default;
+      }
+    });
+  }
+
+  /* ── Render Strategy Parameters ───────────────────────────── */
+  function _renderParams() {
+    var paramsPanel = document.getElementById('val-params-panel');
+    var paramsBody = document.getElementById('val-params-body');
+    var paramCount = document.getElementById('val-param-count');
+
+    if (!paramsPanel || !paramsBody) return;
+
+    if (!_selectedStrategy || !_selectedStrategy.parameters ||
+        Object.keys(_selectedStrategy.parameters).length === 0) {
+      paramsBody.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">' +
+        'No editable parameters exposed by this strategy.</div>';
+      if (paramCount) paramCount.textContent = '0 PARAMS';
+      paramsPanel.style.display = '';
+      return;
+    }
+
+    var schema = _selectedStrategy.parameters;
+    var keys = Object.keys(schema);
+    if (paramCount) paramCount.textContent = keys.length + ' PARAMS';
+
+    var html = '<div class="wd-params-list">';
+
+    keys.forEach(function (key) {
+      var spec = schema[key];
+      if (typeof spec !== 'object') return;
+
+      var ptype = spec.type || 'number';
+      var label = spec.label || key;
+      var desc = spec.help || '';
+      var defVal = spec.default !== undefined ? spec.default : '';
+      var val = _parameterValues.hasOwnProperty(key) ? _parameterValues[key] : defVal;
+      var isModified = val !== defVal;
+      var modClass = isModified ? ' modified' : '';
+
+      /* Type badge */
+      var typeBadge = 'string';
+      if (ptype === 'boolean') typeBadge = 'bool';
+      else if (ptype === 'number') typeBadge = String(defVal).indexOf('.') !== -1 ? 'float' : 'int';
+
+      /* Input element */
+      var input = '';
+
+      if (ptype === 'boolean') {
+        input = '<input type="checkbox" class="wd-toggle val-param-ctrl" data-key="' + key + '"' +
+          (val ? ' checked' : '') + ' />';
+      } else if (ptype === 'select' && spec.options) {
+        input = '<select class="wd-param-input val-param-ctrl" data-key="' + key + '" style="width:120px;text-align:left;">';
+        spec.options.forEach(function (opt) {
+          var optVal = typeof opt === 'object' ? opt.value : opt;
+          var optLabel = typeof opt === 'object' ? (opt.label || opt.value) : opt;
+          input += '<option value="' + optVal + '"' + (String(optVal) === String(val) ? ' selected' : '') + '>' + optLabel + '</option>';
+        });
+        input += '</select>';
+      } else if (ptype === 'string' || ptype === 'text') {
+        input = '<input type="text" class="wd-param-input val-param-ctrl" data-key="' + key + '" value="' + (val || '') + '" style="width:120px;text-align:left;" />';
+      } else {
+        var attrs = 'type="number" class="wd-param-input val-param-ctrl" data-key="' + key + '" value="' + val + '"';
+        if (spec.min !== undefined && spec.min !== null) attrs += ' min="' + spec.min + '"';
+        if (spec.max !== undefined && spec.max !== null) attrs += ' max="' + spec.max + '"';
+        if (spec.step !== undefined && spec.step !== null) attrs += ' step="' + spec.step + '"';
+        input = '<input ' + attrs + ' />';
+      }
+
+      html += '<div class="wd-param-row' + modClass + '" data-key="' + key + '">' +
+        '<div class="wd-param-info">' +
+          '<div class="wd-param-name">' + label +
+            '<span class="wd-param-type-badge type-' + typeBadge + '">' + typeBadge + '</span></div>' +
+          '<div class="wd-param-desc">' + desc + '</div>' +
+        '</div>' +
+        '<div class="wd-param-controls">' +
+          input +
+          '<button class="wd-param-reset val-param-reset" data-key="' + key + '" title="Reset to default"><i class="fa-solid fa-rotate-left"></i></button>' +
+        '</div></div>';
+    });
+
+    html += '</div>';
+    paramsBody.innerHTML = html;
+    paramsPanel.style.display = '';
+
+    _attachParamEvents();
+  }
+
+  /* ── Attach Parameter Events ──────────────────────────────── */
+  function _attachParamEvents() {
+    document.querySelectorAll('.val-param-ctrl').forEach(function (input) {
+      var key = input.getAttribute('data-key');
+      var handler = function () {
+        var val;
+        if (input.type === 'checkbox') val = input.checked;
+        else if (input.tagName === 'SELECT' || input.type === 'text') val = input.value;
+        else val = parseFloat(input.value);
+        _parameterValues[key] = val;
+
+        /* Highlight modified */
+        var row = document.querySelector('#val-params-body .wd-param-row[data-key="' + key + '"]');
+        if (row) {
+          if (val !== _parameterDefaults[key]) row.classList.add('modified');
+          else row.classList.remove('modified');
+        }
+      };
+      input.addEventListener(input.type === 'checkbox' ? 'change' : 'input', handler);
+    });
+
+    document.querySelectorAll('.val-param-reset').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-key');
+        var defVal = _parameterDefaults[key];
+        _parameterValues[key] = defVal;
+        var input = document.querySelector('.val-param-ctrl[data-key="' + key + '"]');
+        if (input) {
+          if (input.type === 'checkbox') input.checked = defVal;
+          else input.value = defVal;
+        }
+        var row = document.querySelector('#val-params-body .wd-param-row[data-key="' + key + '"]');
+        if (row) row.classList.remove('modified');
+      });
     });
   }
 
@@ -181,6 +392,13 @@ var ValidationRenderer = (function () {
     if (!stratId) { ToastManager.show('Select a strategy.', 'warning'); return; }
     if (!symbol) { ToastManager.show('Enter a symbol.', 'warning'); return; }
     if (!workerId) { ToastManager.show('Select a worker VM.', 'warning'); return; }
+    if (!barSize || barSize <= 0) { ToastManager.show('Bar Size Points must be > 0.', 'warning'); return; }
+
+    /* Build strategy_parameters from edited values */
+    var stratParams = {};
+    for (var k in _parameterValues) {
+      stratParams[k] = _parameterValues[k];
+    }
 
     var payload = {
       strategy_id: stratId,
@@ -193,11 +411,12 @@ var ValidationRenderer = (function () {
       max_bars_memory: maxBars,
       spread_points: spread,
       commission_per_lot: comm,
-      strategy_parameters: {},
+      strategy_parameters: stratParams,
     };
 
-    document.getElementById('val-run-btn').disabled = true;
-    document.getElementById('val-run-btn').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting…';
+    var runBtn = document.getElementById('val-run-btn');
+    runBtn.disabled = true;
+    runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting\u2026';
 
     fetch('/api/validation/jobs', {
       method: 'POST',
@@ -208,19 +427,20 @@ var ValidationRenderer = (function () {
         ToastManager.show('Validation job created: ' + data.job_id, 'success');
         _fetchJobs();
       } else {
-        ToastManager.show('Failed: ' + (data.detail || 'Unknown error'), 'error');
+        ToastManager.show('Failed: ' + (data.detail || JSON.stringify(data)), 'error');
       }
-      document.getElementById('val-run-btn').disabled = false;
-      document.getElementById('val-run-btn').innerHTML = '<i class="fa-solid fa-play"></i> Run Validation';
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="fa-solid fa-play"></i> Run Validation';
     }).catch(function (e) {
       ToastManager.show('Error: ' + e.message, 'error');
-      document.getElementById('val-run-btn').disabled = false;
-      document.getElementById('val-run-btn').innerHTML = '<i class="fa-solid fa-play"></i> Run Validation';
+      runBtn.disabled = false;
+      runBtn.innerHTML = '<i class="fa-solid fa-play"></i> Run Validation';
     });
   }
 
   /* ── Fetch Jobs ───────────────────────────────────────────── */
   function _fetchJobs() {
+    if (_currentView === 'results') return; /* don't overwrite results view */
     fetch('/api/validation/jobs?limit=50').then(function (r) { return r.json(); }).then(function (data) {
       var jobs = data.jobs || [];
       _renderJobsList(jobs);
@@ -244,19 +464,20 @@ var ValidationRenderer = (function () {
 
     jobs.forEach(function (j) {
       var stateClass = j.state === 'completed' ? 'online' : j.state === 'failed' ? 'error' : j.state === 'running' ? 'warning' : 'stale';
-      var netPnl = '—';
-      var tradeCount = '—';
+      var netPnl = '\u2014';
+      var tradeCount = '\u2014';
       if (j.summary) {
         netPnl = _fmtMoney(j.summary.net_pnl);
-        tradeCount = j.summary.total_trades;
+        tradeCount = String(j.summary.total_trades);
       }
-      var created = j.created_at ? j.created_at.replace('T', ' ').substring(0, 16) : '—';
+      var created = j.created_at ? j.created_at.replace('T', ' ').substring(0, 16) : '\u2014';
       var period = MONTHS[(j.month || 1) - 1] + ' ' + j.year;
+
       var progressBar = '';
       if (j.state === 'running') {
         progressBar = '<div style="width:60px;height:4px;background:var(--border-primary);border-radius:2px;overflow:hidden;">' +
           '<div style="width:' + (j.progress || 0) + '%;height:100%;background:var(--accent);transition:width 0.3s;"></div></div>' +
-          '<div style="font-size:9px;color:var(--text-muted);margin-top:2px;">' + (j.progress_message || '') + '</div>';
+          '<div style="font-size:9px;color:var(--text-muted);margin-top:2px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (j.progress_message || '') + '</div>';
       } else {
         progressBar = '<span class="mono" style="font-size:10px;">' + (j.progress || 0) + '%</span>';
       }
@@ -265,11 +486,11 @@ var ValidationRenderer = (function () {
 
       var actions = '';
       if (j.state === 'completed') {
-        actions = '<button class="wd-btn wd-btn-ghost val-view-btn" data-jobid="' + j.job_id + '" style="font-size:10px;padding:3px 8px;"><i class="fa-solid fa-eye"></i></button>';
+        actions = '<button class="wd-btn wd-btn-ghost val-view-btn" data-jobid="' + j.job_id + '" style="font-size:10px;padding:3px 8px;" title="View Results"><i class="fa-solid fa-eye"></i></button>';
       } else if (j.state === 'running') {
-        actions = '<button class="wd-btn wd-btn-ghost val-stop-btn" data-jobid="' + j.job_id + '" style="font-size:10px;padding:3px 8px;color:var(--danger);"><i class="fa-solid fa-stop"></i></button>';
+        actions = '<button class="wd-btn wd-btn-ghost val-stop-btn" data-jobid="' + j.job_id + '" style="font-size:10px;padding:3px 8px;color:var(--danger);" title="Stop"><i class="fa-solid fa-stop"></i></button>';
       }
-      actions += ' <button class="wd-btn wd-btn-ghost val-del-btn" data-jobid="' + j.job_id + '" style="font-size:10px;padding:3px 8px;color:var(--danger);"><i class="fa-solid fa-trash"></i></button>';
+      actions += ' <button class="wd-btn wd-btn-ghost val-del-btn" data-jobid="' + j.job_id + '" style="font-size:10px;padding:3px 8px;color:var(--danger);" title="Delete"><i class="fa-solid fa-trash"></i></button>';
 
       html += '<tr>' +
         '<td class="mono" style="font-size:10px;color:var(--accent);cursor:pointer;" onclick="ValidationRenderer._viewJob(\'' + j.job_id + '\')">' + j.job_id + '</td>' +
@@ -282,7 +503,7 @@ var ValidationRenderer = (function () {
         '<td class="mono ' + pnlClass + '">' + netPnl + '</td>' +
         '<td class="mono">' + tradeCount + '</td>' +
         '<td class="mono" style="font-size:10px;">' + created + '</td>' +
-        '<td>' + actions + '</td></tr>';
+        '<td style="white-space:nowrap;">' + actions + '</td></tr>';
     });
 
     html += '</tbody></table></div>';
@@ -317,17 +538,20 @@ var ValidationRenderer = (function () {
   /* ── View Job Results ─────────────────────────────────────── */
   function _viewJob(jobId) {
     _currentJobId = jobId;
+    _currentView = 'results';
     _destroyCharts();
 
     var resultsEl = document.getElementById('val-results-content');
     var listEl = document.getElementById('val-jobs-content');
     var createEl = document.getElementById('val-create-panel');
+    var paramsEl = document.getElementById('val-params-panel');
     if (!resultsEl) return;
 
     resultsEl.style.display = '';
     resultsEl.innerHTML = _spinner();
     if (listEl) listEl.style.display = 'none';
     if (createEl) createEl.style.display = 'none';
+    if (paramsEl) paramsEl.style.display = 'none';
 
     fetch('/api/validation/jobs/' + jobId).then(function (r) { return r.json(); }).then(function (data) {
       if (!data.ok || !data.job) {
@@ -342,13 +566,17 @@ var ValidationRenderer = (function () {
 
   function _backToList() {
     _currentJobId = null;
+    _currentView = 'list';
     _destroyCharts();
     var resultsEl = document.getElementById('val-results-content');
     var listEl = document.getElementById('val-jobs-content');
     var createEl = document.getElementById('val-create-panel');
+    var paramsEl = document.getElementById('val-params-panel');
     if (resultsEl) { resultsEl.style.display = 'none'; resultsEl.innerHTML = ''; }
     if (listEl) listEl.style.display = '';
     if (createEl) createEl.style.display = '';
+    /* params panel visibility depends on strategy selection */
+    if (paramsEl && _selectedStrategy) paramsEl.style.display = '';
     _fetchJobs();
   }
 
@@ -365,13 +593,16 @@ var ValidationRenderer = (function () {
     var html = '';
 
     /* Back button + header */
-    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">';
+    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
     html += '<button class="wd-back-btn" id="val-back-btn"><i class="fa-solid fa-arrow-left"></i> Back</button>';
-    html += '<div>';
-    html += '<div style="font-size:15px;font-weight:600;">' + (job.strategy_name || job.strategy_id) + ' — ' + job.symbol + ' ' + period + '</div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);">Job: ' + job.job_id + ' | Worker: ' + job.worker_id + ' | Bar: ' + job.bar_size_points + 'pt | Lot: ' + job.lot_size + '</div>';
+    html += '<div style="flex:1;min-width:200px;">';
+    html += '<div style="font-size:15px;font-weight:600;">' + (job.strategy_name || job.strategy_id) + ' \u2014 ' + job.symbol + ' ' + period + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);">Job: ' + job.job_id + ' | Worker: ' + job.worker_id + ' | Bar: ' + job.bar_size_points + 'pt | Lot: ' + job.lot_size;
+    if (job.spread_points > 0) html += ' | Spread: ' + job.spread_points + 'pt';
+    if (job.commission_per_lot > 0) html += ' | Comm: $' + job.commission_per_lot + '/lot';
     html += '</div>';
-    html += '<div style="margin-left:auto;display:flex;gap:8px;">';
+    html += '</div>';
+    html += '<div style="display:flex;gap:8px;">';
     html += '<button class="wd-btn wd-btn-ghost" id="val-dl-json" style="font-size:11px;"><i class="fa-solid fa-download"></i> JSON</button>';
     html += '<button class="wd-btn wd-btn-ghost" id="val-dl-csv" style="font-size:11px;"><i class="fa-solid fa-download"></i> CSV</button>';
     html += '</div></div>';
@@ -397,8 +628,10 @@ var ValidationRenderer = (function () {
     html += _metricItem('Sortino', String(s.sortino_estimate || 0));
     html += _metricItem('Recovery', String(s.recovery_factor || 0));
     html += _metricItem('Trades', String(s.total_trades || 0));
-    html += _metricItem('Wins/Losses', (s.wins || 0) + '/' + (s.losses || 0));
+    html += _metricItem('Wins / Losses', (s.wins || 0) + ' / ' + (s.losses || 0));
     html += _metricItem('Avg Trade', _fmtMoney(s.avg_trade), (s.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger');
+    html += _metricItem('Avg Winner', _fmtMoney(s.avg_winner), 'text-success');
+    html += _metricItem('Avg Loser', _fmtMoney(s.avg_loser), 'text-danger');
     html += _metricItem('Best Trade', _fmtMoney(s.best_trade), 'text-success');
     html += _metricItem('Worst Trade', _fmtMoney(s.worst_trade), 'text-danger');
     html += _metricItem('Avg Bars', String(s.avg_bars_held || 0));
@@ -420,7 +653,7 @@ var ValidationRenderer = (function () {
     if (trades.length > 0) {
       html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">' + trades.length + ' Trades</div>';
       html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table"><thead><tr>';
-      html += '<th>#</th><th>Dir</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Comm</th><th>Net</th><th>Bars</th><th>Reason</th>';
+      html += '<th>#</th><th>Dir</th><th>Entry</th><th>Exit</th><th>SL</th><th>TP</th><th>P&L</th><th>Comm</th><th>Net</th><th>Bars</th><th>Reason</th><th>Bal</th>';
       html += '</tr></thead><tbody>';
       trades.forEach(function (t) {
         var pc = (t.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger';
@@ -429,13 +662,19 @@ var ValidationRenderer = (function () {
           '<td>' + _statPill(t.direction.toUpperCase(), t.direction === 'long' ? 'online' : 'error') + '</td>' +
           '<td class="mono">' + t.entry_price + '</td>' +
           '<td class="mono">' + t.exit_price + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + (t.sl !== null && t.sl !== undefined ? t.sl : '\u2014') + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + (t.tp !== null && t.tp !== undefined ? t.tp : '\u2014') + '</td>' +
           '<td class="mono ' + pc + '">' + _fmtMoney(t.profit) + '</td>' +
           '<td class="mono" style="font-size:10px;">' + _fmtMoney(t.commission || 0) + '</td>' +
           '<td class="mono ' + pc + '">' + _fmtMoney(t.net_pnl) + '</td>' +
           '<td class="mono">' + (t.bars_held || 0) + '</td>' +
-          '<td class="mono" style="font-size:10px;">' + (t.exit_reason || '—') + '</td></tr>';
+          '<td class="mono" style="font-size:10px;">' + (t.exit_reason || '\u2014') + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + _fmtMoney(t.balance_after) + '</td>' +
+          '</tr>';
       });
       html += '</tbody></table></div></div>';
+    } else if (job.state === 'completed') {
+      html += _emptyState('fa-receipt', 'No Trades Generated', 'Strategy produced no signals during this period.');
     }
 
     el.innerHTML = html;
@@ -500,7 +739,13 @@ var ValidationRenderer = (function () {
       strategy: job.strategy_name || job.strategy_id,
       symbol: job.symbol,
       period: MONTHS[(job.month || 1) - 1] + ' ' + job.year,
-      config: { lot_size: job.lot_size, bar_size_points: job.bar_size_points, spread: job.spread_points, commission: job.commission_per_lot },
+      config: {
+        lot_size: job.lot_size,
+        bar_size_points: job.bar_size_points,
+        max_bars_memory: job.max_bars_memory,
+        spread_points: job.spread_points,
+        commission_per_lot: job.commission_per_lot,
+      },
       summary: job.summary,
       trades: job.trades,
       equity_curve: job.equity_curve,
@@ -515,7 +760,7 @@ var ValidationRenderer = (function () {
 
   function _downloadCSV(trades, job) {
     if (!trades || trades.length === 0) { ToastManager.show('No trades to export.', 'info'); return; }
-    var cols = ['trade_id','direction','entry_price','exit_price','profit','commission','net_pnl','bars_held','exit_reason','sl','tp'];
+    var cols = ['trade_id','direction','entry_price','exit_price','sl','tp','profit','commission','net_pnl','bars_held','exit_reason','balance_after','entry_bar','exit_bar'];
     var csv = cols.join(',') + '\n';
     trades.forEach(function (t) {
       csv += cols.map(function (c) { return '"' + (t[c] !== undefined && t[c] !== null ? t[c] : '') + '"'; }).join(',') + '\n';
@@ -525,7 +770,7 @@ var ValidationRenderer = (function () {
     a.href = URL.createObjectURL(blob);
     a.download = 'validation_trades_' + job.job_id + '.csv';
     a.click();
-    ToastManager.show('CSV exported.', 'success');
+    ToastManager.show('CSV exported (' + trades.length + ' trades).', 'success');
   }
 
   /* ── Lifecycle ────────────────────────────────────────────── */
@@ -534,6 +779,9 @@ var ValidationRenderer = (function () {
     _destroyCharts();
     _currentView = 'list';
     _currentJobId = null;
+    _selectedStrategy = null;
+    _parameterValues = {};
+    _parameterDefaults = {};
   }
 
   return {

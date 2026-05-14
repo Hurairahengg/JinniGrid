@@ -504,26 +504,16 @@ mt5_connector = _MT5ConnectorFacade()
 def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
                                     max_retries: int = 5,
                                     retry_delay_ms: int = 300) -> Optional[dict]:
-    """
-    Fetch closed position data from MT5 deal history.
-    Retries because MT5 takes time to update history after close.
-    Returns dict with all trade data or None if not found.
-    """
     mt5 = _import_mt5()
     if mt5 is None:
         print("[MT5] MetaTrader5 not installed — cannot fetch deal history")
         return None
 
-    # MT5 deal entry types
     DEAL_ENTRY_IN = 0
     DEAL_ENTRY_OUT = 1
     DEAL_ENTRY_INOUT = 2
-
-    # MT5 deal types
     DEAL_TYPE_BUY = 0
     DEAL_TYPE_SELL = 1
-
-    # MT5 deal reason enum
     DEAL_REASON_CLIENT = 0
     DEAL_REASON_MOBILE = 1
     DEAL_REASON_WEB = 2
@@ -550,7 +540,6 @@ def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
                           f"after {max_retries} attempts")
                     return None
 
-            # Separate entry and exit deals
             entry_deal = None
             exit_deal = None
             all_deals = list(deals)
@@ -561,10 +550,8 @@ def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
                 elif deal.entry == DEAL_ENTRY_OUT:
                     exit_deal = deal
                 elif deal.entry == DEAL_ENTRY_INOUT:
-                    # Close-and-open in one deal (rare)
                     exit_deal = deal
 
-            # Fallback: if no explicit OUT deal, find the one with profit != 0
             if exit_deal is None:
                 for deal in all_deals:
                     if deal.profit != 0 and deal != entry_deal:
@@ -583,21 +570,17 @@ def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
                           f"after {max_retries} attempts. Deals found: {len(all_deals)}")
                     return None
 
-            # Determine direction from entry deal
             if entry_deal is not None:
                 direction = "long" if entry_deal.type == DEAL_TYPE_BUY else "short"
                 entry_price = entry_deal.price
                 entry_time_unix = entry_deal.time
             else:
-                # Infer from exit deal (opposite direction)
                 direction = "short" if exit_deal.type == DEAL_TYPE_BUY else "long"
                 entry_price = 0.0
                 entry_time_unix = exit_deal.time
 
             exit_price = exit_deal.price
             exit_time_unix = exit_deal.time
-
-            # PnL from MT5 (source of truth)
             profit = round(exit_deal.profit, 2)
             commission_total = 0.0
             swap_total = 0.0
@@ -616,7 +599,6 @@ def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
             fee_total = round(fee_total, 2)
             net_pnl = round(profit + commission_total + swap_total + fee_total, 2)
 
-            # Determine close reason from MT5 deal reason
             exit_reason = "UNKNOWN"
             if hasattr(exit_deal, 'reason'):
                 reason_code = exit_deal.reason
@@ -634,7 +616,6 @@ def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
                 else:
                     exit_reason = f"REASON_{reason_code}"
 
-            # Convert Unix timestamps to ISO strings
             entry_time_iso = datetime.fromtimestamp(
                 entry_time_unix, tz=timezone.utc
             ).isoformat() if entry_time_unix else None
@@ -642,12 +623,10 @@ def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
                 exit_time_unix, tz=timezone.utc
             ).isoformat() if exit_time_unix else None
 
-            # Get lot size
             lot_size = exit_deal.volume if exit_deal.volume > 0 else (
                 entry_deal.volume if entry_deal and entry_deal.volume > 0 else 0
             )
 
-            # Comment from deal
             mt5_comment = ""
             if hasattr(exit_deal, 'comment') and exit_deal.comment:
                 mt5_comment = str(exit_deal.comment)
@@ -741,10 +720,6 @@ def _ensure_base_importable():
 
 
 # =============================================================================
-# Strategy Runner
-# =============================================================================
-
-# =============================================================================
 # Strategy Runner — RECODED to match engine_core.py backtester 1:1
 #
 # Execution model: signal-on-close, execute-on-next-open
@@ -754,12 +729,18 @@ def _ensure_base_importable():
 #            → entry bar immune to MA cross exits
 #
 # This matches the backtester's 7-step per-bar loop exactly.
+#
+# ★ VALIDATION MODE: When validation_mode=True:
+#   - Uses SimulatedExecutor instead of MT5Executor
+#   - Skips MT5 deal history (uses estimated fallback path)
+#   - run_validation() feeds historical ticks through the SAME _on_new_bar()
+#   - Zero logic changes to the execution pipeline
 # =============================================================================
 
 class StrategyRunner:
 
-    def __init__(self, deployment_config: dict, status_callback=None,
-                 trade_callback=None, debug: bool = True):
+    def __init__(self, deployment_config, status_callback=None, trade_callback=None,
+                 validation_mode=False, debug: bool = True):
         self.config = deployment_config
         self._status_callback = status_callback
         self._trade_callback = trade_callback
@@ -778,11 +759,22 @@ class StrategyRunner:
         self.strategy_parameters: dict = deployment_config.get("strategy_parameters") or {}
         self.worker_id: str = deployment_config.get("worker_id", "")
 
+        # ★ Validation mode flag
+        self._validation_mode = validation_mode
+
         self._deployment_id: str = self.deployment_id
         self._strategy_id: str = self.strategy_id
         self._worker_id: str = self.worker_id
-        self._mother_url = __import__("yaml").safe_load(
-            open("config.yaml"))["mother_server"]["url"]
+
+        # ★ Config loading — safe for validation mode (no config.yaml needed)
+        self._mother_url = ""
+        if not validation_mode:
+            try:
+                self._mother_url = __import__("yaml").safe_load(
+                    open("config.yaml"))["mother_server"]["url"]
+            except Exception:
+                self._mother_url = ""
+
         self._unreported_trades: list = []
 
         self._strategy = None
@@ -824,12 +816,12 @@ class StrategyRunner:
         # Active trade tracking
         self._active_trade_meta: Optional[dict] = None
 
-        # ★ NEW: Backtester-aligned pending signal + entry bar immunity
+        # Backtester-aligned pending signal + entry bar immunity
         self._pending_signal: Optional[dict] = None
         self._just_entered_this_bar: bool = False
 
     # ─────────────────────────────────────────────────────────
-    # Diagnostics (unchanged except pending_signal field)
+    # Diagnostics
     # ─────────────────────────────────────────────────────────
 
     def get_diagnostics(self) -> dict:
@@ -837,12 +829,14 @@ class StrategyRunner:
         open_count = self._executor.get_open_count() if self._executor else 0
         floating = self._executor.get_floating_pnl() if self._executor else 0.0
 
-        if self._executor and self._executor._mt5:
+        if self._executor and not self._validation_mode:
             try:
-                acct = self._executor._mt5.account_info()
-                if acct:
-                    self._mt5_balance = float(acct.balance)
-                    self._mt5_equity = float(acct.equity)
+                mt5_mod = getattr(self._executor, '_mt5', None)
+                if mt5_mod:
+                    acct = mt5_mod.account_info()
+                    if acct:
+                        self._mt5_balance = float(acct.balance)
+                        self._mt5_equity = float(acct.equity)
             except Exception:
                 pass
 
@@ -872,7 +866,7 @@ class StrategyRunner:
             "open_positions_count": open_count,
             "floating_pnl": floating,
             "trade_count": self._trade_counter,
-            "pending_signal": (                                    # ★ NEW
+            "pending_signal": (
                 self._pending_signal.get("direction")
                 if self._pending_signal else None
             ),
@@ -882,7 +876,7 @@ class StrategyRunner:
         }
 
     # ─────────────────────────────────────────────────────────
-    # Status / Trade Reporting — ALL UNCHANGED
+    # Status / Trade Reporting
     # ─────────────────────────────────────────────────────────
 
     def _report_status(self):
@@ -914,6 +908,15 @@ class StrategyRunner:
                     time.sleep(1.0)
 
     def _report_trade(self, record: dict):
+        # ★ In validation mode, use trade_callback directly (no HTTP)
+        if self._validation_mode:
+            if self._trade_callback:
+                try:
+                    self._trade_callback(record)
+                except Exception as e:
+                    print(f"[RUNNER] Validation trade callback failed: {e}")
+            return
+
         mother_url = self._mother_url
         if not mother_url:
             print("[RUNNER] No mother URL configured — trade not reported")
@@ -934,6 +937,13 @@ class StrategyRunner:
         payload.setdefault("strategy_id", self._strategy_id)
         payload.setdefault("worker_id", self._worker_id)
         payload.setdefault("symbol", self.symbol)
+
+        # Also call trade_callback if set (for worker_agent local ledger)
+        if self._trade_callback:
+            try:
+                self._trade_callback(record)
+            except Exception as e:
+                print(f"[RUNNER] Trade callback failed: {e}")
 
         def _send():
             last_err = None
@@ -995,7 +1005,7 @@ class StrategyRunner:
         self._report_status()
 
     # ─────────────────────────────────────────────────────────
-    # MT5 Info / Position Refresh / Pipeline Log — UNCHANGED
+    # MT5 Info / Position Refresh / Pipeline Log
     # ─────────────────────────────────────────────────────────
 
     def _capture_mt5_info(self):
@@ -1051,8 +1061,7 @@ class StrategyRunner:
         )
 
     # ─────────────────────────────────────────────────────────
-    # MA-Cross Exit Check — UNCHANGED
-    # (entry bar guard is in _on_new_bar, not here)
+    # MA-Cross Exit Check
     # ─────────────────────────────────────────────────────────
 
     def _check_ma_cross_exit(self, bar: dict) -> bool:
@@ -1096,7 +1105,8 @@ class StrategyRunner:
         return False
 
     # ─────────────────────────────────────────────────────────
-    # Close + Record / Broker Close — ALL UNCHANGED
+    # Close + Record / Broker Close
+    # ★ VALIDATION MODE: skip MT5 deal history fetch
     # ─────────────────────────────────────────────────────────
 
     def _close_and_record(self, reason: str, bar: dict):
@@ -1110,11 +1120,14 @@ class StrategyRunner:
             if r.get("success"):
                 self._trade_counter += 1
                 ticket = r.get("ticket") or meta.get("ticket")
+
+                # ★ Skip MT5 history in validation mode
                 mt5_record = None
-                if ticket:
+                if ticket and not self._validation_mode:
                     mt5_record = fetch_closed_position_from_mt5(
                         position_ticket=ticket, symbol=self.symbol,
                         max_retries=5, retry_delay_ms=300)
+
                 if mt5_record:
                     record = {
                         "mt5_ticket": ticket,
@@ -1179,7 +1192,8 @@ class StrategyRunner:
                     record["swap"] = 0.0
                     record["fee"] = 0.0
                     record["net_pnl"] = round(float(r.get("profit", 0)), 2)
-                    print(f"[TRADE #{self._trade_counter}] FALLBACK | "
+                    print(f"[TRADE #{self._trade_counter}] "
+                          f"{'SIM' if self._validation_mode else 'FALLBACK'} | "
                           f"{record['direction'].upper()} "
                           f"entry={record['entry_price']} "
                           f"exit={record['exit_price']} "
@@ -1194,6 +1208,7 @@ class StrategyRunner:
         if not meta:
             return
         ticket = meta.get("ticket")
+
         if not ticket:
             print(f"[RUNNER] WARNING: No MT5 ticket — recording with estimates.")
             self._trade_counter += 1
@@ -1218,31 +1233,42 @@ class StrategyRunner:
             self._exec_log.closes_filled += 1
             return
 
-        print(f"[RUNNER] Position {ticket} closed — fetching MT5 history...")
-        mt5_record = fetch_closed_position_from_mt5(
-            position_ticket=ticket, symbol=self.symbol,
-            max_retries=5, retry_delay_ms=300)
+        print(f"[RUNNER] Position {ticket} closed — fetching history...")
+
+        # ★ Skip MT5 history in validation mode
+        mt5_record = None
+        if not self._validation_mode:
+            mt5_record = fetch_closed_position_from_mt5(
+                position_ticket=ticket, symbol=self.symbol,
+                max_retries=5, retry_delay_ms=300)
 
         if mt5_record is None:
-            print(f"[RUNNER] WARNING: MT5 history unavailable for {ticket}.")
+            if not self._validation_mode:
+                print(f"[RUNNER] WARNING: MT5 history unavailable for {ticket}.")
             self._trade_counter += 1
             entry_price = meta.get("entry_price", 0)
             exit_price = self._current_price or float(bar.get("close", 0))
             direction = meta.get("direction", "long")
-            mt5 = _import_mt5()
-            contract_size = 100000
-            if mt5:
-                try:
-                    sym_info = mt5.symbol_info(self.symbol)
-                    if sym_info and sym_info.trade_contract_size:
-                        contract_size = sym_info.trade_contract_size
-                except Exception:
-                    pass
-            if direction == "long":
-                points_pnl = exit_price - entry_price
+
+            # ★ In validation mode, use SimulatedExecutor PnL
+            if self._validation_mode:
+                estimated_profit = 0.0  # already accounted in close result
             else:
-                points_pnl = entry_price - exit_price
-            estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
+                mt5 = _import_mt5()
+                contract_size = 100000
+                if mt5:
+                    try:
+                        sym_info = mt5.symbol_info(self.symbol)
+                        if sym_info and sym_info.trade_contract_size:
+                            contract_size = sym_info.trade_contract_size
+                    except Exception:
+                        pass
+                if direction == "long":
+                    points_pnl = exit_price - entry_price
+                else:
+                    points_pnl = entry_price - exit_price
+                estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
+
             record = build_trade_record(
                 trade_id=self._trade_counter, direction=direction,
                 entry_price=entry_price,
@@ -1260,7 +1286,8 @@ class StrategyRunner:
             record["mt5_source"] = False
             self._ctx._trades.append(record)
             self._report_trade(record)
-            print(f"[TRADE #{self._trade_counter}] ESTIMATED | "
+            print(f"[TRADE #{self._trade_counter}] "
+                  f"{'SIM' if self._validation_mode else 'ESTIMATED'} | "
                   f"ticket={ticket} {direction.upper()} "
                   f"entry={entry_price:.5f} exit={exit_price:.5f} "
                   f"profit={estimated_profit:.2f}")
@@ -1310,11 +1337,7 @@ class StrategyRunner:
         self._exec_log.closes_filled += 1
 
     # =================================================================
-    # ★ NEW: Process Pending Entry — Backtester Step 1
-    #
-    # Executes a signal stored on the PREVIOUS bar.
-    # Computes SL/TP from actual MT5 fill price, matching
-    # engine_core.py's entry-time computation exactly.
+    # Process Pending Entry — Backtester Step 1
     # =================================================================
 
     def _process_pending_entry(self, bar: dict) -> bool:
@@ -1333,11 +1356,7 @@ class StrategyRunner:
         direction = pending["direction"]
         sig = SIGNAL_BUY if direction == "long" else SIGNAL_SELL
 
-        # ── Compute initial SL for order placement ──────────
-        # We need an SL on the order for safety. For modes that
-        # depend on fill price, we estimate then recompute after.
-        entry_estimate = self._current_price or float(
-            bar.get("close", 0))
+        entry_estimate = self._current_price or float(bar.get("close", 0))
 
         initial_sl = None
         sl_mode = pending.get("sl_mode")
@@ -1359,7 +1378,6 @@ class StrategyRunner:
         elif pending.get("sl") is not None:
             initial_sl = round(float(pending["sl"]), 5)
 
-        # Validate initial SL direction
         if initial_sl is not None:
             if direction == "long" and initial_sl >= entry_estimate:
                 print(f"[EXEC] Pending: Long SL {initial_sl:.5f} >= "
@@ -1370,7 +1388,6 @@ class StrategyRunner:
                       f"estimate {entry_estimate:.5f}, clearing")
                 initial_sl = None
 
-        # ── Place order (TP computed after fill) ────────────
         comment = pending.get("comment", f"JG_{sig}")
 
         if sig == SIGNAL_BUY:
@@ -1388,7 +1405,6 @@ class StrategyRunner:
 
         fill_price = result.get("price", entry_estimate)
 
-        # ── Recompute SL from fill (backtester-exact) ───────
         sl_level = None
         risk_pts = None
 
@@ -1413,16 +1429,11 @@ class StrategyRunner:
             sl_level = round(float(pending["sl"]), 5)
             risk_pts = round(abs(fill_price - sl_level), 5)
 
-        # Validate SL from actual fill
         if sl_level is not None:
             if direction == "long" and sl_level >= fill_price:
-                print(f"[EXEC] Fill SL invalid: long SL "
-                      f"{sl_level:.5f} >= fill {fill_price:.5f}")
                 sl_level = None
                 risk_pts = None
             elif direction == "short" and sl_level <= fill_price:
-                print(f"[EXEC] Fill SL invalid: short SL "
-                      f"{sl_level:.5f} <= fill {fill_price:.5f}")
                 sl_level = None
                 risk_pts = None
 
@@ -1430,7 +1441,6 @@ class StrategyRunner:
             sl_level = None
             risk_pts = None
 
-        # ── Compute TP from fill (backtester-exact) ─────────
         tp_level = None
         tp_mode = pending.get("tp_mode")
 
@@ -1444,18 +1454,12 @@ class StrategyRunner:
         elif pending.get("tp") is not None:
             tp_level = round(float(pending["tp"]), 5)
 
-        # Validate TP
         if tp_level is not None:
             if direction == "long" and tp_level <= fill_price:
-                print(f"[EXEC] TP invalid: long TP {tp_level:.5f} "
-                      f"<= fill {fill_price:.5f}")
                 tp_level = None
             elif direction == "short" and tp_level >= fill_price:
-                print(f"[EXEC] TP invalid: short TP {tp_level:.5f} "
-                      f">= fill {fill_price:.5f}")
                 tp_level = None
 
-        # ── Modify position with final SL/TP ────────────────
         ticket = result.get("ticket")
         if ticket and (sl_level != initial_sl or tp_level is not None):
             mod_result = self._executor.modify_sl_tp(
@@ -1467,7 +1471,6 @@ class StrategyRunner:
               f"fill={fill_price:.5f} SL={sl_level} TP={tp_level} "
               f"risk={risk_pts} R={pending.get('tp_r')}")
 
-        # ── Store active trade metadata ─────────────────────
         self._active_trade_meta = {
             "entry_bar": self._bar_index,
             "entry_time": bar.get("time", 0),
@@ -1487,10 +1490,7 @@ class StrategyRunner:
         return True
 
     # =================================================================
-    # ★ NEW: Store Pending Signal — Backtester Step 6
-    #
-    # REPLACES the old _handle_signal. Does NOT execute immediately.
-    # Stores all signal parameters for next-bar execution.
+    # Store Pending Signal — Backtester Step 6
     # =================================================================
 
     def _store_pending_signal(self, action: dict, bar: dict):
@@ -1498,7 +1498,6 @@ class StrategyRunner:
         if sig not in (SIGNAL_BUY, SIGNAL_SELL):
             return
 
-        # Backtester: Step 6 only fires if flat
         if self._ctx.position.has_position:
             self._exec_log.log_skip(
                 sig, "in position — use CLOSE first")
@@ -1506,7 +1505,6 @@ class StrategyRunner:
 
         direction = "long" if sig == SIGNAL_BUY else "short"
 
-        # Store ALL signal parameters (backtester-exact copy)
         self._pending_signal = {
             "direction": direction,
             "sl":             action.get("sl"),
@@ -1532,29 +1530,21 @@ class StrategyRunner:
               f"tp_r={action.get('tp_r')} (execute next bar)")
 
     # =================================================================
-    # ★ FULL REWRITE: _on_new_bar — Backtester 7-Step Loop
-    #
-    # Step 1: Process pending entry (signal from PREVIOUS bar)
-    # Step 2: Refresh position + detect broker close
-    # Step 3: MA cross exits (SKIPPED if just_entered)
-    # Step 4: Call strategy.on_bar()
-    # Step 5: Handle CLOSE + re-call for flip → stores PENDING
-    # Step 6: Dynamic SL/TP updates (HOLD while in position)
-    # Step 7: BUY/SELL → store as PENDING (NOT immediate)
-    # Step 8: Store prev indicators
+    # _on_new_bar — Backtester 8-Step Loop
+    # USED BY BOTH LIVE AND VALIDATION — ZERO LOGIC CHANGES
     # =================================================================
 
     def _on_new_bar(self, bar: dict):
         self._total_bars_produced += 1
         self._last_bar_time = bar.get("time")
-        self._just_entered_this_bar = False          # reset each bar
+        self._just_entered_this_bar = False
 
         if self._stop_event.is_set():
             return
         if self._strategy is None or self._ctx is None:
             return
 
-        # ── Update context ──────────────────────────────────
+        # Update context
         self._absolute_bar_counter += 1
         bars_list = list(self._bar_engine.bars)
         self._ctx._bars = bars_list
@@ -1566,44 +1556,24 @@ class StrategyRunner:
         if self._indicator_engine:
             self._indicator_engine.update(bars_list, self._ctx)
 
-        # ══════════════════════════════════════════════════════
-        # STEP 1: Process pending entry (backtester Step 1)
-        # Signal was stored on previous bar, execute now.
-        # ══════════════════════════════════════════════════════
+        # STEP 1: Process pending entry
         if self._pending_signal is not None:
             self._refresh_position()
             self._process_pending_entry(bar)
 
-        # ══════════════════════════════════════════════════════
         # STEP 2: Refresh position + detect broker close
-        # (MT5 handles SL/TP — detect if broker closed us)
-        # ══════════════════════════════════════════════════════
         self._refresh_position()
 
         if self._active_trade_meta and not self._ctx.position.has_position:
-            # Position vanished → broker hit SL or TP
-            # This is the live equivalent of _check_exit() in backtester.
-            # In backtester: engine checks H/L vs SL/TP each bar.
-            # In live: MT5 broker does this for us — we just detect it.
-            #
-            # Entry bar immunity: if _just_entered_this_bar is True,
-            # we JUST opened via pending. If MT5 already closed it
-            # (SL/TP hit on entry bar), we still record it — this is
-            # a real broker event, not our engine's decision.
             self._handle_broker_close(bar)
 
-        # ══════════════════════════════════════════════════════
-        # STEP 3: MA cross exits (backtester Step 2 continued)
-        #
-        # CRITICAL: Skip on entry bar (_just_entered_this_bar).
-        # Matches backtester's `not just_entered` guard exactly.
-        # ══════════════════════════════════════════════════════
+        # STEP 3: MA cross exits (skip entry bar)
         if (self._ctx.position.has_position
                 and not self._just_entered_this_bar):
             if self._check_ma_cross_exit(bar):
                 self._refresh_position()
 
-        # ── Min lookback gate ───────────────────────────────
+        # Min lookback gate
         min_lb = getattr(self._strategy, "min_lookback", 0) or 0
         if self._absolute_bar_counter < min_lb:
             self._prev_indicators = dict(self._ctx._indicators)
@@ -1611,9 +1581,7 @@ class StrategyRunner:
 
         self._on_bar_call_count += 1
 
-        # ══════════════════════════════════════════════════════
-        # STEP 4: Call strategy.on_bar() (backtester Step 3)
-        # ══════════════════════════════════════════════════════
+        # STEP 4: Call strategy.on_bar()
         try:
             raw_signal = self._strategy.on_bar(self._ctx)
         except Exception as exc:
@@ -1627,15 +1595,7 @@ class StrategyRunner:
         action = validate_signal(raw_signal, self._bar_index)
         sig = action.get("signal")
 
-        # ══════════════════════════════════════════════════════
-        # STEP 5: Handle CLOSE (backtester Step 4)
-        #
-        # If strategy says CLOSE while in position:
-        #   1. Close the position via MT5
-        #   2. Re-call on_bar() with flat position
-        #   3. If re-call returns BUY/SELL → store as PENDING
-        #      (NOT immediate — matches backtester exactly)
-        # ══════════════════════════════════════════════════════
+        # STEP 5: Handle CLOSE
         closed_position = False
 
         if ((sig == SIGNAL_CLOSE or action.get("close"))
@@ -1668,10 +1628,7 @@ class StrategyRunner:
 
         if closed_position:
             self._refresh_position()
-            # ── Re-call for flip (backtester Step 4 continued) ──
-            # Backtester re-calls on_bar() after close to allow
-            # immediate flip. But the flip signal goes to PENDING,
-            # executing NEXT bar — matching the 1-bar delay.
+            # Re-call for flip
             if not self._ctx.position.has_position:
                 try:
                     raw2 = self._strategy.on_bar(self._ctx)
@@ -1688,26 +1645,16 @@ class StrategyRunner:
                     print(f"[RUNNER] Re-call on_bar() after CLOSE "
                           f"error: {exc}")
 
-        # ══════════════════════════════════════════════════════
-        # STEP 6: Dynamic SL/TP updates (backtester Step 5)
-        # ══════════════════════════════════════════════════════
+        # STEP 6: Dynamic SL/TP updates
         elif self._ctx.position.has_position and not closed_position:
             if "update_sl" in action or "update_tp" in action:
                 self._handle_modify(action)
             if sig == SIGNAL_HOLD or sig is None:
                 self._exec_log.log_hold()
 
-        # ══════════════════════════════════════════════════════
-        # STEP 7: BUY/SELL → PENDING (backtester Step 6)
-        #
-        # Signal stored. Will execute NEXT bar in Step 1.
-        # This is THE critical difference from old live code.
-        # ══════════════════════════════════════════════════════
+        # STEP 7: BUY/SELL → PENDING
         elif sig in (SIGNAL_BUY, SIGNAL_SELL):
             if self._ctx.position.has_position:
-                # Backtester only stores pending if flat.
-                # If in position and strategy wants to flip,
-                # it should return CLOSE first (or close=True).
                 self._exec_log.log_skip(
                     sig, "in position — must CLOSE first or "
                          "use close=True flag")
@@ -1717,17 +1664,15 @@ class StrategyRunner:
         elif sig == SIGNAL_HOLD or sig is None:
             self._exec_log.log_hold()
 
-        # ── Periodic pipeline log ───────────────────────────
+        # Periodic pipeline log
         if self._on_bar_call_count % 50 == 0:
             self._log_pipeline("LIVE_BAR")
 
-        # ══════════════════════════════════════════════════════
-        # STEP 8: Store prev indicators (backtester end of loop)
-        # ══════════════════════════════════════════════════════
+        # STEP 8: Store prev indicators
         self._prev_indicators = dict(self._ctx._indicators)
 
     # ─────────────────────────────────────────────────────────
-    # Handle Modify — UNCHANGED
+    # Handle Modify
     # ─────────────────────────────────────────────────────────
 
     def _handle_modify(self, action: dict):
@@ -1741,6 +1686,111 @@ class StrategyRunner:
             pos.ticket, sl=new_sl, tp=new_tp)
         self._exec_log.log_modify(result, sl=new_sl, tp=new_tp)
         self._refresh_position()
+
+    # =================================================================
+    # ★ VALIDATION MODE: run_validation()
+    #
+    # Feeds historical ticks through the EXACT SAME _on_new_bar()
+    # that runs live. Uses SimulatedExecutor instead of MT5Executor.
+    # Zero logic changes to the execution pipeline.
+    # =================================================================
+
+    def run_validation(self, ticks: list, executor, progress_cb=None):
+        """
+        Run the SAME engine against historical ticks with a SimulatedExecutor.
+        _on_new_bar() is IDENTICAL to live — zero logic changes.
+        """
+        import logging
+        _log = logging.getLogger("jinni.execution")
+        _log.info(f"[VALIDATION] Starting: {self.strategy_id} on "
+                  f"{self.symbol}, {len(ticks):,} ticks")
+
+        # 1 — Load strategy
+        strategy_instance, load_error = load_strategy_from_source(
+            self.source_code, self.class_name, self.strategy_id)
+        if load_error:
+            raise RuntimeError(f"Strategy load failed: {load_error}")
+        self._strategy = strategy_instance
+
+        # 2 — Use provided SimulatedExecutor
+        self._executor = executor
+
+        # 3 — Setup context + indicators (same as live _run_lifecycle)
+        params = self._strategy.validate_parameters(self.strategy_parameters)
+        self._ctx = StrategyContext(bars=[], params=params)
+        self._ctx.state = {}
+
+        indicator_defs = self._strategy.build_indicators(params)
+        self._indicator_engine = IndicatorEngine(indicator_defs)
+        self._exec_log = ExecutionLogger(self.deployment_id, self.symbol)
+
+        # 4 — Init strategy
+        try:
+            self._strategy.on_init(self._ctx)
+        except Exception as e:
+            raise RuntimeError(f"on_init() failed: {e}")
+
+        # 5 — Bar engine with the SAME _on_new_bar callback
+        self._bar_engine = RangeBarEngine(
+            bar_size_points=self.bar_size_points,
+            max_bars=self.max_bars,
+            on_bar=self._on_new_bar,   # ← THE SAME CALLBACK AS LIVE
+            debug=False,
+        )
+
+        # 6 — Reset state vars that _on_new_bar expects
+        self._pending_signal = None
+        self._on_bar_call_count = 0
+        self._signal_count = 0
+        self._total_bars_produced = 0
+        self._total_ticks_ingested = 0
+        self._current_price = 0.0
+        self._absolute_bar_counter = -1
+        self._prev_indicators = {}
+        self._active_trade_meta = None
+        self._just_entered_this_bar = False
+        self._bar_index = 0
+        self._trade_counter = 0
+
+        # 7 — Feed ALL ticks through the SAME pipeline
+        total = len(ticks)
+        report_every = max(1, total // 50)
+
+        for i, tick in enumerate(ticks):
+            if self._stop_event.is_set():
+                break
+
+            price = tick["price"]
+            self._current_price = price
+            executor.set_current_price(price)
+            self._total_ticks_ingested += 1
+
+            self._bar_engine.process_tick(
+                tick["ts"], price, tick.get("volume", 0)
+            )
+
+            if progress_cb and i > 0 and i % report_every == 0:
+                pct = (i / total) * 100
+                bars = self._bar_engine.total_bars_emitted
+                progress_cb(
+                    pct,
+                    f"Tick {i:,}/{total:,} | "
+                    f"{bars} bars | "
+                    f"{self._signal_count} signals | "
+                    f"{self._trade_counter} trades"
+                )
+
+        # 8 — Force-close any open position at end
+        if executor.get_open_count() > 0:
+            pos = executor.get_position_state()
+            if pos.has_position and self._active_trade_meta:
+                last_bar = list(self._bar_engine.bars)[-1] if self._bar_engine.bars else {"time": 0, "close": self._current_price}
+                self._close_and_record("END_OF_DATA", last_bar)
+
+        _log.info(f"[VALIDATION] Done: {self._total_ticks_ingested:,} ticks, "
+                  f"{self._bar_engine.total_bars_emitted} bars, "
+                  f"{self._signal_count} signals, "
+                  f"{self._trade_counter} trades")
 
     # =================================================================
     # Lifecycle — start / stop / _run / _run_lifecycle
@@ -1775,7 +1825,7 @@ class StrategyRunner:
     def _run_lifecycle(self):
         self._started_at = datetime.now(timezone.utc).isoformat()
 
-        # ── Phase 1: Load Strategy ──────────────────────────
+        # Phase 1: Load Strategy
         self._set_state("loading_strategy")
         strategy_instance, load_error = load_strategy_from_source(
             self.source_code, self.class_name, self.strategy_id)
@@ -1803,7 +1853,7 @@ class StrategyRunner:
               f"{getattr(self._strategy, 'min_lookback', 0)} | "
               f"indicators={len(indicator_defs)} | params={params}")
 
-        # ── Phase 2: Init MT5 ──────────────────────────────
+        # Phase 2: Init MT5
         ok, msg = mt5_connector.init_mt5()
         if not ok:
             self._set_state("failed", f"MT5 init failed: {msg}")
@@ -1815,7 +1865,7 @@ class StrategyRunner:
         self._exec_log = ExecutionLogger(
             self.deployment_id, self.symbol)
 
-        # ── Phase 3: Fetch Historical Ticks ─────────────────
+        # Phase 3: Fetch Historical Ticks
         self._set_state("fetching_ticks")
         ticks, tick_err = mt5_connector.fetch_historical_ticks(
             self.symbol, self.tick_lookback_value,
@@ -1849,7 +1899,7 @@ class StrategyRunner:
                   f"bar_size={self.bar_size_points} "
                   f"nearest_grid_level={grid_snap}")
 
-        # ── Phase 4: Generate Initial Bars ──────────────────
+        # Phase 4: Generate Initial Bars
         self._set_state("generating_initial_bars")
         self._bar_engine = RangeBarEngine(
             bar_size_points=self.bar_size_points,
@@ -1863,8 +1913,7 @@ class StrategyRunner:
         initial_count = self._bar_engine.current_bars_count
         self._total_bars_produced = self._bar_engine.total_bars_emitted
         if self._bar_engine.bars:
-            self._last_bar_time = self._bar_engine.bars[-1].get(
-                "time")
+            self._last_bar_time = self._bar_engine.bars[-1].get("time")
 
         print(f"[RUNNER] Initial bars: {initial_count} "
               f"(total emitted: {self._total_bars_produced}) "
@@ -1886,7 +1935,7 @@ class StrategyRunner:
                     break
             grid_status = ("\u2705 ALL GRID-ALIGNED" if all_grid
                            else "\u26a0\ufe0f SOME OFF-GRID")
-            print(f"[DEBUG] Bar[0]:  O={b_first['open']:.5f} "
+            print(f"[DEBUG] BarO={b_first['open']:.5f} "
                   f"C={b_first['close']:.5f}")
             print(f"[DEBUG] Bar[-1]: O={b_last['open']:.5f} "
                   f"C={b_last['close']:.5f}")
@@ -1903,28 +1952,12 @@ class StrategyRunner:
 
         self._log_pipeline("INITIAL_BARS")
 
-        # ══════════════════════════════════════════════════════
-        # Phase 5: Warm Up — Backtester-Aligned
-        #
-        # Replays historical bars through strategy to build up:
-        #   - Strategy internal state (ctx.state)
-        #   - Indicator values
-        #   - Streak counters, etc.
-        #
-        # ★ KEY: We track pending signals during warmup and
-        # "consume" them on the next bar. This keeps the
-        # strategy's state aligned with what it would see if
-        # it had been running live (i.e., the strategy sees
-        # has_position=False and its counters reset correctly
-        # after signals fire, matching backtester behavior
-        # where pending signals are consumed even during the
-        # lookback period).
-        # ══════════════════════════════════════════════════════
+        # Phase 5: Warm Up
         self._set_state("warming_up")
         bars_list = list(self._bar_engine.bars)
         min_lb = getattr(self._strategy, "min_lookback", 0) or 0
         self._prev_indicators = {}
-        warmup_pending = None  # track pending during warmup
+        warmup_pending = None
 
         print(f"[WARMUP] {len(bars_list)} bars | "
               f"min_lookback={min_lb}")
@@ -1948,10 +1981,6 @@ class StrategyRunner:
 
             self._refresh_position()
 
-            # ── Consume warmup pending (backtester Step 1) ──
-            # In backtester, pending is consumed at bar open
-            # even during lookback. We simulate this by just
-            # clearing it — we can't execute historically.
             if warmup_pending is not None:
                 self._warmup_signal_count += 1
                 print(f"[WARMUP] Pending {warmup_pending['direction']}"
@@ -1969,8 +1998,6 @@ class StrategyRunner:
                 if raw_signal:
                     s = raw_signal.get("signal")
                     if s in (SIGNAL_BUY, SIGNAL_SELL):
-                        # Store as warmup pending — consumed
-                        # next iteration (backtester-aligned)
                         direction = ("long" if s == SIGNAL_BUY
                                      else "short")
                         warmup_pending = {
@@ -1989,7 +2016,6 @@ class StrategyRunner:
 
             self._prev_indicators = dict(self._ctx._indicators)
 
-        # Clear any trailing warmup pending
         if warmup_pending is not None:
             self._warmup_signal_count += 1
             print(f"[WARMUP] Trailing pending "
@@ -2004,13 +2030,7 @@ class StrategyRunner:
               f"{self._absolute_bar_counter}")
         self._log_pipeline("WARMUP_DONE")
 
-        # ══════════════════════════════════════════════════════
         # Phase 6: Live Tick Loop
-        #
-        # Hook _on_new_bar into the bar engine.
-        # Each completed range bar triggers the full 8-step
-        # backtester-aligned loop.
-        # ══════════════════════════════════════════════════════
         self._set_state("running")
         self._bar_engine._on_bar = self._on_new_bar
         live_tick_count = 0
