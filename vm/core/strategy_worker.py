@@ -687,6 +687,7 @@ def load_strategy_from_source(source_code: str, class_name: str,
         if spec is None or spec.loader is None:
             return None, "Failed to create module spec."
         module = importlib.util.module_from_spec(spec)
+        module.BaseStrategy = BaseStrategy  # ← inject before exec
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
         klass = getattr(module, class_name, None)
@@ -1210,7 +1211,7 @@ class StrategyRunner:
         ticket = meta.get("ticket")
 
         if not ticket:
-            print(f"[RUNNER] WARNING: No MT5 ticket — recording with estimates.")
+            print(f"[RUNNER] WARNING: No ticket — recording with estimates.")
             self._trade_counter += 1
             record = build_trade_record(
                 trade_id=self._trade_counter,
@@ -1235,40 +1236,82 @@ class StrategyRunner:
 
         print(f"[RUNNER] Position {ticket} closed — fetching history...")
 
-        # ★ Skip MT5 history in validation mode
-        mt5_record = None
-        if not self._validation_mode:
-            mt5_record = fetch_closed_position_from_mt5(
-                position_ticket=ticket, symbol=self.symbol,
-                max_retries=5, retry_delay_ms=300)
+        # ★ VALIDATION MODE: Get close info from SimulatedExecutor
+        if self._validation_mode:
+            close_info = None
+            if hasattr(self._executor, 'get_broker_close_info'):
+                close_info = self._executor.get_broker_close_info(ticket)
+
+            self._trade_counter += 1
+            direction = meta.get("direction", "long")
+            entry_price = meta.get("entry_price", 0)
+
+            if close_info:
+                exit_price = close_info["price"]
+                exit_profit = close_info["profit"]
+                exit_reason = close_info.get("reason", "BROKER_CLOSE")
+                print(f"[TRADE #{self._trade_counter}] SIM BROKER | "
+                      f"ticket={ticket} {direction.upper()} "
+                      f"entry={entry_price:.5f} exit={exit_price:.5f} "
+                      f"profit={exit_profit:.2f} reason={exit_reason}")
+            else:
+                exit_price = self._current_price or float(bar.get("close", 0))
+                exit_profit = 0.0
+                exit_reason = "BROKER_CLOSE_ESTIMATED"
+                print(f"[TRADE #{self._trade_counter}] SIM ESTIMATED | "
+                      f"ticket={ticket} {direction.upper()} "
+                      f"entry={entry_price:.5f} exit={exit_price:.5f}")
+
+            record = build_trade_record(
+                trade_id=self._trade_counter, direction=direction,
+                entry_price=entry_price,
+                entry_bar=meta.get("entry_bar", self._bar_index),
+                entry_time=meta.get("entry_time", bar.get("time", 0)),
+                exit_price=exit_price, exit_bar=self._bar_index,
+                exit_time=bar.get("time", 0),
+                exit_reason=exit_reason,
+                sl=meta.get("sl"), tp=meta.get("tp"),
+                lot_size=self.lot_size, ticket=ticket,
+                profit=exit_profit)
+            record["deployment_id"] = self._deployment_id
+            record["strategy_id"] = self._strategy_id
+            record["worker_id"] = self._worker_id
+            record["mt5_source"] = False
+            record["commission"] = 0.0
+            record["swap"] = 0.0
+            record["fee"] = 0.0
+            record["net_pnl"] = round(exit_profit, 2)
+            self._ctx._trades.append(record)
+            self._report_trade(record)
+            self._active_trade_meta = None
+            self._exec_log.closes_filled += 1
+            return
+
+        # ★ LIVE MODE: Fetch MT5 deal history (unchanged)
+        mt5_record = fetch_closed_position_from_mt5(
+            position_ticket=ticket, symbol=self.symbol,
+            max_retries=5, retry_delay_ms=300)
 
         if mt5_record is None:
-            if not self._validation_mode:
-                print(f"[RUNNER] WARNING: MT5 history unavailable for {ticket}.")
+            print(f"[RUNNER] WARNING: MT5 history unavailable for {ticket}.")
             self._trade_counter += 1
             entry_price = meta.get("entry_price", 0)
             exit_price = self._current_price or float(bar.get("close", 0))
             direction = meta.get("direction", "long")
-
-            # ★ In validation mode, use SimulatedExecutor PnL
-            if self._validation_mode:
-                estimated_profit = 0.0  # already accounted in close result
+            mt5 = _import_mt5()
+            contract_size = 100000
+            if mt5:
+                try:
+                    sym_info = mt5.symbol_info(self.symbol)
+                    if sym_info and sym_info.trade_contract_size:
+                        contract_size = sym_info.trade_contract_size
+                except Exception:
+                    pass
+            if direction == "long":
+                points_pnl = exit_price - entry_price
             else:
-                mt5 = _import_mt5()
-                contract_size = 100000
-                if mt5:
-                    try:
-                        sym_info = mt5.symbol_info(self.symbol)
-                        if sym_info and sym_info.trade_contract_size:
-                            contract_size = sym_info.trade_contract_size
-                    except Exception:
-                        pass
-                if direction == "long":
-                    points_pnl = exit_price - entry_price
-                else:
-                    points_pnl = entry_price - exit_price
-                estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
-
+                points_pnl = entry_price - exit_price
+            estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
             record = build_trade_record(
                 trade_id=self._trade_counter, direction=direction,
                 entry_price=entry_price,
@@ -1286,8 +1329,7 @@ class StrategyRunner:
             record["mt5_source"] = False
             self._ctx._trades.append(record)
             self._report_trade(record)
-            print(f"[TRADE #{self._trade_counter}] "
-                  f"{'SIM' if self._validation_mode else 'ESTIMATED'} | "
+            print(f"[TRADE #{self._trade_counter}] ESTIMATED | "
                   f"ticket={ticket} {direction.upper()} "
                   f"entry={entry_price:.5f} exit={exit_price:.5f} "
                   f"profit={estimated_profit:.2f}")

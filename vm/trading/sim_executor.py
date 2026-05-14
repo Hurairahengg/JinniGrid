@@ -4,9 +4,14 @@ vm/trading/sim_executor.py
 
 Drop-in replacement for MT5Executor used during validation.
 Same API — StrategyRunner._on_new_bar() runs IDENTICALLY.
+
+★ KEY: set_current_price() simulates broker SL/TP monitoring.
+When SL or TP is hit, position is auto-closed (just like a real broker).
+The runner detects position vanished → _handle_broker_close fires.
 """
 
 from __future__ import annotations
+from typing import Optional
 from trading.execution import PositionState
 
 
@@ -26,6 +31,10 @@ class SimulatedExecutor:
         self._next_ticket = 100000
         self._filling_mode = 1
 
+        # ★ Broker close tracking — stores SL/TP close info
+        # so _handle_broker_close can retrieve actual fill price + profit
+        self._broker_closes: list = []
+
         print(f"[SIM-EXEC] Ready: symbol={symbol} lot={lot_size} "
               f"point={point} tick_size={self._tick_size} "
               f"tick_value={self._tick_value}")
@@ -37,27 +46,87 @@ class SimulatedExecutor:
             h = (h * 31 + ord(c)) & 0xFFFFFFFF
         return (h % 900000) + 100000
 
-    # ── Price Feed ──────────────────────────────────────────
-
-    def set_current_price(self, price: float):
-        """Update the current market price (call before each tick/bar)."""
-        self._current_price = price
-        # Update floating PnL on all open positions
-        for p in self._positions:
-            p["profit"] = self._calc_pnl(p)
+    # ── PnL Calculation ─────────────────────────────────────
 
     def _calc_pnl(self, pos: dict) -> float:
+        """PnL at current market price."""
+        return self._calc_pnl_at_price(pos, self._current_price)
+
+    def _calc_pnl_at_price(self, pos: dict, price: float) -> float:
+        """PnL at a specific price (used for SL/TP fills)."""
         entry = pos["price_open"]
-        current = self._current_price
         vol = pos["volume"]
         if pos["type"] == 0:  # long
-            pts = current - entry
+            pts = price - entry
         else:  # short
-            pts = entry - current
+            pts = entry - price
         if self._tick_size > 0:
             ticks_moved = pts / self._tick_size
             return round(ticks_moved * self._tick_value * vol, 2)
         return 0.0
+
+    # ── Price Feed + Broker SL/TP Simulation ────────────────
+
+    def set_current_price(self, price: float):
+        """
+        Update the current market price.
+        ★ CRITICAL: Simulates broker SL/TP monitoring.
+        If price crosses SL or TP, position is auto-closed
+        at the SL/TP level — exactly like a real broker.
+        """
+        self._current_price = price
+
+        # ★ Check SL/TP for all open positions (broker simulation)
+        to_close = []
+        for p in list(self._positions):
+            sl = p.get("sl", 0)
+            tp = p.get("tp", 0)
+
+            if p["type"] == 0:  # LONG
+                if sl > 0 and price <= sl:
+                    to_close.append((p, sl, "SL_HIT"))
+                elif tp > 0 and price >= tp:
+                    to_close.append((p, tp, "TP_HIT"))
+            else:  # SHORT
+                if sl > 0 and price >= sl:
+                    to_close.append((p, sl, "SL_HIT"))
+                elif tp > 0 and price <= tp:
+                    to_close.append((p, tp, "TP_HIT"))
+
+        for p, fill_price, reason in to_close:
+            # Calculate PnL at the SL/TP price (not current price)
+            pnl = self._calc_pnl_at_price(p, fill_price)
+
+            # Store broker close info for _handle_broker_close
+            self._broker_closes.append({
+                "ticket": p["ticket"],
+                "type": p["type"],
+                "price_open": p["price_open"],
+                "price": fill_price,
+                "volume": p["volume"],
+                "profit": pnl,
+                "reason": reason,
+            })
+
+            self._positions.remove(p)
+            print(f"[SIM-EXEC] BROKER {reason}: ticket={p['ticket']} "
+                  f"{'LONG' if p['type'] == 0 else 'SHORT'} "
+                  f"entry={p['price_open']:.5f} exit={fill_price:.5f} "
+                  f"pnl={pnl:.2f}")
+
+        # Update floating PnL for remaining positions
+        for p in self._positions:
+            p["profit"] = self._calc_pnl(p)
+
+    def get_broker_close_info(self, ticket: int) -> Optional[dict]:
+        """
+        Retrieve and consume broker close info for a given ticket.
+        Called by _handle_broker_close to get actual SL/TP fill data.
+        """
+        for i, c in enumerate(self._broker_closes):
+            if c["ticket"] == ticket:
+                return self._broker_closes.pop(i)
+        return None
 
     # ── Open Orders ─────────────────────────────────────────
 
@@ -77,8 +146,8 @@ class SimulatedExecutor:
             "type": 0 if direction == "buy" else 1,
             "volume": self.lot_size,
             "price_open": price,
-            "sl": round(float(sl), 5) if sl and sl > 0 else 0,
-            "tp": round(float(tp), 5) if tp and tp > 0 else 0,
+            "sl": round(float(sl), 5) if sl and float(sl) > 0 else 0,
+            "tp": round(float(tp), 5) if tp and float(tp) > 0 else 0,
             "profit": 0.0,
             "symbol": self.symbol,
             "magic": self.magic,
@@ -147,6 +216,8 @@ class SimulatedExecutor:
                     p["sl"] = round(float(sl), 5)
                 if tp is not None:
                     p["tp"] = round(float(tp), 5)
+                print(f"[SIM-EXEC] MODIFIED ticket={ticket} "
+                      f"sl={p['sl']} tp={p['tp']}")
                 return {"success": True, "sl": p["sl"], "tp": p["tp"]}
         return {"success": False, "error": f"Position {ticket} not found"}
 
@@ -175,10 +246,6 @@ class SimulatedExecutor:
             ticket=p["ticket"],
             profit=p["profit"],
         )
-
-    def get_closed_deal_profit(self, ticket: int) -> dict:
-        """No MT5 history in sim — return empty so runner uses estimated path."""
-        return {}
 
     def get_account_info(self) -> dict:
         return {
