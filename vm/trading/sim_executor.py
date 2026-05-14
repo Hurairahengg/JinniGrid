@@ -5,9 +5,8 @@ vm/trading/sim_executor.py
 Drop-in replacement for MT5Executor used during validation.
 Same API — StrategyRunner._on_new_bar() runs IDENTICALLY.
 
-★ KEY: set_current_price() simulates broker SL/TP monitoring.
-When SL or TP is hit, position is auto-closed (just like a real broker).
-The runner detects position vanished → _handle_broker_close fires.
+★ set_current_price() simulates broker SL/TP monitoring.
+★ set_next_fill_price() controls fill price for bar-open execution.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from trading.execution import PositionState
 
 
 class SimulatedExecutor:
-    """Simulated trade executor matching MT5Executor interface exactly."""
 
     def __init__(self, symbol: str, lot_size: float, deployment_id: str,
                  point: float, tick_size: float, tick_value: float):
@@ -30,9 +28,7 @@ class SimulatedExecutor:
         self._positions: list = []
         self._next_ticket = 100000
         self._filling_mode = 1
-
-        # ★ Broker close tracking — stores SL/TP close info
-        # so _handle_broker_close can retrieve actual fill price + profit
+        self._next_fill_price: Optional[float] = None
         self._broker_closes: list = []
 
         print(f"[SIM-EXEC] Ready: symbol={symbol} lot={lot_size} "
@@ -46,37 +42,28 @@ class SimulatedExecutor:
             h = (h * 31 + ord(c)) & 0xFFFFFFFF
         return (h % 900000) + 100000
 
-    # ── PnL Calculation ─────────────────────────────────────
+    # ── PnL ─────────────────────────────────────────────────
 
     def _calc_pnl(self, pos: dict) -> float:
-        """PnL at current market price."""
         return self._calc_pnl_at_price(pos, self._current_price)
 
     def _calc_pnl_at_price(self, pos: dict, price: float) -> float:
-        """PnL at a specific price (used for SL/TP fills)."""
         entry = pos["price_open"]
         vol = pos["volume"]
-        if pos["type"] == 0:  # long
+        if pos["type"] == 0:
             pts = price - entry
-        else:  # short
+        else:
             pts = entry - price
         if self._tick_size > 0:
             ticks_moved = pts / self._tick_size
             return round(ticks_moved * self._tick_value * vol, 2)
         return 0.0
 
-    # ── Price Feed + Broker SL/TP Simulation ────────────────
+    # ── Price Feed + Broker SL/TP ───────────────────────────
 
     def set_current_price(self, price: float):
-        """
-        Update the current market price.
-        ★ CRITICAL: Simulates broker SL/TP monitoring.
-        If price crosses SL or TP, position is auto-closed
-        at the SL/TP level — exactly like a real broker.
-        """
         self._current_price = price
 
-        # ★ Check SL/TP for all open positions (broker simulation)
         to_close = []
         for p in list(self._positions):
             sl = p.get("sl", 0)
@@ -94,10 +81,7 @@ class SimulatedExecutor:
                     to_close.append((p, tp, "TP_HIT"))
 
         for p, fill_price, reason in to_close:
-            # Calculate PnL at the SL/TP price (not current price)
             pnl = self._calc_pnl_at_price(p, fill_price)
-
-            # Store broker close info for _handle_broker_close
             self._broker_closes.append({
                 "ticket": p["ticket"],
                 "type": p["type"],
@@ -106,23 +90,24 @@ class SimulatedExecutor:
                 "volume": p["volume"],
                 "profit": pnl,
                 "reason": reason,
+                "sl": p.get("sl", 0),
+                "tp": p.get("tp", 0),
             })
-
             self._positions.remove(p)
             print(f"[SIM-EXEC] BROKER {reason}: ticket={p['ticket']} "
                   f"{'LONG' if p['type'] == 0 else 'SHORT'} "
                   f"entry={p['price_open']:.5f} exit={fill_price:.5f} "
+                  f"sl={p.get('sl', 0)} tp={p.get('tp', 0)} "
                   f"pnl={pnl:.2f}")
 
-        # Update floating PnL for remaining positions
         for p in self._positions:
             p["profit"] = self._calc_pnl(p)
 
+    def set_next_fill_price(self, price: float):
+        """Override fill price for the next order only (bar-open fill)."""
+        self._next_fill_price = price
+
     def get_broker_close_info(self, ticket: int) -> Optional[dict]:
-        """
-        Retrieve and consume broker close info for a given ticket.
-        Called by _handle_broker_close to get actual SL/TP fill data.
-        """
         for i, c in enumerate(self._broker_closes):
             if c["ticket"] == ticket:
                 return self._broker_closes.pop(i)
@@ -139,7 +124,13 @@ class SimulatedExecutor:
     def _open(self, direction: str, sl=None, tp=None, comment="") -> dict:
         ticket = self._next_ticket
         self._next_ticket += 1
-        price = self._current_price
+
+        # ★ Use override fill price if set (bar-open fill)
+        if self._next_fill_price is not None:
+            price = self._next_fill_price
+            self._next_fill_price = None
+        else:
+            price = self._current_price
 
         pos = {
             "ticket": ticket,

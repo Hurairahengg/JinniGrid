@@ -1173,32 +1173,48 @@ class StrategyRunner:
                           f"net={mt5_record['net_pnl']:.2f} "
                           f"reason={reason}")
                 else:
-                    record = build_trade_record(
-                        trade_id=self._trade_counter,
-                        direction=pos.direction or "long",
-                        entry_price=pos.entry_price or 0,
-                        entry_bar=meta.get("entry_bar", self._bar_index),
-                        entry_time=meta.get("entry_time", bar.get("time", 0)),
-                        exit_price=r.get("price", 0),
-                        exit_bar=self._bar_index,
-                        exit_time=bar.get("time", 0),
-                        exit_reason=reason, sl=pos.sl, tp=pos.tp,
-                        lot_size=pos.size or self.lot_size,
-                        ticket=ticket, profit=r.get("profit", 0))
-                    record["deployment_id"] = self._deployment_id
-                    record["strategy_id"] = self._strategy_id
-                    record["worker_id"] = self._worker_id
-                    record["mt5_source"] = False
-                    record["commission"] = 0.0
-                    record["swap"] = 0.0
-                    record["fee"] = 0.0
-                    record["net_pnl"] = round(float(r.get("profit", 0)), 2)
+                    # ★ Build record manually with correct field names
+                    exit_profit = r.get("profit", 0)
+                    entry_price = pos.entry_price or meta.get("entry_price", 0)
+                    exit_price = r.get("price", 0)
+                    direction = pos.direction or meta.get("direction", "long")
+                    entry_bar = meta.get("entry_bar", self._bar_index)
+                    bars_held = max(0, self._bar_index - entry_bar)
+                    sl_val = meta.get("sl") or pos.sl
+                    tp_val = meta.get("tp") or pos.tp
+
+                    record = {
+                        "trade_id": self._trade_counter,
+                        "deployment_id": self._deployment_id,
+                        "strategy_id": self._strategy_id,
+                        "worker_id": self._worker_id,
+                        "symbol": self.symbol,
+                        "direction": direction,
+                        "lot_size": pos.size or self.lot_size,
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "entry_bar": entry_bar,
+                        "exit_bar": self._bar_index,
+                        "entry_time": meta.get("entry_time", bar.get("time", 0)),
+                        "exit_time": bar.get("time", 0),
+                        "exit_reason": reason,
+                        "sl": sl_val,
+                        "tp": tp_val,
+                        "ticket": ticket,
+                        "profit": round(float(exit_profit), 2),
+                        "commission": 0.0,
+                        "swap": 0.0,
+                        "fee": 0.0,
+                        "net_pnl": round(float(exit_profit), 2),
+                        "bars_held": bars_held,
+                        "mt5_source": False,
+                    }
                     print(f"[TRADE #{self._trade_counter}] "
                           f"{'SIM' if self._validation_mode else 'FALLBACK'} | "
-                          f"{record['direction'].upper()} "
-                          f"entry={record['entry_price']} "
-                          f"exit={record['exit_price']} "
-                          f"reason={reason} profit={r.get('profit', 0):.2f}")
+                          f"{direction.upper()} "
+                          f"entry={entry_price} exit={exit_price} "
+                          f"sl={sl_val} tp={tp_val} "
+                          f"reason={reason} profit={exit_profit:.2f}")
                 self._ctx._trades.append(record)
                 self._report_trade(record)
         self._active_trade_meta = None
@@ -1213,21 +1229,32 @@ class StrategyRunner:
         if not ticket:
             print(f"[RUNNER] WARNING: No ticket — recording with estimates.")
             self._trade_counter += 1
-            record = build_trade_record(
-                trade_id=self._trade_counter,
-                direction=meta.get("direction", "long"),
-                entry_price=meta.get("entry_price", 0),
-                entry_bar=meta.get("entry_bar", self._bar_index),
-                entry_time=meta.get("entry_time", bar.get("time", 0)),
-                exit_price=self._current_price or float(bar.get("close", 0)),
-                exit_bar=self._bar_index,
-                exit_time=bar.get("time", 0),
-                exit_reason="BROKER_CLOSE_NO_TICKET",
-                sl=meta.get("sl"), tp=meta.get("tp"),
-                lot_size=self.lot_size, ticket=None, profit=0)
-            record["deployment_id"] = self._deployment_id
-            record["strategy_id"] = self._strategy_id
-            record["worker_id"] = self._worker_id
+            record = {
+                "trade_id": self._trade_counter,
+                "deployment_id": self._deployment_id,
+                "strategy_id": self._strategy_id,
+                "worker_id": self._worker_id,
+                "symbol": self.symbol,
+                "direction": meta.get("direction", "long"),
+                "lot_size": self.lot_size,
+                "entry_price": meta.get("entry_price", 0),
+                "exit_price": self._current_price or float(bar.get("close", 0)),
+                "entry_bar": meta.get("entry_bar", self._bar_index),
+                "exit_bar": self._bar_index,
+                "entry_time": meta.get("entry_time", bar.get("time", 0)),
+                "exit_time": bar.get("time", 0),
+                "exit_reason": "BROKER_CLOSE_NO_TICKET",
+                "sl": meta.get("sl"),
+                "tp": meta.get("tp"),
+                "ticket": None,
+                "profit": 0.0,
+                "commission": 0.0,
+                "swap": 0.0,
+                "fee": 0.0,
+                "net_pnl": 0.0,
+                "bars_held": max(0, self._bar_index - meta.get("entry_bar", self._bar_index)),
+                "mt5_source": False,
+            }
             self._ctx._trades.append(record)
             self._report_trade(record)
             self._active_trade_meta = None
@@ -1245,42 +1272,55 @@ class StrategyRunner:
             self._trade_counter += 1
             direction = meta.get("direction", "long")
             entry_price = meta.get("entry_price", 0)
+            entry_bar = meta.get("entry_bar", self._bar_index)
+            bars_held = max(0, self._bar_index - entry_bar)
 
             if close_info:
                 exit_price = close_info["price"]
                 exit_profit = close_info["profit"]
                 exit_reason = close_info.get("reason", "BROKER_CLOSE")
-                print(f"[TRADE #{self._trade_counter}] SIM BROKER | "
-                      f"ticket={ticket} {direction.upper()} "
-                      f"entry={entry_price:.5f} exit={exit_price:.5f} "
-                      f"profit={exit_profit:.2f} reason={exit_reason}")
+                sl_val = close_info.get("sl", meta.get("sl"))
+                tp_val = close_info.get("tp", meta.get("tp"))
             else:
                 exit_price = self._current_price or float(bar.get("close", 0))
                 exit_profit = 0.0
                 exit_reason = "BROKER_CLOSE_ESTIMATED"
-                print(f"[TRADE #{self._trade_counter}] SIM ESTIMATED | "
-                      f"ticket={ticket} {direction.upper()} "
-                      f"entry={entry_price:.5f} exit={exit_price:.5f}")
+                sl_val = meta.get("sl")
+                tp_val = meta.get("tp")
 
-            record = build_trade_record(
-                trade_id=self._trade_counter, direction=direction,
-                entry_price=entry_price,
-                entry_bar=meta.get("entry_bar", self._bar_index),
-                entry_time=meta.get("entry_time", bar.get("time", 0)),
-                exit_price=exit_price, exit_bar=self._bar_index,
-                exit_time=bar.get("time", 0),
-                exit_reason=exit_reason,
-                sl=meta.get("sl"), tp=meta.get("tp"),
-                lot_size=self.lot_size, ticket=ticket,
-                profit=exit_profit)
-            record["deployment_id"] = self._deployment_id
-            record["strategy_id"] = self._strategy_id
-            record["worker_id"] = self._worker_id
-            record["mt5_source"] = False
-            record["commission"] = 0.0
-            record["swap"] = 0.0
-            record["fee"] = 0.0
-            record["net_pnl"] = round(exit_profit, 2)
+            record = {
+                "trade_id": self._trade_counter,
+                "deployment_id": self._deployment_id,
+                "strategy_id": self._strategy_id,
+                "worker_id": self._worker_id,
+                "symbol": self.symbol,
+                "direction": direction,
+                "lot_size": self.lot_size,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "entry_bar": entry_bar,
+                "exit_bar": self._bar_index,
+                "entry_time": meta.get("entry_time", bar.get("time", 0)),
+                "exit_time": bar.get("time", 0),
+                "exit_reason": exit_reason,
+                "sl": sl_val,
+                "tp": tp_val,
+                "ticket": ticket,
+                "profit": exit_profit,
+                "commission": 0.0,
+                "swap": 0.0,
+                "fee": 0.0,
+                "net_pnl": round(exit_profit, 2),
+                "bars_held": bars_held,
+                "mt5_source": False,
+            }
+
+            print(f"[TRADE #{self._trade_counter}] SIM BROKER | "
+                  f"ticket={ticket} {direction.upper()} "
+                  f"entry={entry_price:.5f} exit={exit_price:.5f} "
+                  f"sl={sl_val} tp={tp_val} "
+                  f"profit={exit_profit:.2f} reason={exit_reason}")
+
             self._ctx._trades.append(record)
             self._report_trade(record)
             self._active_trade_meta = None
@@ -1312,21 +1352,33 @@ class StrategyRunner:
             else:
                 points_pnl = entry_price - exit_price
             estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
-            record = build_trade_record(
-                trade_id=self._trade_counter, direction=direction,
-                entry_price=entry_price,
-                entry_bar=meta.get("entry_bar", self._bar_index),
-                entry_time=meta.get("entry_time", bar.get("time", 0)),
-                exit_price=exit_price, exit_bar=self._bar_index,
-                exit_time=bar.get("time", 0),
-                exit_reason="BROKER_CLOSE_ESTIMATED",
-                sl=meta.get("sl"), tp=meta.get("tp"),
-                lot_size=self.lot_size, ticket=ticket,
-                profit=estimated_profit)
-            record["deployment_id"] = self._deployment_id
-            record["strategy_id"] = self._strategy_id
-            record["worker_id"] = self._worker_id
-            record["mt5_source"] = False
+
+            record = {
+                "trade_id": self._trade_counter,
+                "deployment_id": self._deployment_id,
+                "strategy_id": self._strategy_id,
+                "worker_id": self._worker_id,
+                "symbol": self.symbol,
+                "direction": direction,
+                "lot_size": self.lot_size,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "entry_bar": meta.get("entry_bar", self._bar_index),
+                "exit_bar": self._bar_index,
+                "entry_time": meta.get("entry_time", bar.get("time", 0)),
+                "exit_time": bar.get("time", 0),
+                "exit_reason": "BROKER_CLOSE_ESTIMATED",
+                "sl": meta.get("sl"),
+                "tp": meta.get("tp"),
+                "ticket": ticket,
+                "profit": estimated_profit,
+                "commission": 0.0,
+                "swap": 0.0,
+                "fee": 0.0,
+                "net_pnl": estimated_profit,
+                "bars_held": max(0, self._bar_index - meta.get("entry_bar", self._bar_index)),
+                "mt5_source": False,
+            }
             self._ctx._trades.append(record)
             self._report_trade(record)
             print(f"[TRADE #{self._trade_counter}] ESTIMATED | "
@@ -1363,7 +1415,8 @@ class StrategyRunner:
             "bars_held": max(0, self._bar_index - meta.get("entry_bar", 0)),
             "mt5_deal_tickets": mt5_record.get("mt5_deal_tickets", []),
             "mt5_comment": mt5_record.get("mt5_comment", ""),
-            "sl": meta.get("sl"), "tp": meta.get("tp"),
+            "sl": meta.get("sl"),
+            "tp": meta.get("tp"),
         }
         self._ctx._trades.append(record)
         self._report_trade(record)
@@ -1398,8 +1451,16 @@ class StrategyRunner:
         direction = pending["direction"]
         sig = SIGNAL_BUY if direction == "long" else SIGNAL_SELL
 
-        entry_estimate = self._current_price or float(bar.get("close", 0))
+        # ★ VALIDATION: fill at bar OPEN (matches backtester exactly)
+        # LIVE: fill at current market price (broker fills at market)
+        if self._validation_mode:
+            entry_estimate = float(bar.get("open", self._current_price or 0))
+            if hasattr(self._executor, 'set_next_fill_price'):
+                self._executor.set_next_fill_price(entry_estimate)
+        else:
+            entry_estimate = self._current_price or float(bar.get("close", 0))
 
+        # ── Compute initial SL for order placement ──────────
         initial_sl = None
         sl_mode = pending.get("sl_mode")
 
@@ -1420,16 +1481,26 @@ class StrategyRunner:
         elif pending.get("sl") is not None:
             initial_sl = round(float(pending["sl"]), 5)
 
+        # Validate initial SL direction
         if initial_sl is not None:
             if direction == "long" and initial_sl >= entry_estimate:
-                print(f"[EXEC] Pending: Long SL {initial_sl:.5f} >= "
-                      f"estimate {entry_estimate:.5f}, clearing")
+                print(f"[EXEC] Pending SKIPPED: Long SL {initial_sl:.5f} >= "
+                      f"fill {entry_estimate:.5f} — invalid after fill")
                 initial_sl = None
             elif direction == "short" and initial_sl <= entry_estimate:
-                print(f"[EXEC] Pending: Short SL {initial_sl:.5f} <= "
-                      f"estimate {entry_estimate:.5f}, clearing")
+                print(f"[EXEC] Pending SKIPPED: Short SL {initial_sl:.5f} <= "
+                      f"fill {entry_estimate:.5f} — invalid after fill")
                 initial_sl = None
 
+        # ★ VALIDATION: If strategy requires SL (has sl field) but SL
+        # is invalid at fill price, skip the entire entry.
+        # This prevents naked positions that never close.
+        if self._validation_mode and pending.get("sl") is not None and initial_sl is None:
+            print(f"[EXEC] Pending SKIPPED: SL invalid at bar open "
+                  f"{entry_estimate:.5f} — no entry")
+            return False
+
+        # ── Place order ─────────────────────────────────────
         comment = pending.get("comment", f"JG_{sig}")
 
         if sig == SIGNAL_BUY:
@@ -1447,6 +1518,7 @@ class StrategyRunner:
 
         fill_price = result.get("price", entry_estimate)
 
+        # ── Recompute SL from actual fill (backtester-exact) ─
         sl_level = None
         risk_pts = None
 
@@ -1471,6 +1543,7 @@ class StrategyRunner:
             sl_level = round(float(pending["sl"]), 5)
             risk_pts = round(abs(fill_price - sl_level), 5)
 
+        # Validate SL from actual fill
         if sl_level is not None:
             if direction == "long" and sl_level >= fill_price:
                 sl_level = None
@@ -1483,6 +1556,7 @@ class StrategyRunner:
             sl_level = None
             risk_pts = None
 
+        # ── Compute TP from fill (backtester-exact) ─────────
         tp_level = None
         tp_mode = pending.get("tp_mode")
 
@@ -1496,12 +1570,14 @@ class StrategyRunner:
         elif pending.get("tp") is not None:
             tp_level = round(float(pending["tp"]), 5)
 
+        # Validate TP
         if tp_level is not None:
             if direction == "long" and tp_level <= fill_price:
                 tp_level = None
             elif direction == "short" and tp_level >= fill_price:
                 tp_level = None
 
+        # ── Modify position with final SL/TP ────────────────
         ticket = result.get("ticket")
         if ticket and (sl_level != initial_sl or tp_level is not None):
             mod_result = self._executor.modify_sl_tp(
@@ -1513,6 +1589,7 @@ class StrategyRunner:
               f"fill={fill_price:.5f} SL={sl_level} TP={tp_level} "
               f"risk={risk_pts} R={pending.get('tp_r')}")
 
+        # ── Store active trade metadata ─────────────────────
         self._active_trade_meta = {
             "entry_bar": self._bar_index,
             "entry_time": bar.get("time", 0),
@@ -1804,12 +1881,27 @@ class StrategyRunner:
 
             price = tick["price"]
             self._current_price = price
+
+            # ★ Set price on executor BEFORE bar engine processes
+            # This way broker SL/TP checks fire on every tick,
+            # not just on bar completion
             executor.set_current_price(price)
+
             self._total_ticks_ingested += 1
 
             self._bar_engine.process_tick(
                 tick["ts"], price, tick.get("volume", 0)
             )
+
+            # ★ Check if broker closed position between ticks
+            # (SL/TP hit detected by set_current_price above)
+            if self._active_trade_meta and executor.get_open_count() == 0:
+                # Position vanished — broker SL/TP triggered
+                if self._ctx and self._bar_engine.bars:
+                    fake_bar = {"time": tick["ts"], "open": price,
+                                "high": price, "low": price,
+                                "close": price, "volume": 0}
+                    self._handle_broker_close(fake_bar)
 
             if progress_cb and i > 0 and i % report_every == 0:
                 pct = (i / total) * 100
