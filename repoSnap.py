@@ -1,483 +1,243 @@
 from pathlib import Path
 from datetime import datetime, timezone
-import hashlib
 import mimetypes
 import os
 
-
-# IMPORTANT:
-# Root is wherever this script is RAN FROM.
-# Not where this script file is located.
 ROOT = Path.cwd().resolve()
 
-CHUNK_COUNT = 4
+CHUNK_COUNT = 5
 OUTPUT_PREFIX = "repo_snapshot_part_"
 OUTPUT_SUFFIX = ".md"
-
+MAX_CHARS_PER_CHUNK = 12000
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 EXCLUDED_DIRS = {
-    ".git",
-    ".md",
-    ".hg",
-    ".svn",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".tox",
-    ".idea",
-    ".vscode",
-    "node_modules",
-    ".venv",
-    "venv",
-    "env",
-    "dist",
-    "build",
-    "coverage",
-    ".next",
-    ".nuxt",
-    ".turbo",
-    ".cache",
-    "target",
-    "bin",
-    "obj",
-    ".txt",
-    ".pyc"
+    ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".tox", ".idea", ".vscode", "node_modules", ".venv",
+    "venv", "env", "dist", "build", "coverage", ".next", ".nuxt", ".turbo",
+    ".cache", "target", "bin", "obj",
 }
 
-EXCLUDED_FILES = {
-    ".DS_Store",
-    "Thumbs.db",
-}
+EXCLUDED_FILES = {".DS_Store", "Thumbs.db"}
+
+EXCLUDED_EXTENSIONS = {".pyc", ".md"}
 
 TEXT_EXTENSIONS = {
-    ".py",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".mjs",
-    ".cjs",
-    ".json",
-    ".md",
-    ".mdx",
-    ".txt",
-    ".yml",
-    ".yaml",
-    ".toml",
-    ".ini",
-    ".cfg",
-    ".conf",
-    ".css",
-    ".scss",
-    ".sass",
-    ".less",
-    ".html",
-    ".htm",
-    ".xml",
-    ".svg",
-    ".sql",
-    ".sh",
-    ".bash",
-    ".zsh",
-    ".ps1",
-    ".bat",
-    ".cmd",
-    ".java",
-    ".kt",
-    ".kts",
-    ".cs",
-    ".cpp",
-    ".c",
-    ".h",
-    ".hpp",
-    ".go",
-    ".rs",
-    ".php",
-    ".rb",
-    ".swift",
-    ".dart",
-    ".vue",
-    ".svelte",
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json", ".md",
+    ".mdx", ".txt", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf",
+    ".css", ".scss", ".sass", ".less", ".html", ".htm", ".xml", ".svg",
+    ".sql", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd", ".java",
+    ".kt", ".kts", ".cs", ".cpp", ".c", ".h", ".hpp", ".go", ".rs",
+    ".php", ".rb", ".swift", ".dart", ".vue", ".svelte",
 }
 
 TEXT_FILENAMES = {
-    ".env",
-    ".env.local",
-    ".env.development",
-    ".env.production",
-    ".env.test",
-    ".gitignore",
-    ".gitattributes",
-    ".editorconfig",
-    ".prettierrc",
-    ".eslintrc",
-    ".babelrc",
-    "Dockerfile",
-    "dockerfile",
-    "Makefile",
-    "makefile",
-    "README",
-    "LICENSE",
-    "CHANGELOG",
-    "requirements.txt",
-    "Pipfile",
-    "pyproject.toml",
-    "package.json",
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "tsconfig.json",
-    "vite.config.ts",
-    "vite.config.js",
-    "next.config.js",
-    "next.config.ts",
+    ".env", ".env.local", ".env.development", ".env.production", ".env.test",
+    ".gitignore", ".gitattributes", ".editorconfig", ".prettierrc",
+    ".eslintrc", ".babelrc", "Dockerfile", "dockerfile", "Makefile",
+    "makefile", "README", "LICENSE", "CHANGELOG", "requirements.txt",
+    "Pipfile", "pyproject.toml", "package.json", "package-lock.json",
+    "pnpm-lock.yaml", "yarn.lock", "tsconfig.json", "vite.config.ts",
+    "vite.config.js", "next.config.js", "next.config.ts",
+}
+
+LANG_MAP = {
+    ".py": "python", ".js": "javascript", ".jsx": "jsx", ".ts": "typescript",
+    ".tsx": "tsx", ".mjs": "javascript", ".cjs": "javascript", ".json": "json",
+    ".md": "markdown", ".mdx": "mdx", ".yml": "yaml", ".yaml": "yaml",
+    ".toml": "toml", ".ini": "ini", ".cfg": "ini", ".conf": "text",
+    ".css": "css", ".scss": "scss", ".sass": "sass", ".less": "less",
+    ".html": "html", ".htm": "html", ".xml": "xml", ".svg": "xml",
+    ".sql": "sql", ".sh": "bash", ".bash": "bash", ".zsh": "bash",
+    ".ps1": "powershell", ".bat": "batch", ".cmd": "batch", ".java": "java",
+    ".kt": "kotlin", ".kts": "kotlin", ".cs": "csharp", ".cpp": "cpp",
+    ".c": "c", ".h": "c", ".hpp": "cpp", ".go": "go", ".rs": "rust",
+    ".php": "php", ".rb": "ruby", ".swift": "swift", ".dart": "dart",
+    ".vue": "vue", ".svelte": "svelte",
 }
 
 
 def output_file_names() -> set[str]:
-    names = set()
-
-    for index in range(1, CHUNK_COUNT + 1):
-        names.add(f"{OUTPUT_PREFIX}{index}{OUTPUT_SUFFIX}")
-
-    return names
+    return {f"{OUTPUT_PREFIX}{i}{OUTPUT_SUFFIX}" for i in range(1, CHUNK_COUNT + 1)}
 
 
 def should_skip_path(path: Path) -> bool:
-    if path.name in EXCLUDED_FILES:
+    if path.name in EXCLUDED_FILES or path.name in output_file_names():
         return True
-
-    if path.name in output_file_names():
-        return True
-
     if path.name == Path(__file__).name:
         return True
-
+    if path.suffix.lower() in EXCLUDED_EXTENSIONS:
+        return True
     try:
-        relative_parts = path.relative_to(ROOT).parts
+        parts = path.relative_to(ROOT).parts
     except ValueError:
-        relative_parts = path.parts
-
-    for part in relative_parts:
-        if part in EXCLUDED_DIRS:
-            return True
-
-    return False
+        parts = path.parts
+    return any(p in EXCLUDED_DIRS for p in parts)
 
 
-def is_probably_text_file(path: Path) -> bool:
-    if path.name in TEXT_FILENAMES:
+def is_probably_text(path: Path) -> bool:
+    if path.name in TEXT_FILENAMES or path.suffix.lower() in TEXT_EXTENSIONS:
         return True
-
-    if path.suffix.lower() in TEXT_EXTENSIONS:
+    guessed, _ = mimetypes.guess_type(str(path))
+    if guessed and guessed.startswith("text/"):
         return True
-
-    guessed_type, _ = mimetypes.guess_type(str(path))
-
-    if guessed_type and guessed_type.startswith("text/"):
-        return True
-
     try:
-        with path.open("rb") as file:
-            chunk = file.read(4096)
-
+        chunk = path.open("rb").read(4096)
         if b"\x00" in chunk:
             return False
-
         chunk.decode("utf-8")
         return True
-
     except Exception:
         return False
 
 
-def markdown_language(path: Path) -> str:
+def md_lang(path: Path) -> str:
     name = path.name
-    suffix = path.suffix.lower()
-
     if name in {"Dockerfile", "dockerfile"}:
         return "dockerfile"
-
     if name in {"Makefile", "makefile"}:
         return "makefile"
-
     if name.startswith(".env"):
         return "bash"
-
-    language_map = {
-        ".py": "python",
-        ".js": "javascript",
-        ".jsx": "jsx",
-        ".ts": "typescript",
-        ".tsx": "tsx",
-        ".mjs": "javascript",
-        ".cjs": "javascript",
-        ".json": "json",
-        ".md": "markdown",
-        ".mdx": "mdx",
-        ".yml": "yaml",
-        ".yaml": "yaml",
-        ".toml": "toml",
-        ".ini": "ini",
-        ".cfg": "ini",
-        ".conf": "text",
-        ".css": "css",
-        ".scss": "scss",
-        ".sass": "sass",
-        ".less": "less",
-        ".html": "html",
-        ".htm": "html",
-        ".xml": "xml",
-        ".svg": "xml",
-        ".sql": "sql",
-        ".sh": "bash",
-        ".bash": "bash",
-        ".zsh": "bash",
-        ".ps1": "powershell",
-        ".bat": "batch",
-        ".cmd": "batch",
-        ".java": "java",
-        ".kt": "kotlin",
-        ".kts": "kotlin",
-        ".cs": "csharp",
-        ".cpp": "cpp",
-        ".c": "c",
-        ".h": "c",
-        ".hpp": "cpp",
-        ".go": "go",
-        ".rs": "rust",
-        ".php": "php",
-        ".rb": "ruby",
-        ".swift": "swift",
-        ".dart": "dart",
-        ".vue": "vue",
-        ".svelte": "svelte",
-    }
-
-    return language_map.get(suffix, "text")
+    return LANG_MAP.get(path.suffix.lower(), "text")
 
 
-def sha256_file(path: Path) -> str:
-    sha = hashlib.sha256()
-
-    with path.open("rb") as file:
-        while True:
-            block = file.read(1024 * 1024)
-
-            if not block:
-                break
-
-            sha.update(block)
-
-    return sha.hexdigest()
-
-
-def safe_code_fence(content: str) -> str:
-    longest = 0
-    current = 0
-
-    for char in content:
-        if char == "`":
+def safe_fence(content: str) -> str:
+    longest = current = 0
+    for ch in content:
+        if ch == "`":
             current += 1
             longest = max(longest, current)
         else:
             current = 0
-
     return "`" * max(3, longest + 1)
 
 
 def collect_files() -> list[Path]:
     files = []
-
-    for current_root, dir_names, file_names in os.walk(ROOT):
-        current_path = Path(current_root)
-
-        kept_dirs = []
-
-        for dir_name in dir_names:
-            dir_path = current_path / dir_name
-
-            if should_skip_path(dir_path):
-                continue
-
-            kept_dirs.append(dir_name)
-
-        dir_names[:] = kept_dirs
-
-        for file_name in file_names:
-            file_path = current_path / file_name
-
-            if should_skip_path(file_path):
-                continue
-
-            if file_path.is_file():
-                files.append(file_path)
-
-    files.sort(key=lambda path: path.relative_to(ROOT).as_posix().lower())
-
+    for cur_root, dirs, fnames in os.walk(ROOT):
+        cur = Path(cur_root)
+        dirs[:] = [d for d in dirs if not should_skip_path(cur / d)]
+        for f in fnames:
+            fp = cur / f
+            if not should_skip_path(fp) and fp.is_file():
+                files.append(fp)
+    files.sort(key=lambda p: p.relative_to(ROOT).as_posix().lower())
     return files
 
 
-def project_tree_text(files: list[Path]) -> str:
-    lines = []
-
-    for file_path in files:
-        lines.append(file_path.relative_to(ROOT).as_posix())
-
-    return "\n".join(lines)
-
-
-def file_block(file_path: Path) -> str:
-    relative_path = file_path.relative_to(ROOT).as_posix()
-    absolute_path = file_path.resolve()
-    size = file_path.stat().st_size
-
-    guessed_type, guessed_encoding = mimetypes.guess_type(str(file_path))
-    guessed_type = guessed_type or "unknown"
-    guessed_encoding = guessed_encoding or "unknown"
-
-    parts = []
-
-    parts.append("\n---\n\n")
-    parts.append(f"## FILE: `{relative_path}`\n\n")
-    parts.append(f"- Relative path: `{relative_path}`\n")
-    parts.append(f"- Absolute path at snapshot time: `{absolute_path}`\n")
-    parts.append(f"- Size bytes: `{size}`\n")
-    parts.append(f"- SHA256: `{sha256_file(file_path)}`\n")
-    parts.append(f"- Guessed MIME type: `{guessed_type}`\n")
-    parts.append(f"- Guessed encoding: `{guessed_encoding}`\n\n")
+def file_block(fp: Path) -> str:
+    rel = fp.relative_to(ROOT).as_posix()
+    size = fp.stat().st_size
+    parts = [f"\n---\n\n## `{rel}`\n\n"]
 
     if size > MAX_FILE_SIZE_BYTES:
-        parts.append(
-            f"> Skipped content because file is too large: "
-            f"{size} bytes > {MAX_FILE_SIZE_BYTES} bytes.\n"
-        )
+        parts.append(f"> Skipped: too large ({size} bytes)\n")
         return "".join(parts)
 
-    if not is_probably_text_file(file_path):
-        parts.append("> Binary/non-text file detected. Content not copied.\n")
+    if not is_probably_text(fp):
+        parts.append("> Binary file, content skipped.\n")
         return "".join(parts)
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-        language = markdown_language(file_path)
-        fence = safe_code_fence(content)
-
-        parts.append(f"{fence}{language}\n")
+        content = fp.read_text(encoding="utf-8", errors="replace")
+        lang = md_lang(fp)
+        fence = safe_fence(content)
+        parts.append(f"{fence}{lang}\n")
         parts.append(content)
-
         if not content.endswith("\n"):
             parts.append("\n")
-
         parts.append(f"{fence}\n")
-
-    except Exception as exc:
-        parts.append(f"> Error reading file: `{exc}`\n")
+    except Exception as e:
+        parts.append(f"> Error reading: `{e}`\n")
 
     return "".join(parts)
 
 
-def split_files_into_chunks(files: list[Path], chunk_count: int) -> list[list[Path]]:
-    chunks = [[] for _ in range(chunk_count)]
-    chunk_sizes = [0 for _ in range(chunk_count)]
+def build_blocks(files: list[Path]) -> list[tuple[Path, str]]:
+    """Pre-render every file block and return (path, block_text) pairs."""
+    return [(fp, file_block(fp)) for fp in files]
 
-    for file_path in files:
-        try:
-            size = file_path.stat().st_size
-        except Exception:
-            size = 0
 
-        smallest_chunk_index = chunk_sizes.index(min(chunk_sizes))
-        chunks[smallest_chunk_index].append(file_path)
-        chunk_sizes[smallest_chunk_index] += size
+def distribute_chunks(blocks: list[tuple[Path, str]], chunk_count: int) -> list[list[tuple[Path, str]]]:
+    """Greedy distribution by character length into chunk_count buckets."""
+    chunks: list[list[tuple[Path, str]]] = [[] for _ in range(chunk_count)]
+    sizes = [0] * chunk_count
+
+    # Sort blocks largest-first for better bin-packing
+    for item in sorted(blocks, key=lambda x: len(x[1]), reverse=True):
+        idx = sizes.index(min(sizes))
+        chunks[idx].append(item)
+        sizes[idx] += len(item[1])
 
     return chunks
 
 
+def project_tree(files: list[Path]) -> str:
+    return "\n".join(fp.relative_to(ROOT).as_posix() for fp in files)
+
+
 def write_chunk(
-    chunk_index: int,
-    total_chunks: int,
-    chunk_files: list[Path],
+    chunk_idx: int,
+    total: int,
+    chunk_blocks: list[tuple[Path, str]],
     all_files: list[Path],
-    created_at: str,
 ) -> Path:
-    output_path = ROOT / f"{OUTPUT_PREFIX}{chunk_index}{OUTPUT_SUFFIX}"
+    out = ROOT / f"{OUTPUT_PREFIX}{chunk_idx}{OUTPUT_SUFFIX}"
+    with out.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(f"# Repo Snapshot — Part {chunk_idx}/{total}\n\n")
+        f.write(f"- Root: `{ROOT}`\n")
+        f.write(f"- Total files: `{len(all_files)}` | This chunk: `{len(chunk_blocks)}`\n")
+        f.write(f"- you knwo my whole jinni grid systeM/ basically it is thereliek a kubernetes server setup what it does is basically a mother server with ui and bunch of lank state VMs. the vms run a speacial typa of renko style bars not normal timeframe u will get more context in the codes but yeha and we can uipload strategy codes though mother ui and it wiill run strategy mt5 report and ecetra ecetra.theres the whole ui with a professional protfolio and contorls such as settings and fleet management and so on yeah. currently im mostly dont and need bug fixes for many thigns so yeah. understand each code its role and keep in ur context i will give u big promtps to update code later duinerstood\n\n")
 
-    with output_path.open("w", encoding="utf-8", newline="\n") as output:
-        output.write(f"# Repository Snapshot - Part {chunk_index} of {total_chunks}\n\n")
-        output.write(f"- Root folder: `{ROOT}`\n")
-        output.write(f"- you knwo my whole jinni grid systeM/ basically it is thereliek a kubernetes server setup what it does is basically a mother server with ui and bunch of lank state VMs. the vms run a speacial typa of renko style bars not normal timeframe u will get more context in the codes but yeha and we can uipload strategy codes though mother ui and it wiill run strategy mt5 report and ecetra ecetra. currently im done coding the strategy system but its not tested yet an have confrimed bugs. so firm i wil ldrop u my whole project codebases from my readme. understand each code its role and keep in ur context i will give u big promtps to update code later duinerstood\n")
-        output.write(f"- Total files indexed: `{len(all_files)}`\n")
-        output.write(f"- Files in this chunk: `{len(chunk_files)}`\n")
+        if chunk_idx == 1:
+            f.write("## Project Tree\n\n```text\n")
+            f.write(project_tree(all_files))
+            f.write("\n```\n\n")
 
+        f.write(f"## Files in Part {chunk_idx}\n\n```text\n")
+        for fp, _ in chunk_blocks:
+            f.write(fp.relative_to(ROOT).as_posix() + "\n")
+        f.write("```\n\n## Contents\n")
 
-        output.write("## Full Project Tree\n\n")
-        output.write("```text\n")
-        output.write(project_tree_text(all_files))
-        output.write("\n```\n\n")
+        for _, block in chunk_blocks:
+            f.write(block)
 
-        output.write(f"## Files In This Chunk - Part {chunk_index}\n\n")
-        output.write("```text\n")
+    return out
 
-        for file_path in chunk_files:
-            output.write(file_path.relative_to(ROOT).as_posix())
-            output.write("\n")
-
-        output.write("```\n\n")
-
-        output.write("## File Contents\n\n")
-
-        for file_path in chunk_files:
-            output.write(file_block(file_path))
-
-    return output_path
+def delete_old_outputs():
+    for i in range(1, CHUNK_COUNT + 1):
+        p = ROOT / f"{OUTPUT_PREFIX}{i}{OUTPUT_SUFFIX}"
+        if p.exists():
+            p.unlink()
 
 
-def delete_old_outputs() -> None:
-    for index in range(1, CHUNK_COUNT + 1):
-        output_path = ROOT / f"{OUTPUT_PREFIX}{index}{OUTPUT_SUFFIX}"
-
-        if output_path.exists():
-            output_path.unlink()
-
-
-def main() -> None:
+def main():
     delete_old_outputs()
-
     files = collect_files()
-    chunks = split_files_into_chunks(files, CHUNK_COUNT)
-    created_at = datetime.now(timezone.utc).isoformat()
+    blocks = build_blocks(files)
+    chunks = distribute_chunks(blocks, CHUNK_COUNT)
 
-    output_paths = []
+    outputs = []
+    for i, chunk in enumerate(chunks, 1):
+        outputs.append(write_chunk(i, CHUNK_COUNT, chunk, files))
 
-    for index, chunk_files in enumerate(chunks, start=1):
-        output_path = write_chunk(
-            chunk_index=index,
-            total_chunks=CHUNK_COUNT,
-            chunk_files=chunk_files,
-            all_files=files,
-            created_at=created_at,
-        )
+    print("\n✅ Snapshot created.")
+    print(f"Root: {ROOT}")
+    print(f"Total files: {len(files)}\n")
 
-        output_paths.append(output_path)
+    over_limit = False
+    for out in outputs:
+        size = out.stat().st_size
+        chars = out.read_text(encoding="utf-8").__len__()
+        flag = " ⚠️ OVER 12K" if chars > MAX_CHARS_PER_CHUNK else ""
+        print(f"  {out.name}  ({chars} chars / {size} bytes){flag}")
+        if chars > MAX_CHARS_PER_CHUNK:
+            over_limit = True
 
-    print("")
-    print("Snapshot chunks created successfully.")
-    print(f"Root used: {ROOT}")
-    print(f"Total files indexed: {len(files)}")
-    print("")
-    print("Created files:")
-
-    for output_path in output_paths:
-        size = output_path.stat().st_size
-        print(f"- {output_path.name} ({size} bytes)")
-
-    print("")
-    print("Upload these 4 files here:")
-    for output_path in output_paths:
-        print(f"- {output_path.name}")
+    if over_limit:
+        print("\n⚠️  Some chunks exceed 12k chars. Consider increasing CHUNK_COUNT.")
+    print()
 
 
 if __name__ == "__main__":

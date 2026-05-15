@@ -1,6 +1,6 @@
 """
 JINNI Grid - Worker Agent
-Heartbeat + Command polling + Strategy Runner + Validation Runner management.
+Heartbeat + Command polling + Strategy Runner + Validation Runner + Chart flush.
 worker/worker_agent.py
 """
 import os
@@ -164,6 +164,39 @@ class WorkerAgent:
         except Exception as e:
             print(f"[ERROR] Trade report failed: {e}")
 
+    # ── Chart Data Flush ────────────────────────────────────
+
+    def _flush_chart_data(self):
+        """Drain bars + markers from runner and POST to Mother."""
+        runner = self._runner
+        if runner is None:
+            return
+        dep_id = runner.deployment_id
+
+        # Drain bars
+        bars = runner.drain_chart_bars()
+        if bars:
+            try:
+                requests.post(
+                    f"{self.mother_url}/api/charts/bars",
+                    json={"deployment_id": dep_id, "bars": bars},
+                    timeout=10,
+                )
+            except Exception as e:
+                print(f"[CHART] Bar flush failed ({len(bars)} bars): {e}")
+
+        # Drain markers
+        markers = runner.drain_chart_markers()
+        if markers:
+            try:
+                requests.post(
+                    f"{self.mother_url}/api/charts/markers",
+                    json={"deployment_id": dep_id, "markers": markers},
+                    timeout=10,
+                )
+            except Exception as e:
+                print(f"[CHART] Marker flush failed ({len(markers)} markers): {e}")
+
     # ── Validation Callbacks ────────────────────────────────
 
     def _validation_progress_cb(self, data: dict):
@@ -311,10 +344,16 @@ class WorkerAgent:
         print("=" * 56)
         print("")
 
+        _loop_counter = 0
         try:
             while True:
                 self.send_heartbeat()
                 self.poll_commands()
+
+                # ★ Flush chart data every loop (same cadence as heartbeat)
+                self._flush_chart_data()
+
+                _loop_counter += 1
                 time.sleep(self.heartbeat_interval)
 
         except KeyboardInterrupt:

@@ -1,10 +1,10 @@
-# Repository Snapshot - Part 1 of 4
+# Repo Snapshot — Part 1/5
 
-- Root folder: `/home/hurairahengg/Documents/JinniGrid`
+- Root: `/home/hurairahengg/Documents/JinniGrid`
+- Total files: `28` | This chunk: `1`
 - you knwo my whole jinni grid systeM/ basically it is thereliek a kubernetes server setup what it does is basically a mother server with ui and bunch of lank state VMs. the vms run a speacial typa of renko style bars not normal timeframe u will get more context in the codes but yeha and we can uipload strategy codes though mother ui and it wiill run strategy mt5 report and ecetra ecetra.theres the whole ui with a professional protfolio and contorls such as settings and fleet management and so on yeah. currently im mostly dont and need bug fixes for many thigns so yeah. understand each code its role and keep in ur context i will give u big promtps to update code later duinerstood
-- Total files indexed: `27`
-- Files in this chunk: `5`
-## Full Project Tree
+
+## Project Tree
 
 ```text
 app/__init__.py
@@ -18,3118 +18,2432 @@ app/services/mainServices.py
 app/services/strategy_registry.py
 config.yaml
 main.py
-README.md
 requirements.txt
 ui/css/style.css
 ui/index.html
 ui/js/main.js
+ui/js/validationRenderer.js
 ui/js/workerDetailRenderer.js
 vm/config.yaml
 vm/core/strategy_worker.py
+vm/core/validation_runner.py
 vm/logging/event_log.py
-vm/README.md
 vm/requirements.txt
 vm/trading/execution.py
 vm/trading/indicators.py
 vm/trading/mt5_history.py
 vm/trading/portfolio.py
+vm/trading/sim_executor.py
 vm/worker_agent.py
 ```
 
-## Files In This Chunk - Part 1
+## Files in Part 1
 
 ```text
-app/__init__.py
-app/services/__init__.py
-app/services/mainServices.py
-vm/config.yaml
-vm/core/strategy_worker.py
+ui/js/main.js
 ```
 
-## File Contents
-
+## Contents
 
 ---
 
-## FILE: `app/__init__.py`
+## `ui/js/main.js`
 
-- Relative path: `app/__init__.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/app/__init__.py`
-- Size bytes: `2034`
-- SHA256: `1d2a3166b4f2cd9b91fb58554de998d2261a21fc79daee6db6c1dc2b85da5304`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
+```javascript
+/* ================================================================
+   JINNI GRID — Professional Trading Dashboard
+   ui/js/main.js — Complete UI Module (FULL VERSION)
+   
+   Sections:
+   1. ApiClient
+   2. ModalManager / ToastManager / ThemeManager
+   3. ChartHelper
+   4. Formatting Utilities
+   5. Reusable UI Components
+   6. DashboardRenderer (with Portfolio Summary Strip)
+   7. FleetRenderer
+   8. StrategiesRenderer
+   9. PortfolioRenderer (5 sub-tabs: Overview, Equity&Risk, Strategies, VMs, Trades)
+   10. LogsRenderer
+   11. SettingsRenderer (General + Admin)
+   12. App (Navigation)
+   ================================================================ */
 
-```python
-"""
-JINNI Grid Mother Server - Application Factory
-app/__init__.py
-"""
+/* ================================================================
+   1. API CLIENT
+   ================================================================ */
+var ApiClient = (function () {
+  'use strict';
 
-import os
+  function _request(method, path, body) {
+    var opts = { method: method };
+    if (body !== undefined) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(path, opts).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (text) {
+          var msg = 'HTTP ' + res.status;
+          try {
+            var j = JSON.parse(text);
+            if (j.detail) msg = typeof j.detail === 'string' ? j.detail : (j.detail.error || JSON.stringify(j.detail));
+          } catch (e) { if (text) msg = text; }
+          var err = new Error(msg);
+          err.status = res.status;
+          throw err;
+        });
+      }
+      return res.json();
+    });
+  }
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.staticfiles import StaticFiles
-from starlette.responses import FileResponse
+  function _queryString(params) {
+    var q = [];
+    if (params) {
+      for (var k in params) {
+        if (params[k] !== null && params[k] !== undefined && params[k] !== '') {
+          q.push(k + '=' + encodeURIComponent(params[k]));
+        }
+      }
+    }
+    return q.length ? '?' + q.join('&') : '';
+  }
 
-from app.config import Config
-from app.routes.mainRoutes import router as main_routes_router
+  function _upload(path, file) {
+    var fd = new FormData();
+    fd.append('file', file);
+    return fetch(path, { method: 'POST', body: fd }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (t) {
+          var m = 'HTTP ' + res.status;
+          try { var j = JSON.parse(t); if (j.detail) m = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch (e) { if (t) m = t; }
+          throw new Error(m);
+        });
+      }
+      return res.json();
+    });
+  }
+
+  return {
+    /* Fleet / Workers */
+    getFleetWorkers: function () { return _request('GET', '/api/Grid/workers'); },
+    getSystemSummary: function () { return _request('GET', '/api/system/summary'); },
+    getHealth: function () { return _request('GET', '/api/health'); },
+
+    /* Strategies */
+    getStrategies: function () { return _request('GET', '/api/grid/strategies'); },
+    getStrategy: function (id) { return _request('GET', '/api/grid/strategies/' + encodeURIComponent(id)); },
+    uploadStrategy: function (file) { return _upload('/api/grid/strategies/upload', file); },
+    validateStrategy: function (id) { return _request('POST', '/api/grid/strategies/' + encodeURIComponent(id) + '/validate'); },
+
+    /* Deployments */
+    createDeployment: function (cfg) { return _request('POST', '/api/grid/deployments', cfg); },
+    getDeployments: function () { return _request('GET', '/api/grid/deployments'); },
+    getDeployment: function (id) { return _request('GET', '/api/grid/deployments/' + encodeURIComponent(id)); },
+    stopDeployment: function (id) { return _request('POST', '/api/grid/deployments/' + encodeURIComponent(id) + '/stop'); },
+
+    /* Portfolio (all accept filter params) */
+    getPortfolioSummary: function (params) { return _request('GET', '/api/portfolio/summary' + _queryString(params)); },
+    getEquityHistory: function () { return _request('GET', '/api/portfolio/equity-history'); },
+    getPortfolioTrades: function (params) { return _request('GET', '/api/portfolio/trades' + _queryString(params)); },
+    getPortfolioPerformance: function (params) { return _request('GET', '/api/portfolio/performance' + _queryString(params)); },
+
+    /* Events */
+    getEvents: function (params) { return _request('GET', '/api/events' + _queryString(params)); },
+
+    /* Settings */
+    getSettings: function () { return _request('GET', '/api/settings'); },
+    saveSettings: function (settings) { return _request('PUT', '/api/settings', { settings: settings }); },
+
+    /* Admin */
+    getAdminStats: function () { return _request('GET', '/api/admin/stats'); },
+    adminDeleteStrategy: function (sid) { return _request('POST', '/api/admin/strategies/' + sid + '/delete'); },
+    adminResetPortfolio: function () { return _request('POST', '/api/admin/portfolio/reset'); },
+    adminClearTrades: function () { return _request('POST', '/api/admin/trades/clear'); },
+    adminRemoveWorker: function (wid) { return _request('POST', '/api/admin/workers/' + wid + '/remove'); },
+    adminRemoveStaleWorkers: function () { return _request('POST', '/api/admin/workers/stale/remove'); },
+    adminClearEvents: function () { return _request('POST', '/api/admin/events/clear'); },
+    adminFullReset: function () { return _request('POST', '/api/admin/system/reset', { confirm: 'RESET_EVERYTHING' }); },
+    emergencyStopAll: function () { return _request('POST', '/api/admin/emergency-stop'); }
+  };
+})();
+
+/* ================================================================
+   GLOBAL SETTINGS — Fetches from backend, used everywhere
+   ================================================================ */
+
+var GlobalSettings = (function () {
+  'use strict';
+
+  var _settings = {
+    refresh_interval: '5',
+    default_symbol: 'XAUUSD',
+    default_bar_size: '100',
+    default_lot_size: '0.01',
+    default_max_bars: '500',
+    default_tick_lookback_value: '30',
+    default_tick_lookback_unit: 'minutes',
+    default_spread: '0',
+    default_commission: '0',
+    debug_mode: 'true',
+    worker_timeout_seconds: '90',
+    log_verbosity: 'INFO',
+  };
+
+  var _loaded = false;
+  var _listeners = [];
+
+  function load() {
+    return fetch('/api/admin/settings').then(function (r) {
+      return r.json();
+    }).then(function (data) {
+      if (data.settings) {
+        for (var k in data.settings) {
+          _settings[k] = data.settings[k];
+        }
+      }
+      _loaded = true;
+      _listeners.forEach(function (fn) { try { fn(_settings); } catch (e) {} });
+      _listeners = [];
+      console.log('[SETTINGS] Loaded:', _settings);
+      return _settings;
+    }).catch(function (e) {
+      console.warn('[SETTINGS] Failed to load, using defaults:', e);
+      _loaded = true;
+      return _settings;
+    });
+  }
+
+  function get(key, fallback) {
+    var val = _settings[key];
+    if (val === undefined || val === null || val === '') return fallback;
+    return val;
+  }
+
+  function getFloat(key, fallback) {
+    var val = parseFloat(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getInt(key, fallback) {
+    var val = parseInt(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getAll() {
+    return Object.assign({}, _settings);
+  }
+
+  function isLoaded() { return _loaded; }
+
+  function onReady(fn) {
+    if (_loaded) { fn(_settings); }
+    else { _listeners.push(fn); }
+  }
+
+  /* Convenience: get deployment defaults as an object */
+  function getDeploymentDefaults() {
+    return {
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      tick_lookback_value: getInt('default_tick_lookback_value', 30),
+      tick_lookback_unit: get('default_tick_lookback_unit', 'minutes'),
+    };
+  }
+
+  function getValidationDefaults() {
+    return {
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      spread_points: getFloat('default_spread', 0),
+      commission_per_lot: getFloat('default_commission', 0),
+    };
+  }
+
+  return {
+    load: load,
+    get: get,
+    getFloat: getFloat,
+    getInt: getInt,
+    getAll: getAll,
+    isLoaded: isLoaded,
+    onReady: onReady,
+    getDeploymentDefaults: getDeploymentDefaults,
+    getValidationDefaults: getValidationDefaults,
+  };
+})();
+
+/* ── DEPLOYMENT CONFIG ──────────────────────────────────────── */
+var DeploymentConfig = (function () {
+  'use strict';
+
+  var tickLookbackUnits = ['minutes', 'hours', 'days'];
+
+  function getRuntimeDefaults() {
+    /* Pull from GlobalSettings (live from backend) */
+    return GlobalSettings.getDeploymentDefaults();
+  }
+
+  return {
+    get runtimeDefaults() { return getRuntimeDefaults(); },
+    tickLookbackUnits: tickLookbackUnits,
+  };
+})();
+
+/* ================================================================
+   2. MODAL / TOAST / THEME MANAGERS
+   ================================================================ */
+var ModalManager = (function () {
+  'use strict';
+  var _overlay = null;
+
+  function show(options) {
+    hide();
+    var title = options.title || 'Confirm';
+    var bodyHtml = options.bodyHtml || '';
+    var confirmText = options.confirmText || 'Confirm';
+    var cancelText = options.cancelText || 'Cancel';
+    var type = options.type || 'default';
+    var onConfirm = options.onConfirm || function () {};
+    var confirmStyle = type === 'danger' ? ' style="background:var(--danger);"' : '';
+
+    _overlay = document.createElement('div');
+    _overlay.className = 'modal-overlay';
+    _overlay.innerHTML =
+      '<div class="modal-card">' +
+        '<div class="modal-header">' +
+          '<span class="modal-title">' + title + '</span>' +
+          '<button class="modal-close" id="modal-close">&times;</button>' +
+        '</div>' +
+        '<div class="modal-body">' + bodyHtml + '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="wd-btn wd-btn-ghost" id="modal-cancel">' + cancelText + '</button>' +
+          '<button class="wd-btn wd-btn-primary" id="modal-confirm"' + confirmStyle + '>' + confirmText + '</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(_overlay);
+    _overlay.querySelector('#modal-close').addEventListener('click', hide);
+    _overlay.querySelector('#modal-cancel').addEventListener('click', hide);
+    _overlay.querySelector('#modal-confirm').addEventListener('click', function () { onConfirm(); hide(); });
+    _overlay.addEventListener('click', function (e) { if (e.target === _overlay) hide(); });
+  }
+
+  function hide() {
+    if (_overlay && _overlay.parentNode) _overlay.parentNode.removeChild(_overlay);
+    _overlay = null;
+  }
+
+  return { show: show, hide: hide };
+})();
+
+var ToastManager = (function () {
+  'use strict';
+  var iconMap = {
+    success: 'fa-circle-check',
+    info: 'fa-circle-info',
+    warning: 'fa-triangle-exclamation',
+    error: 'fa-circle-xmark'
+  };
+
+  function _getContainer() {
+    var c = document.querySelector('.toast-container');
+    if (!c) { c = document.createElement('div'); c.className = 'toast-container'; document.body.appendChild(c); }
+    return c;
+  }
+
+  function show(message, type, duration) {
+    type = type || 'info';
+    duration = duration || 4000;
+    var container = _getContainer();
+    var toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+    toast.innerHTML = '<i class="fa-solid ' + (iconMap[type] || iconMap.info) + '"></i><span>' + message + '</span><button class="toast-dismiss"><i class="fa-solid fa-xmark"></i></button>';
+    container.appendChild(toast);
+    toast.querySelector('.toast-dismiss').addEventListener('click', function () { _remove(toast); });
+    setTimeout(function () { _remove(toast); }, duration);
+  }
+
+  function _remove(toast) {
+    if (!toast || !toast.parentNode) return;
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(20px)';
+    toast.style.transition = 'all 0.3s ease';
+    setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+  }
+
+  return { show: show };
+})();
+
+var ThemeManager = (function () {
+  'use strict';
+  var STORAGE_KEY = 'jinni-Grid-theme';
+  var currentTheme = 'dark';
+
+  function init() {
+    var saved = localStorage.getItem(STORAGE_KEY);
+    currentTheme = saved === 'light' ? 'light' : 'dark';
+    applyTheme();
+    updateToggleButton();
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.addEventListener('click', toggle);
+  }
+
+  function toggle() {
+    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem(STORAGE_KEY, currentTheme);
+    applyTheme();
+    updateToggleButton();
+  }
+
+  function applyTheme() { document.body.setAttribute('data-theme', currentTheme); }
+
+  function updateToggleButton() {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    var icon = btn.querySelector('i');
+    var label = btn.querySelector('span');
+    if (currentTheme === 'dark') {
+      icon.className = 'fa-solid fa-sun';
+      label.textContent = 'Light Mode';
+    } else {
+      icon.className = 'fa-solid fa-moon';
+      label.textContent = 'Dark Mode';
+    }
+  }
+
+  function getTheme() { return currentTheme; }
+  return { init: init, toggle: toggle, getTheme: getTheme };
+})();
 
 
-def create_app() -> FastAPI:
-    app_config = Config.get_app_config()
-    cors_origins = Config.get_cors_origins()
+/* ================================================================
+   3. CHART HELPER
+   ================================================================ */
+var ChartHelper = (function () {
+  'use strict';
+  function _isDark() { return ThemeManager.getTheme() === 'dark'; }
 
-    app = FastAPI(
-        title=app_config["name"],
-        version=app_config["version"],
-        description="JINNI Grid Mother Server - Integrated Dashboard + Fleet API",
-    )
+  function gridColor() { return _isDark() ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'; }
+  function textColor() { return _isDark() ? '#94a3b8' : '#475569'; }
+  function accentColor() { return '#06b6d4'; }
+  function successColor() { return '#10b981'; }
+  function dangerColor() { return '#ef4444'; }
+  function warningColor() { return '#f59e0b'; }
+  function purpleColor() { return '#8b5cf6'; }
+  function tooltipBg() { return _isDark() ? '#1e293b' : '#ffffff'; }
+  function tooltipColor() { return _isDark() ? '#e2e8f0' : '#1e293b'; }
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+  function baseLineOpts(extraOpts) {
+    var o = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: tooltipBg(),
+          titleColor: tooltipColor(),
+          bodyColor: tooltipColor(),
+          borderColor: gridColor(),
+          borderWidth: 1,
+          cornerRadius: 6,
+          padding: 10,
+          titleFont: { family: 'Inter', size: 11 },
+          bodyFont: { family: 'JetBrains Mono', size: 10 },
+          callbacks: {
+            label: function (ctx) { return '$' + (ctx.parsed.y || 0).toFixed(2); }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: gridColor(), drawBorder: false },
+          ticks: { color: textColor(), font: { family: 'JetBrains Mono', size: 9 }, maxRotation: 0, maxTicksLimit: 12 }
+        },
+        y: {
+          grid: { color: gridColor(), drawBorder: false },
+          ticks: { color: textColor(), font: { family: 'JetBrains Mono', size: 9 } }
+        }
+      },
+      interaction: { mode: 'index', intersect: false },
+      animation: { duration: 500 }
+    };
+    if (extraOpts) { for (var k in extraOpts) o[k] = extraOpts[k]; }
+    return o;
+  }
 
-    app.include_router(main_routes_router)
-
-    ui_dir = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "ui")
-    )
-
-    css_dir = os.path.join(ui_dir, "css")
-    js_dir = os.path.join(ui_dir, "js")
-    index_path = os.path.join(ui_dir, "index.html")
-
-    if os.path.isdir(css_dir):
-        app.mount("/css", StaticFiles(directory=css_dir), name="css")
-    if os.path.isdir(js_dir):
-        app.mount("/js", StaticFiles(directory=js_dir), name="js")
-
-    @app.get("/", include_in_schema=False)
-    async def serve_dashboard():
-        return FileResponse(index_path)
-
-    # ── Initialize persistence ───────────────────────────────
-    from app.persistence import init_db
-    init_db()
-
-    # ── Restore strategies from disk ─────────────────────────
-    from app.services.strategy_registry import load_strategies_from_disk
-    load_strategies_from_disk()
-
-    # ── Load workers from DB into memory cache ───────────────
-    from app.services.mainServices import _load_workers_from_db
-    _load_workers_from_db()
-
-    return app
-```
-
----
-
-## FILE: `app/services/__init__.py`
-
-- Relative path: `app/services/__init__.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/app/services/__init__.py`
-- Size bytes: `32`
-- SHA256: `7c8c9aaeb9f535f7ae6fc3fdcc296366803058cb89ef2cde2421ccff1612799b`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-# JINNI Grid - Services package
-```
-
----
-
-## FILE: `app/services/mainServices.py`
-
-- Relative path: `app/services/mainServices.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/app/services/mainServices.py`
-- Size bytes: `32199`
-- SHA256: `e0c24dec7d31169f86c5294743bd0c3acf010346d6001974c6fe1ef212b5bdfb`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI GRID — Combined Runtime Services
-app/services/mainServices.py
-
-Portfolio computations use ISO date strings from the DB (not raw Unix timestamps).
-Equity snapshots throttled to max once per 10 seconds.
-All monetary values rounded to 2 decimals.
-"""
-
-import logging
-import math
-import threading
-import time
-import uuid
-from datetime import datetime, timedelta, timezone
-
-from app.config import Config
-from app.persistence import (
-    init_db,
-    save_worker, get_all_workers_db, get_worker_db,
-    save_deployment, get_all_deployments_db, get_deployment_db,
-    update_deployment_state_db,
-    log_event_db, get_events_db,
-    save_trade_db, get_all_trades_db,
-    save_equity_snapshot_db, get_equity_snapshots_db, clear_equity_snapshots_db,
-    get_setting, get_all_settings, save_setting, save_settings_bulk,
-    delete_all_trades_db, delete_trades_by_strategy_db,
-    delete_trades_by_worker_db,
-    delete_strategy_full_db, remove_worker_db, remove_stale_workers_db,
-    clear_events_db, get_system_stats_db, full_system_reset_db,
-)
-
-log = logging.getLogger("jinni.services")
+  return {
+    gridColor: gridColor, textColor: textColor, accentColor: accentColor,
+    successColor: successColor, dangerColor: dangerColor, warningColor: warningColor,
+    purpleColor: purpleColor, tooltipBg: tooltipBg, tooltipColor: tooltipColor,
+    baseLineOpts: baseLineOpts
+  };
+})();
 
 
-def _r2(v):
-    if v is None:
-        return 0.0
-    try:
-        return round(float(v), 2)
-    except (ValueError, TypeError):
-        return 0.0
+/* ================================================================
+   4. FORMATTING UTILITIES (2-decimal, no float garbage)
+   ================================================================ */
+function _fmtMoney(v) {
+  if (v === null || v === undefined) return '\u2014';
+  var n = Math.round(Number(v) * 100) / 100;
+  if (isNaN(n)) return '\u2014';
+  var abs = Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (n > 0) return '+$' + abs;
+  if (n < 0) return '-$' + abs;
+  return '$0.00';
+}
 
+function _fmtPct(v) {
+  if (v === null || v === undefined) return '\u2014';
+  return (Math.round(v * 10) / 10).toFixed(1) + '%';
+}
 
-# ── Timestamp helpers (for portfolio date grouping) ─────────
+function _fmtNum(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(Math.round(n * 100) / 100);
+}
 
-def _trade_exit_date(t: dict) -> str:
-    """Extract YYYY-MM-DD from a trade record, handling all formats."""
-    # 1. ISO exit_time string (set by persistence layer)
-    et = t.get("exit_time")
-    if et and isinstance(et, str) and len(et) >= 10 and et[4:5] == "-":
-        return et[:10]
-    # 2. Unix timestamp in exit_time_unix
-    etu = t.get("exit_time_unix")
-    if etu:
-        try:
-            v = int(etu)
-            if v > 946684800:
-                return datetime.fromtimestamp(
-                    v, tz=timezone.utc
-                ).strftime("%Y-%m-%d")
-        except (ValueError, TypeError, OSError):
-            pass
-    # 3. created_at from DB
-    ca = t.get("created_at")
-    if ca and isinstance(ca, str) and len(ca) >= 10:
-        return ca[:10]
-    return ""
+function _fmtAge(seconds) {
+  if (seconds === null || seconds === undefined) return '\u2014';
+  var s = Math.round(seconds);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's ago';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
+}
 
-
-def _trade_exit_month(t: dict) -> str:
-    d = _trade_exit_date(t)
-    return d[:7] if len(d) >= 7 else ""
-
-
-# =============================================================================
-# Command Queue
-# =============================================================================
-
-_command_queues: dict = {}
-_command_lock = threading.Lock()
-
-
-def enqueue_command(worker_id: str, command_type: str, payload: dict) -> dict:
-    cmd_id = str(uuid.uuid4())[:12]
-    now = datetime.now(timezone.utc)
-    cmd = {"command_id": cmd_id, "worker_id": worker_id,
-           "command_type": command_type, "payload": payload,
-           "state": "pending", "created_at": now.isoformat(), "acked_at": None}
-    with _command_lock:
-        _command_queues.setdefault(worker_id, []).append(cmd)
-    log_event_db("command", "enqueued", f"{command_type} for {worker_id}",
-                 worker_id=worker_id, data={"command_id": cmd_id})
-    return cmd
-
-
-def poll_commands(worker_id: str) -> list:
-    now = datetime.now(timezone.utc)
-    with _command_lock:
-        queue = _command_queues.get(worker_id, [])
-        pending = [c for c in queue if c["state"] == "pending"]
-        _command_queues[worker_id] = [
-            c for c in queue
-            if c["state"] == "pending" or (
-                c.get("acked_at") and
-                (now - datetime.fromisoformat(c["acked_at"])
-                 ).total_seconds() < 300
-            )
-        ]
-    return pending
-
-
-def ack_command(worker_id: str, command_id: str) -> dict:
-    now = datetime.now(timezone.utc)
-    with _command_lock:
-        for cmd in _command_queues.get(worker_id, []):
-            if cmd["command_id"] == command_id:
-                cmd["state"] = "acknowledged"
-                cmd["acked_at"] = now.isoformat()
-                return {"ok": True, "command": cmd}
-    return {"ok": False, "error": "Command not found."}
-
-
-# =============================================================================
-# Deployment Registry
-# =============================================================================
-
-VALID_STATES = {
-    "queued", "sent_to_worker", "acknowledged_by_worker", "loading_strategy",
-    "fetching_ticks", "generating_initial_bars", "warming_up", "running",
-    "stopped", "failed",
+function _nullVal(val, fallback) {
+  if (val === null || val === undefined || val === '') {
+    return '<span style="opacity:0.4;">' + (fallback || '\u2014') + '</span>';
+  }
+  return String(val);
 }
 
 
-def create_deployment(config: dict) -> dict:
-    deployment_id = str(uuid.uuid4())[:12]
-    now = datetime.now(timezone.utc)
-    settings = get_all_settings()
-    record = {
-        "deployment_id": deployment_id,
-        "strategy_id": config["strategy_id"],
-        "worker_id": config["worker_id"],
-        "symbol": config.get("symbol") or settings.get(
-            "default_symbol", "XAUUSD"),
-        "tick_lookback_value": config.get("tick_lookback_value", 30),
-        "tick_lookback_unit": config.get("tick_lookback_unit", "minutes"),
-        "bar_size_points": config.get("bar_size_points") or float(
-            settings.get("default_bar_size", "100")),
-        "max_bars_in_memory": config.get("max_bars_in_memory", 500),
-        "lot_size": config.get("lot_size") or float(
-            settings.get("default_lot_size", "0.01")),
-        "strategy_parameters": config.get("strategy_parameters") or {},
-        "state": "queued",
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat(),
-        "last_error": None,
-    }
-    save_deployment(deployment_id, record)
-    log_event_db("deployment", "created",
-                 f"Deployment {deployment_id} created",
-                 worker_id=config["worker_id"],
-                 strategy_id=config["strategy_id"],
-                 deployment_id=deployment_id, symbol=record["symbol"])
-    return {"ok": True, "deployment_id": deployment_id,
-            "deployment": record}
+/* ================================================================
+   5. REUSABLE UI COMPONENTS
+   ================================================================ */
+function _spinner(minHeight) {
+  return '<div class="loading-state" style="min-height:' + (minHeight || 120) + 'px;"><div class="spinner"></div></div>';
+}
+
+function _emptyState(icon, title, subtitle) {
+  return '<div style="padding:48px 24px;text-align:center;color:var(--text-muted);">' +
+    '<i class="fa-solid ' + icon + '" style="font-size:36px;opacity:0.15;display:block;margin-bottom:14px;"></i>' +
+    '<div style="font-weight:600;font-size:13px;margin-bottom:4px;">' + title + '</div>' +
+    (subtitle ? '<div style="font-size:11px;opacity:0.6;">' + subtitle + '</div>' : '') +
+    '</div>';
+}
+
+function _metricItem(label, value, colorClass) {
+  return '<div style="text-align:center;min-width:80px;">' +
+    '<div class="mono' + (colorClass ? ' ' + colorClass : '') + '" style="font-size:15px;font-weight:700;line-height:1.2;">' + value + '</div>' +
+    '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;white-space:nowrap;">' + label + '</div>' +
+    '</div>';
+}
+
+function _metricPill(label, value, colorClass) {
+  return '<div class="metric-pill">' +
+    '<div class="metric-pill-value mono' + (colorClass ? ' ' + colorClass : '') + '">' + value + '</div>' +
+    '<div class="metric-pill-label">' + label + '</div>' +
+    '</div>';
+}
+
+function _statPill(text, type) {
+  return '<span class="state-pill ' + (type || '') + '">' + text + '</span>';
+}
+
+function _sectionHeader(icon, title, badge) {
+  return '<div class="section-header"><i class="fa-solid ' + icon + '"></i><h2>' + title + '</h2>' +
+    (badge ? '<span class="section-badge">' + badge + '</span>' : '') +
+    '</div>';
+}
+
+function _fleetBadge(count, label, type) {
+  return '<div class="fleet-badge"><span class="badge-count ' + type + '">' + count + '</span><span class="badge-label">' + label + '</span></div>';
+}
 
 
-def get_all_deployments() -> list:
-    return get_all_deployments_db()
+/* ================================================================
+   6. DASHBOARD RENDERER (with Portfolio Summary Strip)
+   ================================================================ */
+var DashboardRenderer = (function () {
+  'use strict';
+  var _intervals = [];
+  var _charts = {};
+  var _lastFleetWorkers = [];
 
+  function _destroyCharts() {
+    for (var k in _charts) { if (_charts[k]) { _charts[k].destroy(); delete _charts[k]; } }
+  }
 
-def get_deployment(deployment_id: str):
-    return get_deployment_db(deployment_id)
+  function render() {
+    var html = '<div class="dashboard">';
 
+    /* ── Top Dashboard Strip (Portfolio + System — unified) ─── */
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;" id="dash-top-strip">';
 
-def update_deployment_state(deployment_id: str, state: str,
-                             error: str = None) -> dict:
-    if state not in VALID_STATES:
-        return {"ok": False, "error": f"Invalid state: {state}"}
-    update_deployment_state_db(deployment_id, state, error)
-    log_event_db("deployment", "state_change",
-                 f"{deployment_id} -> {state}",
-                 deployment_id=deployment_id,
-                 data={"state": state, "error": error},
-                 level="ERROR" if state == "failed" else "INFO")
-    return {"ok": True, "deployment": get_deployment_db(deployment_id)}
+    /* Left: Portfolio */
+    html += '<div class="dash-panel">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;"><i class="fa-solid fa-briefcase" style="color:var(--accent);font-size:13px;"></i><span style="font-weight:600;font-size:13px;">Portfolio</span><span class="section-badge">LIVE</span></div>';
+    html += '<button class="wd-btn wd-btn-ghost" onclick="App.navigateTo(\'portfolio\')" style="font-size:10px;padding:3px 8px;">Analytics <i class="fa-solid fa-arrow-right" style="margin-left:3px;"></i></button>';
+    html += '</div>';
+    html += '<div id="dash-strip-content" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;">' + _spinner(50) + '</div>';
+    html += '</div>';
 
+    /* Right: System Health */
+    html += '<div class="dash-panel">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;"><i class="fa-solid fa-gauge-high" style="color:var(--accent);font-size:13px;"></i><span style="font-weight:600;font-size:13px;">System Health</span><span class="section-badge">LIVE</span></div>';
+    html += '<button class="wd-btn" id="dash-emergency-stop" style="background:rgba(239,68,68,0.1);color:var(--danger);font-size:10px;padding:3px 8px;border:1px solid rgba(239,68,68,0.3);font-weight:600;"><i class="fa-solid fa-circle-stop"></i> STOP</button>';
+    html += '</div>';
+    html += '<div id="dash-kpi" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;">' + _spinner(50) + '</div>';
+    html += '</div>';
 
-def stop_deployment(deployment_id: str) -> dict:
-    return update_deployment_state(deployment_id, "stopped")
+    html += '</div>';
 
+    /* ── Charts Row ──────────────────────────────────────────── */
+    html += '<div class="dash-split-row">';
+    html += '<section class="dash-chart-section dash-panel">' + _sectionHeader('fa-chart-area', 'Equity Curve');
+    html += '<div style="margin-top:12px;"><div class="chart-wrapper" id="dash-equity-wrap"><canvas id="dash-equity-chart"></canvas></div></div></section>';
+    html += '<section class="dash-stats-section dash-panel">' + _sectionHeader('fa-chart-pie', 'Portfolio Stats');
+    html += '<div id="dash-port-stats" class="dash-stats-grid">' + _spinner(200) + '</div></section>';
+    html += '</div>';
 
-# =============================================================================
-# Worker Registry
-# =============================================================================
+    /* ── Fleet + Pipeline + Strategies Row ────────────────────── */
+    html += '<div class="dash-triple-row">';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-server', 'Fleet Health', 'LIVE') + '<div id="dash-fleet" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-diagram-project', 'Pipeline') + '<div id="dash-pipeline" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-crosshairs', 'Active Strategies') + '<div id="dash-strategies" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '</div>';
 
-_workers_cache: dict = {}
-_worker_lock = threading.Lock()
-_last_snapshot_time: float = 0.0  # throttle equity snapshots
-_SNAPSHOT_INTERVAL = 10.0         # seconds between snapshots
+    /* ── Trades + Deployments Row ─────────────────────────────── */
+    html += '<div class="dash-dual-row">';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-receipt', 'Recent Trades') + '<div id="dash-trades" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '<section class="dash-panel">' + _sectionHeader('fa-rocket', 'Deployments', 'LIVE') + '<div id="dash-deploys" class="dash-panel-body">' + _spinner() + '</div></section>';
+    html += '</div>';
 
+    html += '</div>';
+    document.getElementById('main-content').innerHTML = html;
 
-def _load_workers_from_db():
-    global _workers_cache
-    db_workers = get_all_workers_db()
-    with _worker_lock:
-        for w in db_workers:
-            wid = w["worker_id"]
-            hb_at = w.get("last_heartbeat_at")
-            if hb_at:
-                try:
-                    dt = datetime.fromisoformat(hb_at)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                except (ValueError, TypeError):
-                    dt = datetime.now(timezone.utc)
-            else:
-                dt = datetime.now(timezone.utc)
-            w["_last_heartbeat_dt"] = dt
-            _workers_cache[wid] = w
-
-
-def process_heartbeat(payload: dict) -> dict:
-    global _last_snapshot_time
-    worker_id = payload["worker_id"].strip()
-    now = datetime.now(timezone.utc)
-    is_new = False
-    with _worker_lock:
-        if worker_id not in _workers_cache:
-            is_new = True
-        _workers_cache[worker_id] = {
-            **payload, "worker_id": worker_id,
-            "last_heartbeat_at": now.isoformat(),
-            "_last_heartbeat_dt": now,
+    /* Emergency stop handler */
+    document.getElementById('dash-emergency-stop').addEventListener('click', function () {
+      ModalManager.show({
+        title: '\u26A0 EMERGENCY STOP ALL',
+        type: 'danger',
+        bodyHtml: '<p style="font-weight:600;color:var(--danger);">This will immediately:</p>' +
+          '<ul style="font-size:12px;color:var(--text-muted);margin:8px 0;">' +
+          '<li>Stop all running strategies</li>' +
+          '<li>Close ALL open positions at market</li>' +
+          '<li>Set all deployments to STOPPED</li></ul>',
+        confirmText: 'STOP EVERYTHING',
+        onConfirm: function () {
+          ApiClient.emergencyStopAll().then(function (r) {
+            ToastManager.show('Emergency stop: ' + (r.deployments_stopped || 0) + ' deployments stopped, ' + (r.commands_sent || 0) + ' commands sent.', 'warning', 8000);
+          }).catch(function (e) { ToastManager.show('Failed: ' + e.message, 'error'); });
         }
-    save_worker(worker_id, {**payload, "last_heartbeat_at": now.isoformat()})
-    if is_new:
-        log_event_db("worker", "registered",
-                     f"Worker {worker_id} first heartbeat",
-                     worker_id=worker_id)
+      });
+    });
 
-    # Throttled equity snapshot (max once per 10s, not every heartbeat)
-    mono = time.monotonic()
-    if mono - _last_snapshot_time >= _SNAPSHOT_INTERVAL:
-        _last_snapshot_time = mono
-        _compute_equity_snapshot()
+    _fetchAll();
+    _intervals.push(setInterval(_fetchLive, 10000));
+  }
 
-    return {"ok": True, "worker_id": worker_id, "registered": is_new,
-            "server_time": now.isoformat()}
+  function _fetchAll() {
+    _fetchPortfolioStrip();
+    _fetchKPIs();
+    _fetchEquity();
+    _fetchPortStats();
+    _fetchFleet();
+    _fetchPipeline();
+    _fetchStrategies();
+    _fetchTrades();
+    _fetchDeploys();
+  }
 
+  function _fetchLive() {
+    _fetchPortfolioStrip();
+    _fetchKPIs();
+    _fetchFleet();
+    _fetchPipeline();
+    _fetchDeploys();
+  }
 
-def get_all_workers() -> list:
-    fleet_config = Config.get_fleet_config()
-    timeout_setting = get_setting("worker_timeout_seconds")
-    if timeout_setting:
-        offline_threshold = int(timeout_setting)
-        stale_threshold = max(10, offline_threshold // 3)
-    else:
-        stale_threshold = fleet_config.get("stale_threshold_seconds", 30)
-        offline_threshold = fleet_config.get("offline_threshold_seconds", 90)
+  /* ── Portfolio Summary Strip ──────────────────────────────── */
+  function _fetchPortfolioStrip() {
+    ApiClient.getPortfolioSummary().catch(function () { return { portfolio: {} }; }).then(function (r) {
+      var p = r.portfolio || {};
+      var el = document.getElementById('dash-strip-content');
+      if (!el) return;
+      var hasAcc = p.has_account_data;
+      el.innerHTML =
+        _metricPill('Equity', hasAcc ? ('$' + _fmtNum(p.total_equity || 0)) : (p.net_pnl ? _fmtMoney(p.net_pnl) : 'N/A'), hasAcc ? '' : ((p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger')) +
+        _metricPill('Balance', hasAcc ? ('$' + _fmtNum(p.total_balance || 0)) : '\u2014') +
+        _metricPill('Realized', _fmtMoney(p.net_pnl), (p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Floating', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
+        _metricPill('PF', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
+        _metricPill('Expectancy', _fmtMoney(p.expectancy), (p.expectancy || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Trades', String(p.total_trades || 0));
+    });
+  }
 
-    now = datetime.now(timezone.utc)
-    result = []
-    with _worker_lock:
-        for wid, rec in _workers_cache.items():
-            hb_dt = rec.get("_last_heartbeat_dt", now)
-            age = round((now - hb_dt).total_seconds(), 1)
-            reported = rec.get("reported_state",
-                               rec.get("state", "online"))
-            if age >= offline_threshold:
-                effective = "offline"
-            elif age >= stale_threshold:
-                effective = "stale"
-            else:
-                effective = reported
+  function _fetchKPIs() {
+    Promise.all([
+      ApiClient.getFleetWorkers().catch(function () { return { workers: [], summary: {} }; }),
+      ApiClient.getDeployments().catch(function () { return { deployments: [] }; }),
+      ApiClient.getEvents({ limit: 1, level: 'ERROR' }).catch(function () { return { events: [] }; })
+    ]).then(function (r) {
+      var workers = r[0].workers || [];
+      var fleet = r[0].summary || {};
+      var deps = r[1].deployments || [];
+      var lastErrors = r[2].events || [];
+      var el = document.getElementById('dash-kpi');
+      if (!el) return;
 
-            result.append({
-                "worker_id": rec.get("worker_id", wid),
-                "worker_name": rec.get("worker_name"),
-                "host": rec.get("host"),
-                "state": effective, "reported_state": reported,
-                "last_heartbeat_at": rec.get("last_heartbeat_at"),
-                "heartbeat_age_seconds": age,
-                "agent_version": rec.get("agent_version"),
-                "mt5_state": rec.get("mt5_state"),
-                "account_id": rec.get("account_id"),
-                "broker": rec.get("broker"),
-                "active_strategies": rec.get("active_strategies") or [],
-                "open_positions_count": rec.get("open_positions_count", 0),
-                "floating_pnl": _r2(rec.get("floating_pnl")),
-                "account_balance": _r2(rec.get("account_balance")),
-                "account_equity": _r2(rec.get("account_equity")),
-                "errors": rec.get("errors") or [],
-                "total_ticks": rec.get("total_ticks", 0),
-                "total_bars": rec.get("total_bars", 0),
-                "current_bars_in_memory": rec.get("current_bars_in_memory", 0),
-                "on_bar_calls": rec.get("on_bar_calls", 0),
-                "signal_count": rec.get("signal_count", 0),
-                "last_bar_time": rec.get("last_bar_time"),
-                "current_price": rec.get("current_price"),
-            })
-    return result
+      var running = deps.filter(function (d) { return d.state === 'running'; }).length;
+      var totalDeps = deps.length;
+      var totalPositions = 0;
+      var totalTicks = 0;
+      var totalBars = 0;
+      var totalBarsInMem = 0;
+      var totalSignals = 0;
+      var totalOnBar = 0;
+      var mt5Connected = 0;
+      var freshestHb = Infinity;
+      var errorWorkers = 0;
 
+      workers.forEach(function (w) {
+        totalPositions += (w.open_positions_count || 0);
+        totalTicks += (w.total_ticks || 0);
+        totalBars += (w.total_bars || 0);
+        totalBarsInMem += (w.current_bars_in_memory || 0);
+        totalSignals += (w.signal_count || 0);
+        totalOnBar += (w.on_bar_calls || 0);
+        if (w.mt5_state === 'connected') mt5Connected++;
+        if (w.errors && w.errors.length > 0) errorWorkers++;
+        var age = w.heartbeat_age_seconds || 999;
+        if (age < freshestHb) freshestHb = age;
+      });
 
-def get_fleet_summary() -> dict:
-    workers = get_all_workers()
-    counts = {"online_workers": 0, "stale_workers": 0,
-              "offline_workers": 0, "error_workers": 0,
-              "warning_workers": 0}
-    for w in workers:
-        s = w["state"]
-        if s in ("online", "running", "idle"):
-            counts["online_workers"] += 1
-        elif s == "stale":
-            counts["stale_workers"] += 1
-        elif s == "offline":
-            counts["offline_workers"] += 1
-        elif s == "error":
-            counts["error_workers"] += 1
-    counts["total_workers"] = len(workers)
-    return counts
+      var hbLabel = workers.length === 0 ? 'N/A' : (freshestHb < 60 ? Math.round(freshestHb) + 's' : Math.round(freshestHb / 60) + 'm');
+      var lastErrLabel = 'None';
+      if (lastErrors.length > 0 && lastErrors[0].timestamp) {
+        try { lastErrLabel = lastErrors[0].timestamp.replace('T', ' ').substring(11, 19); } catch (e) { lastErrLabel = 'Error'; }
+      }
 
+      var barsLabel = _fmtNum(totalBars) + (totalBarsInMem > 0 ? ' (' + totalBarsInMem + ')' : '');
 
-# =============================================================================
-# Equity Snapshot Engine (throttled)
-# =============================================================================
+      el.innerHTML =
+        _metricPill('Workers', (fleet.online_workers || 0) + '/' + (fleet.total_workers || 0), (fleet.online_workers || 0) > 0 ? 'text-success' : '') +
+        _metricPill('MT5', mt5Connected + '/' + workers.length, mt5Connected === workers.length && workers.length > 0 ? 'text-success' : mt5Connected > 0 ? 'text-warning' : '') +
+        _metricPill('Strategies', running + ' running', running > 0 ? 'text-success' : '') +
+        _metricPill('Deploys', totalDeps + ' total') +
+        _metricPill('Positions', String(totalPositions), totalPositions > 0 ? 'text-accent' : '') +
+        _metricPill('Ticks', _fmtNum(totalTicks)) +
+        _metricPill('Bars', barsLabel) +
+        _metricPill('Signals', _fmtNum(totalSignals), totalSignals > 0 ? 'text-success' : '') +
+        _metricPill('Last HB', hbLabel, freshestHb < 30 ? 'text-success' : freshestHb < 90 ? 'text-warning' : 'text-danger') +
+        _metricPill('Last Error', lastErrLabel, lastErrors.length > 0 ? 'text-danger' : 'text-success');
+    }).catch(function (err) {
+      console.error('[DASHBOARD] System Health KPIs failed:', err);
+      var el = document.getElementById('dash-kpi');
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:11px;padding:8px;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Failed to load system health.</div>';
+    });
+  }
 
-def _compute_equity_snapshot():
-    total_balance = 0.0
-    total_equity = 0.0
-    total_floating = 0.0
-    open_pos = 0
-    has_account = False
+  /* ── Equity Chart ─────────────────────────────────────────── */
+  function _fetchEquity() {
+    ApiClient.getEquityHistory().then(function (data) {
+      var hist = data.equity_history || [];
+      if (hist.length === 0) {
+        var wrap = document.getElementById('dash-equity-wrap');
+        if (wrap) wrap.innerHTML = _emptyState('fa-chart-area', 'No Equity Data Yet', 'Trades will build the equity curve as strategies execute.');
+        return;
+      }
+      var labels = hist.map(function (h) { return h.label || ''; });
+      var values = hist.map(function (h) { return h.equity; });
+      var canvas = document.getElementById('dash-equity-chart');
+      if (!canvas) return;
+      if (_charts.equity) _charts.equity.destroy();
+      var ctx = canvas.getContext('2d');
+      var gradient = ctx.createLinearGradient(0, 0, 0, 280);
+      gradient.addColorStop(0, 'rgba(6,182,212,0.2)');
+      gradient.addColorStop(1, 'rgba(6,182,212,0)');
+      _charts.equity = new Chart(ctx, {
+        type: 'line',
+        data: { labels: labels, datasets: [{ data: values, borderColor: ChartHelper.accentColor(), backgroundColor: gradient, borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 10 }] },
+        options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return '$' + v.toFixed(0); } } } } })
+      });
+    }).catch(function (err) { console.error('[DASHBOARD] Equity fetch failed:', err); });
+  }
 
-    with _worker_lock:
-        for w in _workers_cache.values():
-            ab = w.get("account_balance")
-            ae = w.get("account_equity")
-            if ab is not None and float(ab or 0) > 0:
-                total_balance += float(ab)
-                has_account = True
-            if ae is not None and float(ae or 0) > 0:
-                total_equity += float(ae)
-                has_account = True
-            total_floating += float(w.get("floating_pnl") or 0)
-            open_pos += int(w.get("open_positions_count") or 0)
+  /* ── Portfolio Stats Grid ─────────────────────────────────── */
+  function _fetchPortStats() {
+    ApiClient.getPortfolioSummary().then(function (data) {
+      var p = data.portfolio || {};
+      var el = document.getElementById('dash-port-stats');
+      if (!el) return;
+      el.innerHTML =
+        _metricPill('Trades', p.total_trades || 0) +
+        _metricPill('Win Rate', _fmtPct(p.win_rate)) +
+        _metricPill('PF', p.profit_factor || 0, (p.profit_factor || 0) >= 1 ? 'text-success' : '') +
+        _metricPill('Sharpe', p.sharpe_estimate || 0) +
+        _metricPill('Sortino', p.sortino_estimate || 0) +
+        _metricPill('Avg Trade', _fmtMoney(p.avg_trade), (p.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger') +
+        _metricPill('Avg Winner', _fmtMoney(p.avg_winner), 'text-success') +
+        _metricPill('Avg Loser', _fmtMoney(p.avg_loser), 'text-danger') +
+        _metricPill('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger') +
+        _metricPill('Best', _fmtMoney(p.best_trade), 'text-success') +
+        _metricPill('Worst', _fmtMoney(p.worst_trade), 'text-danger') +
+        _metricPill('Open Pos', p.open_positions || 0);
+    }).catch(function (err) { console.error('[DASHBOARD] Portfolio stats failed:', err); });
+  }
 
-    # Sum realized PnL from DB (use a fast count, not loading all rows)
-    trades = get_all_trades_db(limit=50000)
-    realized = sum(_r2(t.get("profit")) for t in trades)
+  /* ── Fleet Panel ──────────────────────────────────────────── */
+  function _fetchFleet() {
+    ApiClient.getFleetWorkers().then(function (data) {
+      var workers = data.workers || [];
+      var s = data.summary || {};
+      var el = document.getElementById('dash-fleet');
+      if (!el) return;
+      _lastFleetWorkers = workers;
 
-    if not has_account:
-        total_balance = realized
-        total_equity = realized + total_floating
+      if (workers.length === 0) {
+        el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;"><i class="fa-solid fa-circle-info" style="margin-right:6px;opacity:0.5;"></i>No workers connected.</div>';
+        return;
+      }
 
-    # Only save if we have meaningful data (avoid 0-equity pollution)
-    if _r2(total_equity) != 0 or _r2(total_balance) != 0 or open_pos > 0:
-        try:
-            save_equity_snapshot_db(
-                balance=_r2(total_balance),
-                equity=_r2(total_equity),
-                floating_pnl=_r2(total_floating),
-                open_positions=open_pos,
-                cumulative_pnl=_r2(realized),
-            )
-        except Exception as e:
-            print(f"[PORTFOLIO] Snapshot save failed: {e}")
+      var html = '<div class="fleet-summary" style="margin-bottom:10px;">';
+      html += _fleetBadge(s.online_workers || 0, 'Online', 'online');
+      html += _fleetBadge(s.stale_workers || 0, 'Stale', 'stale');
+      html += _fleetBadge(s.offline_workers || 0, 'Offline', 'offline');
+      html += '</div>';
 
-# =============================================================================
-# Portfolio Engine (correct date handling + extended stats)
-# =============================================================================
+      html += '<table class="compact-fleet-table" style="margin-top:8px;"><thead><tr><th>Worker</th><th>State</th><th>Balance</th><th>Heartbeat</th></tr></thead><tbody>';
+      workers.slice(0, 6).forEach(function (w) {
+        var name = w.worker_name || w.worker_id;
+        var state = w.state || 'unknown';
+        var bal = w.account_balance > 0 ? ('$' + w.account_balance.toFixed(0)) : '<span style="opacity:.4;">\u2014</span>';
+        html += '<tr class="clickable" onclick="DashboardRenderer._openWorker(\'' + w.worker_id + '\')">' +
+          '<td class="mono">' + name + '</td>' +
+          '<td>' + _statPill(state.toUpperCase(), state) + '</td>' +
+          '<td class="mono">' + bal + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + _fmtAge(w.heartbeat_age_seconds) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';
+      el.innerHTML = html;
+    }).catch(function (err) { console.error('[DASHBOARD] Fleet fetch failed:', err); });
+  }
 
-def _compute_trade_stats(trades: list) -> dict:
-    """Comprehensive stats from trade records."""
-    empty = {
-        "total_trades": 0, "wins": 0, "losses": 0,
-        "gross_profit": 0, "gross_loss": 0, "net_pnl": 0,
-        "win_rate": 0, "profit_factor": 0, "expectancy": 0,
-        "avg_trade": 0, "avg_winner": 0, "avg_loser": 0,
-        "best_trade": 0, "worst_trade": 0,
-        "max_drawdown_pct": 0, "max_drawdown_usd": 0,
-        "recovery_factor": 0, "sharpe_estimate": 0,
-        "sortino_estimate": 0, "avg_bars_held": 0,
-        "max_consec_wins": 0, "max_consec_losses": 0,
-        "best_day": None, "worst_day": None, "trades_per_day": 0,
+  /* ── Pipeline Panel ───────────────────────────────────────── */
+  function _fetchPipeline() {
+    ApiClient.getFleetWorkers().then(function (data) {
+      var workers = data.workers || [];
+      var el = document.getElementById('dash-pipeline');
+      if (!el) return;
+      var totalTicks = 0, totalBars = 0, totalBarsInMem = 0, totalSignals = 0, totalOnBar = 0;
+      workers.forEach(function (w) {
+        totalTicks += (w.total_ticks || 0);
+        totalBars += (w.total_bars || 0);
+        totalBarsInMem += (w.current_bars_in_memory || 0);
+        totalSignals += (w.signal_count || 0);
+        totalOnBar += (w.on_bar_calls || 0);
+      });
+      if (workers.length === 0) {
+        el.innerHTML = _emptyState('fa-diagram-project', 'No Pipeline Data', 'Connect worker agents to see live flow.');
+        return;
+      }
+      var barsMemNote = totalBarsInMem > 0 ? '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + totalBarsInMem + ' in mem</div>' : '';
+      el.innerHTML = '<div class="pipeline-flow">' +
+        '<div class="pipeline-node"><span class="pipeline-val accent">' + _fmtNum(totalTicks) + '</span><span class="pipeline-lbl">Ticks</span></div>' +
+        '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
+        '<div class="pipeline-node"><span class="pipeline-val warning">' + _fmtNum(totalBars) + '</span><span class="pipeline-lbl">Bars Gen\u2019d</span>' + barsMemNote + '</div>' +
+        '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
+        '<div class="pipeline-node"><span class="pipeline-val success">' + _fmtNum(totalOnBar) + '</span><span class="pipeline-lbl">on_bar()</span></div>' +
+        '<div class="pipeline-arrow"><i class="fa-solid fa-arrow-right"></i></div>' +
+        '<div class="pipeline-node"><span class="pipeline-val danger">' + _fmtNum(totalSignals) + '</span><span class="pipeline-lbl">Signals</span></div></div>';
+    }).catch(function (err) { console.error('[DASHBOARD] Pipeline fetch failed:', err); });
+  }
+
+  /* ── Strategies Panel ─────────────────────────────────────── */
+  function _fetchStrategies() {
+    Promise.all([
+      ApiClient.getStrategies().catch(function () { return { strategies: [] }; }),
+      ApiClient.getDeployments().catch(function () { return { deployments: [] }; })
+    ]).then(function (r) {
+      var strats = r[0].strategies || [];
+      var deps = r[1].deployments || [];
+      var el = document.getElementById('dash-strategies');
+      if (!el) return;
+      if (strats.length === 0) {
+        el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No strategies registered.</div>';
+        return;
+      }
+      var html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+      strats.forEach(function (s) {
+        var active = deps.filter(function (d) { return d.strategy_id === s.strategy_id && d.state === 'running'; }).length;
+        var total = deps.filter(function (d) { return d.strategy_id === s.strategy_id; }).length;
+        html += '<div class="dash-strat-row">' +
+          '<div class="dash-strat-info">' +
+            '<span class="mono" style="color:var(--accent);font-weight:600;">' + (s.name || s.strategy_id) + '</span>' +
+            '<span class="dash-strat-meta">v' + (s.version || '?') + '</span>' +
+          '</div>' +
+          '<div class="dash-strat-badges">' +
+            (active > 0 ? _statPill(active + ' RUNNING', 'online') : '') +
+            '<span style="font-size:10px;color:var(--text-muted);">' + total + ' deploy' + (total !== 1 ? 's' : '') + '</span>' +
+          '</div></div>';
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    });
+  }
+
+  /* ── Recent Trades Panel ──────────────────────────────────── */
+  function _fetchTrades() {
+    ApiClient.getPortfolioTrades({ limit: 8 }).then(function (data) {
+      var trades = data.trades || [];
+      var el = document.getElementById('dash-trades');
+      if (!el) return;
+      if (trades.length === 0) {
+        el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No trades yet.</div>';
+        return;
+      }
+      var html = '<table class="compact-fleet-table"><thead><tr><th>Symbol</th><th>Dir</th><th>P&L</th><th>Reason</th></tr></thead><tbody>';
+      trades.slice(0, 8).forEach(function (t) {
+        var pnlClass = t.profit >= 0 ? 'text-success' : 'text-danger';
+        html += '<tr>' +
+          '<td class="mono">' + t.symbol + '</td>' +
+          '<td>' + _statPill(t.direction.toUpperCase(), t.direction === 'long' ? 'online' : 'error') + '</td>' +
+          '<td class="mono ' + pnlClass + '">' + _fmtMoney(t.profit) + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + (t.exit_reason || '\u2014') + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'portfolio\')">View Portfolio <i class="fa-solid fa-arrow-right"></i></span>';
+      el.innerHTML = html;
+    }).catch(function (err) { console.error('[DASHBOARD] Trades fetch failed:', err); });
+  }
+
+  /* ── Recent Deployments Panel ─────────────────────────────── */
+  function _fetchDeploys() {
+    ApiClient.getDeployments().then(function (data) {
+      var deps = data.deployments || [];
+      var el = document.getElementById('dash-deploys');
+      if (!el) return;
+      if (deps.length === 0) {
+        el.innerHTML = '<div style="padding:16px 0;color:var(--text-muted);font-size:12px;">No deployments yet.</div>';
+        return;
+      }
+      /* API returns DESC by created_at — take newest 6 directly */
+      deps = deps.slice(0, 6);
+      var html = '<table class="compact-fleet-table"><thead><tr><th>Strategy</th><th>Worker</th><th>Symbol</th><th>State</th><th>Created</th></tr></thead><tbody>';
+      deps.forEach(function (d) {
+        var state = d.state || 'unknown';
+        var sc = state === 'running' ? 'online' : state === 'failed' ? 'error' : state === 'stopped' ? 'offline' : 'stale';
+        var created = d.created_at ? d.created_at.replace('T', ' ').substring(0, 16) : '\u2014';
+        var stratLabel = d.strategy_name || d.strategy_id || '\u2014';
+        if (d.strategy_version) stratLabel += ' v' + d.strategy_version;
+        html += '<tr>' +
+          '<td class="mono">' + stratLabel + '</td>' +
+          '<td class="mono">' + (d.worker_id || '\u2014') + '</td>' +
+          '<td class="mono">' + (d.symbol || '\u2014') + '</td>' +
+          '<td>' + _statPill(state.toUpperCase().replace(/_/g, ' '), sc) + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + created + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }).catch(function (err) {
+      console.error('[DASHBOARD] Failed to load deployments:', err);
+      var el = document.getElementById('dash-deploys');
+      if (el) el.innerHTML = '<div style="padding:16px 0;color:var(--danger);font-size:12px;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Failed to load deployments. Check console.</div>';
+    });
+  }
+
+  function _openWorker(workerId) {
+    for (var i = 0; i < _lastFleetWorkers.length; i++) {
+      if (_lastFleetWorkers[i].worker_id === workerId) {
+        App.navigateToWorkerDetail(_lastFleetWorkers[i]);
+        return;
+      }
     }
-    if not trades:
-        return empty
+  }
 
-    profits = [_r2(t.get("profit")) for t in trades]
-    n = len(profits)
-    win_p = [p for p in profits if p > 0]
-    loss_p = [p for p in profits if p <= 0]
-    bars = [int(t.get("bars_held", 0) or 0) for t in trades]
+  function destroy() {
+    _intervals.forEach(clearInterval);
+    _intervals = [];
+    _destroyCharts();
+  }
 
-    gp = _r2(sum(win_p))
-    gl = _r2(sum(loss_p))
-    net = _r2(gp + gl)
+  return { render: render, destroy: destroy, _openWorker: _openWorker };
+})();
 
-    # Max drawdown (peak-to-trough, capped at 100%)
-    cum, peak, dd_usd, dd_pct = 0.0, 0.0, 0.0, 0.0
-    for p in profits:
-        cum += p
-        if cum > peak:
-            peak = cum
-        d = peak - cum  # always >= 0
-        dd_usd = max(dd_usd, d)
-        # Only compute % when peak is meaningfully positive
-        if peak > 0.01:
-            dp = min((d / peak) * 100, 100.0)  # cap at 100%
-            dd_pct = max(dd_pct, dp)
 
-    # Sharpe
-    mean = net / n
-    var = sum((p - mean) ** 2 for p in profits) / (n - 1) if n > 1 else 0
-    std = math.sqrt(var) if var > 0 else 0
-    sharpe = _r2(mean / std * math.sqrt(252)) if std > 0 else 0
+/* ================================================================
+   7. FLEET RENDERER
+   ================================================================ */
+var FleetRenderer = (function () {
+  'use strict';
+  var _refreshInterval = null;
+  var _lastWorkers = [];
 
-    # Sortino
-    down = [p for p in profits if p < 0]
-    if down and len(down) > 1:
-        dvar = sum(p ** 2 for p in down) / len(down)
-        dstd = math.sqrt(dvar) if dvar > 0 else 0
-        sortino = _r2(mean / dstd * math.sqrt(252)) if dstd > 0 else 0
-    else:
-        sortino = 0
+  function renderNodeCard(w) {
+    var state = w.state || 'unknown';
+    var name = w.worker_name || w.worker_id;
+    var pnlVal = w.floating_pnl !== null && w.floating_pnl !== undefined ? _fmtMoney(w.floating_pnl) : _nullVal(null);
+    var pnlStyle = w.floating_pnl !== null && w.floating_pnl !== undefined ? (w.floating_pnl >= 0 ? 'color:var(--success)' : 'color:var(--danger)') : '';
+    var bal = w.account_balance > 0 ? ('$' + w.account_balance.toFixed(2)) : '\u2014';
 
-    # Consecutive
-    mcw, mcl, cw, cl = 0, 0, 0, 0
-    for p in profits:
-        if p > 0:
-            cw += 1; cl = 0
-        else:
-            cl += 1; cw = 0
-        mcw = max(mcw, cw)
-        mcl = max(mcl, cl)
+    function _row(l, v) { return '<div class="node-info-row"><span class="node-info-label">' + l + '</span><span class="node-info-value">' + v + '</span></div>'; }
 
-    # ★ FIX: Daily grouping uses _trade_exit_date (handles Unix timestamps)
-    daily = {}
-    for t in trades:
-        d = _trade_exit_date(t)
-        if not d:
-            continue
-        daily.setdefault(d, 0.0)
-        daily[d] += float(t.get("profit", 0) or 0)
+    return '<div class="node-card clickable" onclick="FleetRenderer._openWorker(\'' + w.worker_id + '\')">' +
+      '<div class="node-card-top ' + state + '"></div>' +
+      '<div class="node-card-header">' +
+        '<div class="node-name-group"><span class="node-status-dot ' + state + '"></span><span class="node-name">' + name + '</span></div>' +
+        '<span class="node-status-badge ' + state + '">' + (state.charAt(0).toUpperCase() + state.slice(1)) + '</span>' +
+      '</div>' +
+      '<div class="node-card-body">' +
+        _row('Worker ID', '<span class="mono">' + w.worker_id + '</span>') +
+        _row('Host', _nullVal(w.host)) +
+        _row('MT5', w.mt5_state === 'connected' ? '<span style="color:var(--success);">Connected</span>' : _nullVal(w.mt5_state, 'Not Connected')) +
+        _row('Broker', _nullVal(w.broker)) +
+        _row('Balance', bal) +
+        _row('Positions', '<span style="color:var(--accent);">' + (w.open_positions_count || 0) + '</span>') +
+        _row('Float PnL', '<span style="' + pnlStyle + '">' + pnlVal + '</span>') +
+        _row('Pipeline', '<span class="mono" style="font-size:10px;">' + (w.total_ticks || 0) + ' ticks / ' + (w.total_bars || 0) + ' bars (' + (w.current_bars_in_memory || 0) + ' mem) / ' + (w.signal_count || 0) + ' sig</span>') +
+        _row('Heartbeat', _fmtAge(w.heartbeat_age_seconds)) +
+        '<div class="node-card-action"><i class="fa-solid fa-arrow-right"></i> View / Deploy</div>' +
+      '</div></div>';
+  }
 
-    best_day = worst_day = None
-    if daily:
-        bd = max(daily.items(), key=lambda x: x[1])
-        wd = min(daily.items(), key=lambda x: x[1])
-        best_day = {"date": bd[0], "pnl": _r2(bd[1])}
-        worst_day = {"date": wd[0], "pnl": _r2(wd[1])}
+  function _renderContent(data) {
+    var el = document.getElementById('fleet-content');
+    if (!el) return;
+    var workers = data.workers || [];
+    var s = data.summary || {};
+    _lastWorkers = workers;
 
-    num_days = max(len(daily), 1)
-    agl = abs(gl)
-    pf = _r2(gp / agl) if agl > 0 else (999.99 if gp > 0 else 0)
-    rf = _r2(net / dd_usd) if dd_usd > 0 else 0
+    if (workers.length === 0) {
+      el.innerHTML = _emptyState('fa-server', 'No Workers Connected', 'Start a worker agent to see fleet data.');
+      return;
+    }
 
+    var html = '<div class="fleet-summary">';
+    html += _fleetBadge(s.total_workers || 0, 'Total', 'total');
+    html += _fleetBadge(s.online_workers || 0, 'Online', 'online');
+    html += _fleetBadge(s.stale_workers || 0, 'Stale', 'stale');
+    html += _fleetBadge(s.offline_workers || 0, 'Offline', 'offline');
+    html += _fleetBadge(s.error_workers || 0, 'Error', 'error');
+    html += '</div>';
+
+    html += '<div class="fleet-grid">';
+    workers.forEach(function (w) { html += renderNodeCard(w); });
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  function _fetch() {
+    ApiClient.getFleetWorkers().then(_renderContent).catch(function () {
+      var el = document.getElementById('fleet-content');
+      if (el) el.innerHTML = '<div class="error-state"><i class="fa-solid fa-triangle-exclamation"></i><h3>Failed to Load Fleet</h3><button class="retry-btn" onclick="FleetRenderer._retry()">Retry</button></div>';
+    });
+  }
+
+  function _openWorker(wid) {
+    for (var i = 0; i < _lastWorkers.length; i++) {
+      if (_lastWorkers[i].worker_id === wid) { App.navigateToWorkerDetail(_lastWorkers[i]); return; }
+    }
+  }
+
+  function render() {
+    document.getElementById('main-content').innerHTML =
+      '<div class="fleet-page">' +
+        '<div class="fleet-page-header" id="fleet-page-header">' +
+          '<span class="fleet-page-title"><i class="fa-solid fa-server" style="color:var(--accent);margin-right:8px;"></i>Fleet Management</span>' +
+          '<div class="fleet-page-meta"><div class="auto-refresh-badge"><span class="auto-refresh-dot"></span>Auto-refresh</div></div>' +
+        '</div>' +
+        '<div id="fleet-content">' + _spinner() + '</div>' +
+      '</div>';
+    _fetch();
+    _refreshInterval = setInterval(_fetch, 5000);
+  }
+
+  function destroy() { if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; } }
+
+  return { render: render, destroy: destroy, _retry: _fetch, _openWorker: _openWorker };
+})();
+
+
+/* ================================================================
+   8. STRATEGIES RENDERER
+   ================================================================ */
+var StrategiesRenderer = (function () {
+  'use strict';
+  var _refreshInterval = null;
+
+  function render() {
+    var html = '<div class="fleet-page">';
+    html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-crosshairs" style="color:var(--accent);margin-right:8px;"></i>Strategy Registry</span>';
+    html += '<div class="fleet-page-meta"><button class="wd-refresh-btn" id="strat-refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button></div></div>';
+
+    html += '<div class="wd-panel"><div class="wd-panel-header">Upload Strategy<span class="panel-badge">REGISTER</span></div><div class="wd-panel-body">';
+    html += '<div class="wd-file-upload" id="strat-upload-area"><input type="file" id="strat-file-input" accept=".py" style="display:none" />';
+    html += '<i class="fa-solid fa-file-code"></i><h4>Upload Strategy File</h4><p>.py files extending BaseStrategy</p><div id="strat-upload-status"></div></div></div></div>';
+
+    html += '<div id="strat-list-content">' + _spinner() + '</div>';
+    html += '</div>';
+    document.getElementById('main-content').innerHTML = html;
+
+    document.getElementById('strat-refresh').addEventListener('click', _fetch);
+    var area = document.getElementById('strat-upload-area');
+    var input = document.getElementById('strat-file-input');
+    area.addEventListener('click', function () { input.click(); });
+    input.addEventListener('change', function () {
+      if (!input.files || !input.files[0]) return;
+      var f = input.files[0];
+      if (!f.name.endsWith('.py')) { ToastManager.show('Only .py files.', 'error'); return; }
+      _upload(f);
+    });
+
+    _fetch();
+    _refreshInterval = setInterval(_fetch, 10000);
+  }
+
+  function _upload(file) {
+    var el = document.getElementById('strat-upload-status');
+    el.innerHTML = '<div style="color:var(--accent);"><i class="fa-solid fa-spinner fa-spin"></i> Uploading\u2026</div>';
+    ApiClient.uploadStrategy(file).then(function (d) {
+      el.innerHTML = '<div style="color:var(--success);"><i class="fa-solid fa-circle-check"></i> Registered: ' + (d.strategy_name || d.strategy_id) + '</div>';
+      ToastManager.show('Strategy registered.', 'success');
+      _fetch();
+    }).catch(function (e) {
+      el.innerHTML = '<div style="color:var(--danger);"><i class="fa-solid fa-circle-xmark"></i> ' + e.message + '</div>';
+    });
+  }
+
+  function _fetch() {
+    var el = document.getElementById('strat-list-content');
+    if (!el) return;
+    ApiClient.getStrategies().then(function (data) {
+      var list = data.strategies || [];
+      if (list.length === 0) {
+        el.innerHTML = _emptyState('fa-crosshairs', 'No Strategies', 'Upload a .py strategy file to get started.');
+        return;
+      }
+      var html = '<div class="compact-fleet-wrapper"><table class="compact-fleet-table"><thead><tr><th>ID</th><th>Name</th><th>Version</th><th>Hash</th><th>Uploaded</th></tr></thead><tbody>';
+      list.forEach(function (s) {
+        var up = s.uploaded_at ? s.uploaded_at.replace('T', ' ').substring(0, 19) : '\u2014';
+        html += '<tr><td class="mono">' + s.strategy_id + '</td><td>' + (s.name || s.strategy_id) + '</td><td class="mono">' + (s.version || '\u2014') + '</td><td class="mono" style="font-size:10px;">' + (s.file_hash || '\u2014') + '</td><td class="mono">' + up + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+      el.innerHTML = html;
+    }).catch(function (e) {
+      el.innerHTML = '<div style="padding:20px;color:var(--danger);font-size:12px;">Failed: ' + e.message + '</div>';
+    });
+  }
+
+  function destroy() { if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; } }
+  return { render: render, destroy: destroy };
+})();
+
+
+/* ================================================================
+   9. PORTFOLIO RENDERER — PROFESSIONAL ANALYTICS MODULE
+      Sub-tabs: Overview | Equity & Risk | Strategies | VMs | Trades
+   ================================================================ */
+var PortfolioRenderer = (function () {
+  'use strict';
+  var _charts = {};
+  var _activeTab = 'overview';
+  var _filters = { strategy_id: '', worker_id: '', symbol: '' };
+  var _allTrades = [];
+
+  function _destroyCharts() {
+    for (var k in _charts) { if (_charts[k]) { _charts[k].destroy(); delete _charts[k]; } }
+  }
+
+  function _getFilterParams() {
+    var p = {};
+    if (_filters.strategy_id) p.strategy_id = _filters.strategy_id;
+    if (_filters.worker_id) p.worker_id = _filters.worker_id;
+    if (_filters.symbol) p.symbol = _filters.symbol;
+    return p;
+  }
+
+  /* ── Main Render ──────────────────────────────────────────── */
+  function render() {
+    var html = '<div class="fleet-page" id="portfolio-page">';
+
+    /* Header */
+    html += '<div class="fleet-page-header">';
+    html += '<span class="fleet-page-title"><i class="fa-solid fa-chart-line" style="color:var(--accent);margin-right:8px;"></i>Portfolio Analytics</span>';
+    html += '<div class="fleet-page-meta">';
+    html += '<button class="wd-btn wd-btn-ghost" id="port-csv-export" style="font-size:11px;"><i class="fa-solid fa-download"></i> CSV</button>';
+    html += '<button class="wd-refresh-btn" id="port-refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>';
+    html += '</div></div>';
+
+    /* Filters */
+    html += '<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">';
+    html += '<div class="wd-form-group" style="margin:0;"><select class="wd-form-select port-filter" id="port-f-strategy" style="min-width:150px;"><option value="">All Strategies</option></select></div>';
+    html += '<div class="wd-form-group" style="margin:0;"><select class="wd-form-select port-filter" id="port-f-worker" style="min-width:150px;"><option value="">All VMs / Workers</option></select></div>';
+    html += '<div class="wd-form-group" style="margin:0;"><select class="wd-form-select port-filter" id="port-f-symbol" style="min-width:130px;"><option value="">All Symbols</option></select></div>';
+    html += '</div>';
+
+    /* Tabs */
+    html += '<div class="port-tabs" id="port-tabs">';
+    var tabDefs = [
+      { key: 'overview', label: 'Overview' },
+      { key: 'equity', label: 'Equity & Risk' },
+      { key: 'strategies', label: 'Strategies' },
+      { key: 'fleet', label: 'VMs' },
+      { key: 'trades', label: 'Trades' }
+    ];
+    tabDefs.forEach(function (t) {
+      html += '<button class="port-tab' + (t.key === _activeTab ? ' active' : '') + '" data-tab="' + t.key + '">' + t.label + '</button>';
+    });
+    html += '</div>';
+
+    /* Content area */
+    html += '<div id="port-content">' + _spinner() + '</div>';
+    html += '</div>';
+
+    document.getElementById('main-content').innerHTML = html;
+
+    /* Attach events */
+    document.getElementById('port-refresh').addEventListener('click', _loadAll);
+    document.getElementById('port-csv-export').addEventListener('click', _exportCSV);
+
+    document.querySelectorAll('#port-tabs .port-tab').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        _activeTab = btn.getAttribute('data-tab');
+        document.querySelectorAll('#port-tabs .port-tab').forEach(function (b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        _renderActiveTab();
+      });
+    });
+
+    document.querySelectorAll('.port-filter').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        _filters.strategy_id = document.getElementById('port-f-strategy').value;
+        _filters.worker_id = document.getElementById('port-f-worker').value;
+        _filters.symbol = document.getElementById('port-f-symbol').value;
+        _loadAll();
+      });
+    });
+
+    _loadFilters();
+    _loadAll();
+  }
+
+  function _loadFilters() {
+    ApiClient.getPortfolioTrades({ limit: 1000 }).then(function (data) {
+      var trades = data.trades || [];
+      var strats = {}, workers = {}, syms = {};
+      trades.forEach(function (t) {
+        if (t.strategy_id) strats[t.strategy_id] = 1;
+        if (t.worker_id) workers[t.worker_id] = 1;
+        if (t.symbol) syms[t.symbol] = 1;
+      });
+      function _fill(id, obj, defaultLabel) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var val = el.value;
+        el.innerHTML = '<option value="">' + defaultLabel + '</option>';
+        Object.keys(obj).sort().forEach(function (k) {
+          el.innerHTML += '<option value="' + k + '"' + (k === val ? ' selected' : '') + '>' + k + '</option>';
+        });
+      }
+      _fill('port-f-strategy', strats, 'All Strategies');
+      _fill('port-f-worker', workers, 'All VMs / Workers');
+      _fill('port-f-symbol', syms, 'All Symbols');
+    }).catch(function () {});
+  }
+
+  function _loadAll() { _destroyCharts(); _renderActiveTab(); }
+
+  function _renderActiveTab() {
+    var el = document.getElementById('port-content');
+    if (!el) return;
+    el.innerHTML = _spinner();
+    if (_activeTab === 'overview') _tabOverview(el);
+    else if (_activeTab === 'equity') _tabEquityRisk(el);
+    else if (_activeTab === 'strategies') _tabStrategies(el);
+    else if (_activeTab === 'fleet') _tabFleet(el);
+    else if (_activeTab === 'trades') _tabTrades(el);
+  }
+
+  /* ── OVERVIEW TAB ─────────────────────────────────────────── */
+  function _tabOverview(container) {
+    Promise.all([
+      ApiClient.getPortfolioSummary(_getFilterParams()).catch(function () { return { portfolio: {} }; }),
+      ApiClient.getEquityHistory().catch(function () { return { equity_history: [] }; }),
+      ApiClient.getPortfolioPerformance(_getFilterParams()).catch(function () { return { performance: {} }; })
+    ]).then(function (results) {
+      var p = results[0].portfolio || {};
+      var eqHist = results[1].equity_history || [];
+      var perf = results[2].performance || {};
+
+      if (p.total_trades === 0 && (perf.by_strategy || []).length === 0) {
+        container.innerHTML = _emptyState('fa-chart-line', 'No Portfolio Data', 'Run strategies to generate trade data and analytics.');
+        return;
+      }
+
+      var html = '';
+
+      /* Key metrics — text style row */
+      html += '<div style="display:flex;flex-wrap:wrap;gap:20px;padding:16px 0;border-bottom:1px solid var(--border);margin-bottom:20px;">';
+      html += _metricItem('Net P&L', _fmtMoney(p.net_pnl), (p.net_pnl || 0) >= 0 ? 'text-success' : 'text-danger');
+      html += _metricItem('Gross Profit', _fmtMoney(p.gross_profit), 'text-success');
+      html += _metricItem('Gross Loss', _fmtMoney(p.gross_loss), 'text-danger');
+      html += _metricItem('Profit Factor', String(p.profit_factor || 0), (p.profit_factor || 0) >= 1 ? 'text-success' : '');
+      html += _metricItem('Expectancy', _fmtMoney(p.expectancy), (p.expectancy || 0) >= 0 ? 'text-success' : 'text-danger');
+      html += _metricItem('Max DD', _fmtPct(p.max_drawdown_pct), 'text-danger');
+      html += _metricItem('Sharpe', String(p.sharpe_estimate || 0));
+      html += _metricItem('Sortino', String(p.sortino_estimate || 0));
+      html += _metricItem('Recovery', String(p.recovery_factor || 0));
+      html += _metricItem('Trades', String(p.total_trades || 0));
+      html += _metricItem('Wins/Losses', (p.wins || 0) + '/' + (p.losses || 0));
+      html += _metricItem('Trades/Day', String(p.trades_per_day || 0));
+      html += _metricItem('Current DD', _fmtPct(p.current_drawdown_pct), (p.current_drawdown_pct || 0) > 5 ? 'text-danger' : '');
+      html += _metricItem('Peak Equity', p.peak_equity ? ('$' + _fmtNum(p.peak_equity)) : '\u2014');
+      html += '</div>';
+
+      /* Extended metrics row */
+      html += '<div style="display:flex;flex-wrap:wrap;gap:20px;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:20px;">';
+      html += _metricItem('Avg Trade', _fmtMoney(p.avg_trade), (p.avg_trade || 0) >= 0 ? 'text-success' : 'text-danger');
+      html += _metricItem('Avg Winner', _fmtMoney(p.avg_winner), 'text-success');
+      html += _metricItem('Avg Loser', _fmtMoney(p.avg_loser), 'text-danger');
+      html += _metricItem('Best Trade', _fmtMoney(p.best_trade), 'text-success');
+      html += _metricItem('Worst Trade', _fmtMoney(p.worst_trade), 'text-danger');
+      html += _metricItem('Max DD ($)', _fmtMoney(-Math.abs(p.max_drawdown_usd || 0)), 'text-danger');
+      html += _metricItem('Avg Bars', String(p.avg_bars_held || 0));
+      html += _metricItem('Consec Wins', String(p.max_consec_wins || 0), 'text-success');
+      html += _metricItem('Consec Losses', String(p.max_consec_losses || 0), 'text-danger');
+      html += _metricItem('Floating', _fmtMoney(p.floating_pnl), (p.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger');
+      html += _metricItem('Open Pos', String(p.open_positions || 0));
+      html += _metricItem('Active Workers', String(p.active_workers || 0));
+      html += '</div>';
+
+      /* Hero equity chart */
+      html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">Equity Curve</div>';
+      html += '<div class="chart-container"><div class="chart-wrapper" id="ov-equity-wrap"><canvas id="ov-equity-chart"></canvas></div></div></div>';
+
+      /* Best / Worst day cards */
+      if (p.best_day || p.worst_day) {
+        html += '<div style="display:flex;gap:12px;margin-bottom:20px;">';
+        if (p.best_day) {
+          html += '<div style="flex:1;padding:14px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--success);">' +
+            '<div style="font-size:10px;color:var(--text-muted);">Best Day</div>' +
+            '<div class="mono text-success" style="font-size:16px;font-weight:700;">' + _fmtMoney(p.best_day.pnl) + '</div>' +
+            '<div class="mono" style="font-size:10px;color:var(--text-muted);">' + p.best_day.date + '</div></div>';
+        }
+        if (p.worst_day) {
+          html += '<div style="flex:1;padding:14px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--danger);">' +
+            '<div style="font-size:10px;color:var(--text-muted);">Worst Day</div>' +
+            '<div class="mono text-danger" style="font-size:16px;font-weight:700;">' + _fmtMoney(p.worst_day.pnl) + '</div>' +
+            '<div class="mono" style="font-size:10px;color:var(--text-muted);">' + p.worst_day.date + '</div></div>';
+        }
+        html += '</div>';
+      }
+
+      /* Composition tables */
+      var sections = [
+        { key: 'by_strategy', idField: 'strategy_id', title: 'Composition — Strategy' },
+        { key: 'by_worker', idField: 'worker_id', title: 'Composition — VM' },
+        { key: 'by_symbol', idField: 'symbol', title: 'Composition — Symbol' }
+      ];
+
+      sections.forEach(function (sec) {
+        var rows = perf[sec.key] || [];
+        if (rows.length === 0) return;
+        rows.sort(function (a, b) { return b.pnl - a.pnl; });
+        html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">' + sec.title + '</div>';
+        html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table"><thead><tr><th>' + sec.idField.replace('_', ' ').toUpperCase() + '</th><th>Trades</th><th>P&L</th><th>Win Rate</th><th>PF</th><th>Avg Bars</th></tr></thead><tbody>';
+        rows.forEach(function (r) {
+          var pc = r.pnl >= 0 ? 'text-success' : 'text-danger';
+          html += '<tr><td class="mono" style="font-weight:600;color:var(--accent);">' + r[sec.idField] + '</td><td class="mono">' + r.trades + '</td><td class="mono ' + pc + '">' + _fmtMoney(r.pnl) + '</td><td class="mono">' + _fmtPct(r.win_rate) + '</td><td class="mono">' + r.profit_factor + '</td><td class="mono">' + r.avg_bars + '</td></tr>';
+        });
+        html += '</tbody></table></div></div>';
+      });
+
+      container.innerHTML = html;
+
+      /* Render equity chart */
+      if (eqHist.length > 1 && !(eqHist.length === 1 && eqHist[0].source === 'initial')) {
+        var canvas = document.getElementById('ov-equity-chart');
+        if (canvas) {
+          var ctx = canvas.getContext('2d');
+          var gradient = ctx.createLinearGradient(0, 0, 0, 300);
+          gradient.addColorStop(0, 'rgba(6,182,212,0.2)');
+          gradient.addColorStop(1, 'rgba(6,182,212,0)');
+          _charts.ovEquity = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: eqHist.map(function (h) { return h.label || ''; }),
+              datasets: [{ data: eqHist.map(function (h) { return h.equity; }), borderColor: ChartHelper.accentColor(), backgroundColor: gradient, borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }]
+            },
+            options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return '$' + v.toFixed(0); } } } } })
+          });
+        }
+      } else {
+        var wrap = document.getElementById('ov-equity-wrap');
+        if (wrap) wrap.innerHTML = _emptyState('fa-chart-area', 'No Equity Data', 'Trades will build the curve.');
+      }
+    });
+  }
+
+  /* ── EQUITY & RISK TAB ────────────────────────────────────── */
+  function _tabEquityRisk(container) {
+    Promise.all([
+      ApiClient.getEquityHistory().catch(function () { return { equity_history: [] }; }),
+      ApiClient.getPortfolioSummary(_getFilterParams()).catch(function () { return { portfolio: {} }; }),
+      ApiClient.getPortfolioPerformance(_getFilterParams()).catch(function () { return { performance: {} }; })
+    ]).then(function (results) {
+      var eqHist = results[0].equity_history || [];
+      var p = results[1].portfolio || {};
+      var perf = results[2].performance || {};
+      var daily = perf.daily || [];
+      var monthly = perf.monthly || [];
+
+      if (eqHist.length <= 1 && daily.length === 0) {
+        container.innerHTML = _emptyState('fa-chart-area', 'No Data Yet', 'Execute trades to see equity and risk analytics.');
+        return;
+      }
+
+      var html = '';
+
+      /* Risk metrics */
+      html += '<div style="display:flex;flex-wrap:wrap;gap:20px;padding:14px 0;border-bottom:1px solid var(--border);margin-bottom:20px;">';
+      html += _metricItem('Max DD ($)', _fmtMoney(-Math.abs(p.max_drawdown_usd || 0)), 'text-danger');
+      html += _metricItem('Max DD (%)', _fmtPct(p.max_drawdown_pct), 'text-danger');
+      html += _metricItem('Recovery Factor', String(p.recovery_factor || 0));
+      html += _metricItem('Sharpe', String(p.sharpe_estimate || 0));
+      html += _metricItem('Sortino', String(p.sortino_estimate || 0));
+      html += _metricItem('Current DD', _fmtPct(p.current_drawdown_pct), (p.current_drawdown_pct || 0) > 5 ? 'text-danger' : '');
+      html += _metricItem('Peak Equity', p.peak_equity ? ('$' + _fmtNum(p.peak_equity)) : '\u2014');
+      html += _metricItem('Consec Wins', String(p.max_consec_wins || 0), 'text-success');
+      html += _metricItem('Consec Losses', String(p.max_consec_losses || 0), 'text-danger');
+      html += _metricItem('Avg Bars Held', String(p.avg_bars_held || 0));
+      html += '</div>';
+
+      /* Equity chart */
+      html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">Equity Curve</div>';
+      html += '<div class="chart-container"><div class="chart-wrapper" id="eq-chart-wrap"><canvas id="eq-chart-canvas"></canvas></div></div></div>';
+
+      /* Drawdown chart */
+      html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">Drawdown</div>';
+      html += '<div class="chart-container"><div class="chart-wrapper" id="dd-chart-wrap"><canvas id="dd-chart-canvas"></canvas></div></div></div>';
+
+      /* Daily PnL */
+      html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">Daily P&L</div>';
+      html += '<div class="chart-container"><div class="chart-wrapper" style="height:220px;" id="daily-chart-wrap"><canvas id="daily-chart-canvas"></canvas></div></div></div>';
+
+      /* Monthly returns */
+      if (monthly.length > 0) {
+        html += '<div style="margin-bottom:20px;"><div style="font-weight:600;font-size:13px;margin-bottom:8px;">Monthly Returns</div>';
+        html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table"><thead><tr><th>Month</th><th>P&L</th><th>Cumulative</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody>';
+        var cumMo = 0;
+        monthly.forEach(function (m) {
+          cumMo += m.pnl;
+          var bg = m.pnl >= 0 ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)';
+          var tc = m.pnl >= 0 ? 'text-success' : 'text-danger';
+          html += '<tr style="background:' + bg + ';"><td class="mono">' + m.month + '</td><td class="mono ' + tc + '">' + _fmtMoney(m.pnl) + '</td><td class="mono">' + _fmtMoney(cumMo) + '</td><td class="mono">' + m.trades + '</td><td class="mono">' + _fmtPct(m.win_rate) + '</td></tr>';
+        });
+        html += '</tbody></table></div></div>';
+      }
+
+      container.innerHTML = html;
+
+      /* Render charts */
+      if (eqHist.length > 1) {
+        var labels = eqHist.map(function (h) { return h.label || ''; });
+        var values = eqHist.map(function (h) { return h.equity; });
+
+        /* Equity line */
+        var cv1 = document.getElementById('eq-chart-canvas');
+        if (cv1) {
+          var ctx1 = cv1.getContext('2d');
+          var g1 = ctx1.createLinearGradient(0, 0, 0, 280);
+          g1.addColorStop(0, 'rgba(6,182,212,0.2)');
+          g1.addColorStop(1, 'rgba(6,182,212,0)');
+          _charts.eqLine = new Chart(ctx1, {
+            type: 'line',
+            data: { labels: labels, datasets: [{ data: values, borderColor: ChartHelper.accentColor(), backgroundColor: g1, borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0 }] },
+            options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return '$' + v.toFixed(0); } } } } })
+          });
+        }
+
+        /* Drawdown */
+        var cv2 = document.getElementById('dd-chart-canvas');
+        if (cv2) {
+          var peak = 0, dd = [];
+          values.forEach(function (v) { if (v > peak) peak = v; dd.push(peak > 0 ? -((peak - v) / peak * 100) : 0); });
+          var ctx2 = cv2.getContext('2d');
+          var g2 = ctx2.createLinearGradient(0, 0, 0, 280);
+          g2.addColorStop(0, 'rgba(239,68,68,0)');
+          g2.addColorStop(1, 'rgba(239,68,68,0.25)');
+          _charts.ddLine = new Chart(ctx2, {
+            type: 'line',
+            data: { labels: labels, datasets: [{ data: dd, borderColor: ChartHelper.dangerColor(), backgroundColor: g2, borderWidth: 1.5, fill: true, tension: 0.3, pointRadius: 0 }] },
+            options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return v.toFixed(1) + '%'; } } } } })
+          });
+        }
+      }
+
+      /* Daily PnL bars */
+      if (daily.length > 0) {
+        var cv3 = document.getElementById('daily-chart-canvas');
+        if (cv3) {
+          var dailyVals = daily.map(function (d) { return d.pnl; });
+          var dailyColors = dailyVals.map(function (v) { return v >= 0 ? 'rgba(16,185,129,0.65)' : 'rgba(239,68,68,0.65)'; });
+          _charts.dailyBar = new Chart(cv3.getContext('2d'), {
+            type: 'bar',
+            data: { labels: daily.map(function (d) { return d.date; }), datasets: [{ data: dailyVals, backgroundColor: dailyColors, borderRadius: 2, barPercentage: 0.7 }] },
+            options: ChartHelper.baseLineOpts({ scales: { y: { ticks: { callback: function (v) { return '$' + v.toFixed(0); } } } } })
+          });
+        }
+      }
+    });
+  }
+
+  /* ── STRATEGIES TAB ───────────────────────────────────────── */
+  function _tabStrategies(container) {
+    Promise.all([
+      ApiClient.getPortfolioPerformance(_getFilterParams()).catch(function () { return { performance: {} }; }),
+      ApiClient.getPortfolioSummary(_getFilterParams()).catch(function () { return { portfolio: {} }; })
+    ]).then(function (results) {
+      var byStrategy = (results[0].performance || {}).by_strategy || [];
+
+      if (byStrategy.length === 0) {
+        container.innerHTML = _emptyState('fa-crosshairs', 'No Strategy Data', 'Deploy and run strategies to see performance analytics.');
+        return;
+      }
+
+      byStrategy.sort(function (a, b) { return b.pnl - a.pnl; });
+
+      var html = '<div style="font-weight:600;font-size:13px;margin-bottom:12px;">Strategy Leaderboard</div>';
+      html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table"><thead><tr>';
+      html += '<th>Strategy</th><th>Trades</th><th>Net P&L</th><th>Win Rate</th><th>PF</th><th>Avg Bars</th><th>Wins</th><th>Losses</th>';
+      html += '</tr></thead><tbody>';
+      byStrategy.forEach(function (s) {
+        var pc = s.pnl >= 0 ? 'text-success' : 'text-danger';
+        html += '<tr>' +
+          '<td class="mono" style="font-weight:600;color:var(--accent);">' + s.strategy_id + '</td>' +
+          '<td class="mono">' + s.trades + '</td>' +
+          '<td class="mono ' + pc + '">' + _fmtMoney(s.pnl) + '</td>' +
+          '<td class="mono">' + _fmtPct(s.win_rate) + '</td>' +
+          '<td class="mono">' + s.profit_factor + '</td>' +
+          '<td class="mono">' + s.avg_bars + '</td>' +
+          '<td class="mono text-success">' + s.wins + '</td>' +
+          '<td class="mono text-danger">' + s.losses + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+    });
+  }
+
+  /* ── VM / FLEET TAB ───────────────────────────────────────── */
+  function _tabFleet(container) {
+    Promise.all([
+      ApiClient.getFleetWorkers().catch(function () { return { workers: [] }; }),
+      ApiClient.getPortfolioPerformance(_getFilterParams()).catch(function () { return { performance: {} }; })
+    ]).then(function (results) {
+      var workers = results[0].workers || [];
+      var byWorker = (results[1].performance || {}).by_worker || [];
+
+      if (workers.length === 0 && byWorker.length === 0) {
+        container.innerHTML = _emptyState('fa-server', 'No VMs Connected', 'Connect worker agents to see VM analytics.');
+        return;
+      }
+
+      var perfMap = {};
+      byWorker.forEach(function (w) { perfMap[w.worker_id] = w; });
+
+      var html = '<div style="font-weight:600;font-size:13px;margin-bottom:14px;">VM Performance</div>';
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;">';
+
+      workers.forEach(function (w) {
+        var wp = perfMap[w.worker_id] || {};
+        var state = w.state || 'unknown';
+        var borderColor = (state === 'online' || state === 'running') ? 'var(--success)' : state === 'stale' ? 'var(--warning)' : 'var(--text-muted)';
+
+        html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:16px;border:1px solid var(--border);border-top:3px solid ' + borderColor + ';">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">';
+        html += '<span class="mono" style="font-weight:600;font-size:13px;">' + (w.worker_name || w.worker_id) + '</span>';
+        html += _statPill(state.toUpperCase(), state === 'online' || state === 'running' ? 'online' : state);
+        html += '</div>';
+
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+        html += _metricItem('Balance', w.account_balance > 0 ? ('$' + w.account_balance.toFixed(0)) : '\u2014');
+        html += _metricItem('Equity', w.account_equity > 0 ? ('$' + w.account_equity.toFixed(0)) : '\u2014');
+        html += _metricItem('Float P&L', _fmtMoney(w.floating_pnl), (w.floating_pnl || 0) >= 0 ? 'text-success' : 'text-danger');
+        html += _metricItem('Positions', String(w.open_positions_count || 0));
+        if (wp.pnl !== undefined) {
+          html += _metricItem('Realized P&L', _fmtMoney(wp.pnl), (wp.pnl || 0) >= 0 ? 'text-success' : 'text-danger');
+          html += _metricItem('Trades', String(wp.trades || 0));
+          html += _metricItem('Win Rate', _fmtPct(wp.win_rate));
+          html += _metricItem('PF', String(wp.profit_factor || 0));
+        }
+        html += '</div></div>';
+      });
+
+      html += '</div>';
+      container.innerHTML = html;
+    });
+  }
+
+  /* ── TRADES TAB ───────────────────────────────────────────── */
+  function _tabTrades(container) {
+    var params = _getFilterParams();
+    params.limit = 500;
+
+    ApiClient.getPortfolioTrades(params).then(function (data) {
+      var trades = data.trades || [];
+      _allTrades = trades;
+
+      if (trades.length === 0) {
+        container.innerHTML = _emptyState('fa-list', 'No Trades', 'Execute strategies to see trade history.');
+        return;
+      }
+
+      var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+      html += '<div style="font-weight:600;font-size:13px;">' + trades.length + ' Trades</div>';
+      html += '</div>';
+
+      html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table"><thead><tr>';
+      html += '<th>#</th><th>Symbol</th><th>Dir</th><th>Strategy</th><th>Worker</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Commission</th><th>Bars</th><th>Reason</th>';
+      html += '</tr></thead><tbody>';
+
+      trades.forEach(function (t) {
+        var pnlClass = t.profit >= 0 ? 'text-success' : 'text-danger';
+        html += '<tr>' +
+          '<td class="mono">' + (t.id || t.trade_id || '') + '</td>' +
+          '<td class="mono">' + t.symbol + '</td>' +
+          '<td>' + _statPill(t.direction.toUpperCase(), t.direction === 'long' ? 'online' : 'error') + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + (t.strategy_id || '\u2014') + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + (t.worker_id || '\u2014') + '</td>' +
+          '<td class="mono">' + t.entry_price + '</td>' +
+          '<td class="mono">' + t.exit_price + '</td>' +
+          '<td class="mono ' + pnlClass + '">' + _fmtMoney(t.profit) + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + _fmtMoney(t.commission || 0) + '</td>' +
+          '<td class="mono">' + (t.bars_held || 0) + '</td>' +
+          '<td class="mono" style="font-size:10px;">' + (t.exit_reason || '\u2014') + '</td>' +
+          '</tr>';
+      });
+
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+    }).catch(function (e) {
+      container.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:20px;">Error loading trades: ' + e.message + '</div>';
+    });
+  }
+
+  /* ── CSV Export ────────────────────────────────────────────── */
+  function _exportCSV() {
+    if (!_allTrades || _allTrades.length === 0) {
+      ToastManager.show('No trades to export.', 'info');
+      return;
+    }
+    var cols = ['id', 'symbol', 'direction', 'strategy_id', 'worker_id', 'entry_price', 'exit_price', 'profit', 'commission', 'swap', 'bars_held', 'exit_reason', 'entry_time', 'exit_time'];
+    var csv = cols.join(',') + '\n';
+    _allTrades.forEach(function (t) {
+      csv += cols.map(function (c) { return '"' + (t[c] !== undefined && t[c] !== null ? t[c] : '') + '"'; }).join(',') + '\n';
+    });
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'jinni_trades_' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+    ToastManager.show('Exported ' + _allTrades.length + ' trades.', 'success');
+  }
+
+  function destroy() { _destroyCharts(); }
+  return { render: render, destroy: destroy };
+})();
+
+
+/* ================================================================
+   10. LOGS RENDERER
+   ================================================================ */
+var LogsRenderer = (function () {
+  'use strict';
+  var _refreshInterval = null;
+  var _autoRefresh = true;
+
+  function render() {
+    var html = '<div class="fleet-page" id="logs-page">';
+    html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-scroll" style="color:var(--accent);margin-right:8px;"></i>Event Logs</span>';
+    html += '<div class="fleet-page-meta"><label class="log-auto-label"><input type="checkbox" id="log-auto-check" checked /> Auto-refresh</label>';
+    html += '<button class="wd-refresh-btn" id="log-refresh"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button></div></div>';
+
+    html += '<div class="log-filters">';
+    html += '<div class="wd-form-group"><label class="wd-form-label">Category</label><select class="wd-form-select log-f" id="log-f-cat"><option value="">All</option><option value="system">SYSTEM</option><option value="worker">WORKER</option><option value="execution">EXECUTION</option><option value="strategy">STRATEGY</option><option value="deployment">DEPLOYMENT</option><option value="command">COMMAND</option></select></div>';
+    html += '<div class="wd-form-group"><label class="wd-form-label">Level</label><select class="wd-form-select log-f" id="log-f-level"><option value="">All</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option><option value="DEBUG">DEBUG</option></select></div>';
+    html += '<div class="wd-form-group"><label class="wd-form-label">Worker</label><input type="text" class="wd-form-input log-f" id="log-f-worker" placeholder="worker id\u2026" /></div>';
+    html += '<div class="wd-form-group"><label class="wd-form-label">Search</label><input type="text" class="wd-form-input log-f" id="log-f-search" placeholder="keyword\u2026" /></div>';
+    html += '</div>';
+
+    html += '<div id="log-content">' + _spinner() + '</div>';
+    html += '</div>';
+    document.getElementById('main-content').innerHTML = html;
+
+    document.getElementById('log-refresh').addEventListener('click', _fetch);
+    document.getElementById('log-auto-check').addEventListener('change', function () { _autoRefresh = this.checked; });
+    document.querySelectorAll('.log-f').forEach(function (el) {
+      el.addEventListener('change', _fetch);
+      el.addEventListener('keyup', function (e) { if (e.key === 'Enter') _fetch(); });
+    });
+
+    _fetch();
+    _refreshInterval = setInterval(function () { if (_autoRefresh) _fetch(); }, 5000);
+  }
+
+  function _fetch() {
+    var params = { limit: 300 };
+    var cat = document.getElementById('log-f-cat');
+    if (cat && cat.value) params.category = cat.value;
+    var lvl = document.getElementById('log-f-level');
+    if (lvl && lvl.value) params.level = lvl.value;
+    var wk = document.getElementById('log-f-worker');
+    if (wk && wk.value.trim()) params.worker_id = wk.value.trim();
+    var search = document.getElementById('log-f-search');
+    if (search && search.value.trim()) params.search = search.value.trim();
+
+    ApiClient.getEvents(params).then(function (data) {
+      var events = data.events || [];
+      var el = document.getElementById('log-content');
+      if (!el) return;
+
+      if (events.length === 0) {
+        el.innerHTML = '<div style="padding:24px;color:var(--text-muted);font-size:12px;text-align:center;"><i class="fa-solid fa-circle-info" style="margin-right:6px;"></i>No events found matching filters.</div>';
+        return;
+      }
+
+      var html = '<div class="log-count">' + (data.count || events.length) + ' events</div>';
+      html += '<div class="compact-fleet-wrapper"><table class="compact-fleet-table log-table"><thead><tr><th style="width:150px;">Timestamp</th><th style="width:90px;">Category</th><th style="width:60px;">Level</th><th style="width:100px;">Type</th><th>Message</th><th style="width:80px;">Worker</th></tr></thead><tbody>';
+
+      events.forEach(function (ev, idx) {
+        var ts = (ev.timestamp || '').replace('T', ' ').substring(0, 19);
+        var evCat = (ev.category || '').toUpperCase();
+        var evLvl = ev.level || 'INFO';
+        var lvlClass = evLvl === 'ERROR' ? 'text-danger' : evLvl === 'WARNING' ? 'text-warning' : 'text-muted';
+        var catClass = evCat === 'EXECUTION' ? 'text-success' : evCat === 'STRATEGY' ? 'text-accent' : evCat === 'WORKER' ? 'text-warning' : '';
+        var msg = ev.message || '';
+        var hasData = ev.data_json && ev.data_json !== 'null';
+        var expandId = 'log-expand-' + idx;
+
+        html += '<tr class="log-row' + (hasData ? ' clickable' : '') + '"' + (hasData ? ' onclick="LogsRenderer._toggle(\'' + expandId + '\')"' : '') + '>';
+        html += '<td class="mono" style="font-size:10.5px;">' + ts + '</td>';
+        html += '<td class="mono ' + catClass + '" style="font-size:10px;">' + evCat + '</td>';
+        html += '<td class="mono ' + lvlClass + '" style="font-size:10px;font-weight:600;">' + evLvl + '</td>';
+        html += '<td class="mono" style="font-size:10px;">' + (ev.event_type || '') + '</td>';
+        html += '<td style="font-size:11px;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + msg + (hasData ? ' <i class="fa-solid fa-chevron-down" style="font-size:8px;opacity:0.4;margin-left:4px;"></i>' : '') + '</td>';
+        html += '<td class="mono" style="font-size:10px;">' + (ev.worker_id || '\u2014') + '</td>';
+        html += '</tr>';
+
+        if (hasData) {
+          var pretty = '';
+          try { pretty = JSON.stringify(JSON.parse(ev.data_json), null, 2); } catch (e) { pretty = ev.data_json; }
+          html += '<tr class="log-detail-row" id="' + expandId + '" style="display:none;"><td colspan="6"><pre class="log-payload">' + pretty + '</pre></td></tr>';
+        }
+      });
+
+      html += '</tbody></table></div>';
+      el.innerHTML = html;
+    }).catch(function (e) {
+      var el = document.getElementById('log-content');
+      if (el) el.innerHTML = '<div style="padding:24px;color:var(--danger);font-size:12px;">Error loading events: ' + e.message + '</div>';
+    });
+  }
+
+  function _toggle(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+  }
+
+  function destroy() { if (_refreshInterval) { clearInterval(_refreshInterval); _refreshInterval = null; } }
+  return { render: render, destroy: destroy, _toggle: _toggle };
+})();
+
+
+/* ================================================================
+   11. SETTINGS + ADMIN RENDERER (Wired to GlobalSettings)
+   ================================================================ */
+var SettingsRenderer = (function () {
+  'use strict';
+  var _settings = {};
+  var _original = {};
+  var _stats = {};
+  var _strategies = [];
+  var _workers = [];
+  var _activeTab = 'general';
+
+  function _fmtBytes(b) {
+    if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+    return b + ' B';
+  }
+
+  /* ── Schema-driven settings layout ──────────────────────── */
+  var SETTING_SCHEMA = [
+    {
+      section: 'Trading Defaults',
+      icon: 'fa-chart-line',
+      description: 'These values pre-fill deployment and validation forms across the entire system.',
+      fields: [
+        { key: 'default_symbol', label: 'Default Symbol', type: 'text', placeholder: 'e.g. XAUUSD', help: 'Pre-filled in deployment and validation forms.' },
+        { key: 'default_lot_size', label: 'Default Lot Size', type: 'number', step: '0.01', min: '0.01', help: 'Default position size for new deployments.' },
+        { key: 'default_bar_size', label: 'Default Bar Size (points)', type: 'number', step: '1', min: '1', help: 'Range bar size in points.' },
+        { key: 'default_max_bars', label: 'Default Max Bars in Memory', type: 'number', step: '10', min: '10', help: 'Rolling window of bars kept in memory.' },
+        { key: 'default_tick_lookback_value', label: 'Default Tick Lookback', type: 'number', step: '1', min: '1', help: 'How far back to fetch historical ticks on deployment start.' },
+        { key: 'default_tick_lookback_unit', label: 'Tick Lookback Unit', type: 'select', options: ['minutes', 'hours', 'days'], help: 'Unit for tick lookback.' },
+      ]
+    },
+    {
+      section: 'Validation Defaults',
+      icon: 'fa-flask-vial',
+      description: 'Defaults for the backtest/validation module.',
+      fields: [
+        { key: 'default_spread', label: 'Default Spread (points)', type: 'number', step: '0.1', min: '0', help: 'Simulated spread applied during validation.' },
+        { key: 'default_commission', label: 'Default Commission per Lot', type: 'number', step: '0.01', min: '0', help: 'Commission per lot (round turn) for validation.' },
+      ]
+    },
+    {
+      section: 'System',
+      icon: 'fa-gear',
+      description: 'General system behavior.',
+      fields: [
+        { key: 'refresh_interval', label: 'UI Refresh Interval (sec)', type: 'number', step: '1', min: '1', help: 'How often the dashboard auto-refreshes.' },
+        { key: 'worker_timeout_seconds', label: 'Worker Timeout (sec)', type: 'number', step: '1', min: '10', help: 'Mark worker stale after this many seconds without heartbeat.' },
+        { key: 'log_verbosity', label: 'Log Verbosity', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'], help: 'Server-side log level.' },
+        { key: 'debug_mode', label: 'Debug Mode', type: 'toggle', help: 'Enable verbose debug logging on workers.' },
+      ]
+    },
+  ];
+
+  function _buildPage() {
+    var html = '<div class="fleet-page">';
+    html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-gear" style="margin-right:8px;color:var(--accent);"></i>Settings & Administration</span></div>';
+    html += '<div class="port-tabs" id="settings-tabs">';
+    html += '<button class="port-tab' + (_activeTab === 'general' ? ' active' : '') + '" data-tab="general">General Settings</button>';
+    html += '<button class="port-tab' + (_activeTab === 'admin' ? ' active' : '') + '" data-tab="admin">System Management</button>';
+    html += '</div><div id="settings-content">' + _spinner() + '</div></div>';
+    return html;
+  }
+
+  /* ── General Settings — Schema-Driven ─────────────────────── */
+  function _renderGeneral() {
+    var html = '';
+
+    SETTING_SCHEMA.forEach(function (section) {
+      html += '<div class="wd-panel" style="margin-bottom:16px;">';
+      html += '<div class="wd-panel-header"><i class="fa-solid ' + section.icon + '" style="margin-right:8px;opacity:0.6;"></i>' + section.section + '</div>';
+      html += '<div class="wd-panel-body">';
+
+      if (section.description) {
+        html += '<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px;line-height:1.5;">' + section.description + '</div>';
+      }
+
+      html += '<div class="wd-form-grid" style="grid-template-columns:1fr 1fr;">';
+
+      section.fields.forEach(function (f) {
+        var val = _settings[f.key] !== undefined ? _settings[f.key] : '';
+        var isModified = _original[f.key] !== undefined && String(val) !== String(_original[f.key]);
+        var modDot = isModified ? ' <span style="color:var(--accent);font-size:8px;">\u25CF</span>' : '';
+
+        html += '<div class="wd-form-group">';
+        html += '<label class="wd-form-label">' + f.label + modDot + '</label>';
+
+        if (f.type === 'select') {
+          html += '<select class="wd-form-select settings-input" data-key="' + f.key + '">';
+          (f.options || []).forEach(function (opt) {
+            html += '<option value="' + opt + '"' + (String(val) === String(opt) ? ' selected' : '') + '>' +
+              opt.charAt(0).toUpperCase() + opt.slice(1) + '</option>';
+          });
+          html += '</select>';
+        } else if (f.type === 'toggle') {
+          var checked = val === 'true' || val === true;
+          html += '<div style="display:flex;align-items:center;gap:10px;">';
+          html += '<input type="checkbox" class="wd-toggle settings-input" data-key="' + f.key + '"' + (checked ? ' checked' : '') + ' />';
+          html += '<span class="toggle-label" style="font-size:11px;color:var(--text-muted);">' + (checked ? 'Enabled' : 'Disabled') + '</span>';
+          html += '</div>';
+        } else if (f.type === 'number') {
+          html += '<input type="number" class="wd-form-input settings-input" data-key="' + f.key + '" value="' + val + '"';
+          if (f.step) html += ' step="' + f.step + '"';
+          if (f.min) html += ' min="' + f.min + '"';
+          html += ' />';
+        } else {
+          html += '<input type="text" class="wd-form-input settings-input" data-key="' + f.key + '" value="' + val + '"';
+          if (f.placeholder) html += ' placeholder="' + f.placeholder + '"';
+          html += ' autocomplete="off" spellcheck="false" />';
+        }
+
+        if (f.help) {
+          html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;line-height:1.4;">' + f.help + '</div>';
+        }
+        html += '</div>';
+      });
+
+      html += '</div></div></div>';
+    });
+
+    /* Action bar */
+    html += '<div class="wd-panel"><div class="wd-panel-body" style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<div>';
+    html += '<button class="wd-btn wd-btn-ghost" id="reset-settings-btn"><i class="fa-solid fa-rotate-left"></i> Reset to Defaults</button>';
+    html += '</div>';
+    html += '<div style="display:flex;align-items:center;gap:12px;">';
+    html += '<span id="settings-change-count" style="font-size:11px;color:var(--text-muted);"></span>';
+    html += '<button class="wd-btn wd-btn-primary deploy" id="save-settings-btn"><i class="fa-solid fa-floppy-disk"></i> Save Settings</button>';
+    html += '</div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function _updateChangeCount() {
+    var count = 0;
+    for (var k in _settings) {
+      if (String(_settings[k]) !== String(_original[k])) count++;
+    }
+    var el = document.getElementById('settings-change-count');
+    if (el) {
+      el.textContent = count > 0 ? count + ' unsaved change' + (count > 1 ? 's' : '') : '';
+    }
+  }
+
+  function _attachGeneralEvents() {
+    document.querySelectorAll('.settings-input').forEach(function (input) {
+      var key = input.getAttribute('data-key');
+      var handler = function () {
+        if (input.type === 'checkbox') {
+          _settings[key] = input.checked ? 'true' : 'false';
+          var label = input.parentElement.querySelector('.toggle-label');
+          if (label) label.textContent = input.checked ? 'Enabled' : 'Disabled';
+        } else {
+          _settings[key] = input.value;
+        }
+        _updateChangeCount();
+      };
+      if (input.type === 'checkbox') input.addEventListener('change', handler);
+      else input.addEventListener('input', handler);
+
+      /* Auto-uppercase symbol */
+      if (key === 'default_symbol') {
+        input.addEventListener('input', function () {
+          input.value = input.value.toUpperCase().replace(/\s/g, '');
+          _settings[key] = input.value;
+        });
+      }
+    });
+
+    var saveBtn = document.getElementById('save-settings-btn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving\u2026';
+        ApiClient.saveSettings(_settings).then(function (data) {
+          _settings = data.settings || _settings;
+          _original = Object.assign({}, _settings);
+          /* ★ Reload GlobalSettings so all pages pick up new values */
+          GlobalSettings.load();
+          ToastManager.show('Settings saved! Defaults updated everywhere.', 'success');
+          _updateChangeCount();
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
+        }).catch(function (e) {
+          ToastManager.show('Failed: ' + e.message, 'error');
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
+        });
+      });
+    }
+
+    var resetBtn = document.getElementById('reset-settings-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: 'Reset to Defaults', type: 'danger',
+          bodyHtml: '<p>Reset all settings to factory defaults? Current values will be lost.</p>',
+          confirmText: 'Reset All',
+          onConfirm: function () {
+            var defaults = {
+              refresh_interval: '5', default_symbol: 'XAUUSD', default_bar_size: '100',
+              default_lot_size: '0.01', default_max_bars: '500',
+              default_tick_lookback_value: '30', default_tick_lookback_unit: 'minutes',
+              default_spread: '0', default_commission: '0',
+              debug_mode: 'true', worker_timeout_seconds: '90', log_verbosity: 'INFO',
+            };
+            ApiClient.saveSettings(defaults).then(function (data) {
+              _settings = data.settings || defaults;
+              _original = Object.assign({}, _settings);
+              GlobalSettings.load();
+              _renderTab();
+              ToastManager.show('Settings reset to defaults.', 'info');
+            }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    }
+  }
+
+  /* ── Admin Tab — UNCHANGED from your version ──────────────── */
+  function _renderAdmin() {
+    var html = '';
+
+    /* System Stats */
+    html += '<div class="wd-panel"><div class="wd-panel-header" style="display:flex;justify-content:space-between;align-items:center;">System Overview';
+    html += '<button class="wd-btn wd-btn-ghost" id="refresh-stats-btn" style="font-size:11px;padding:4px 10px;"><i class="fa-solid fa-arrows-rotate"></i></button></div><div class="wd-panel-body">';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
+    var statCards = [
+      { label: 'Database Size', value: _fmtBytes(_stats.db_size_bytes || 0) },
+      { label: 'Strategies', value: _stats.strategies_count || 0 },
+      { label: 'Workers', value: _stats.workers_count || 0 },
+      { label: 'Active Deploys', value: _stats.active_deployments || 0 },
+      { label: 'Total Trades', value: _stats.trades_count || 0 },
+      { label: 'Events', value: _stats.events_count || 0 },
+      { label: 'Equity Snaps', value: _stats.equity_snapshots_count || 0 },
+      { label: 'Settings', value: _stats.settings_count || 0 }
+    ];
+    statCards.forEach(function (c) {
+      html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:12px;text-align:center;"><div class="mono" style="font-size:16px;font-weight:600;color:var(--accent);">' + c.value + '</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + c.label + '</div></div>';
+    });
+    html += '</div></div></div>';
+
+    /* Emergency Stop */
+    html += '<div class="wd-panel" style="border:1px solid var(--warning);"><div class="wd-panel-header" style="color:var(--warning);"><i class="fa-solid fa-circle-stop" style="margin-right:6px;"></i>Emergency Controls</div><div class="wd-panel-body">';
+    html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Stop all strategies and close all open positions across all workers at market price.</p>';
+    html += '<button class="wd-btn" id="admin-emergency-stop" style="background:rgba(239,68,68,0.15);color:var(--danger);font-weight:600;border:1px solid var(--danger);"><i class="fa-solid fa-circle-stop"></i> EMERGENCY STOP ALL</button>';
+    html += '</div></div>';
+
+    /* Strategy Management */
+    html += '<div class="wd-panel"><div class="wd-panel-header">Strategy Management <span class="panel-badge">' + _strategies.length + ' STRATEGIES</span></div><div class="wd-panel-body">';
+    if (_strategies.length === 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No strategies registered.</div>';
+    } else {
+      _strategies.forEach(function (s) {
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;margin-bottom:6px;">' +
+          '<div><span class="mono" style="color:var(--accent);font-size:12px;">' + (s.name || s.strategy_id) + '</span>' +
+          '<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">v' + (s.version || '?') + '</span></div>' +
+          '<button class="wd-btn wd-btn-ghost admin-delete-strategy" data-sid="' + s.strategy_id + '" style="font-size:10.5px;color:var(--danger);padding:4px 10px;"><i class="fa-solid fa-trash"></i> Delete</button></div>';
+      });
+    }
+    html += '</div></div>';
+
+    /* Worker Management */
+    html += '<div class="wd-panel"><div class="wd-panel-header">Worker Management <span class="panel-badge">' + _workers.length + ' WORKERS</span></div><div class="wd-panel-body">';
+    if (_workers.length === 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">No workers registered.</div>';
+    } else {
+      _workers.forEach(function (w) {
+        var stateClass = w.state || 'unknown';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;margin-bottom:6px;">' +
+          '<div><span class="mono" style="font-size:12px;">' + (w.worker_name || w.worker_id) + '</span>' +
+          '<span class="state-pill ' + stateClass + '" style="margin-left:8px;">' + stateClass.toUpperCase() + '</span></div>' +
+          '<button class="wd-btn wd-btn-ghost admin-remove-worker" data-wid="' + w.worker_id + '" style="font-size:10.5px;color:var(--danger);padding:4px 10px;"><i class="fa-solid fa-trash"></i> Remove</button></div>';
+      });
+    }
+    html += '<button class="wd-btn wd-btn-ghost" id="remove-stale-btn" style="margin-top:8px;font-size:11px;"><i class="fa-solid fa-broom"></i> Remove All Stale Workers</button>';
+    html += '</div></div>';
+
+    /* Portfolio Management */
+    html += '<div class="wd-panel"><div class="wd-panel-header">Portfolio Management</div><div class="wd-panel-body">';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
+    html += '<button class="wd-btn wd-btn-ghost" id="admin-clear-trades"><i class="fa-solid fa-eraser"></i> Delete All Trades (' + (_stats.trades_count || 0) + ')</button>';
+    html += '<button class="wd-btn wd-btn-ghost" id="admin-reset-portfolio"><i class="fa-solid fa-rotate-left"></i> Reset Portfolio (Trades + Equity)</button>';
+    html += '</div></div></div>';
+
+    /* Log Management */
+    html += '<div class="wd-panel"><div class="wd-panel-header">Log Management</div><div class="wd-panel-body">';
+    html += '<button class="wd-btn wd-btn-ghost" id="admin-clear-events"><i class="fa-solid fa-eraser"></i> Clear All Events (' + (_stats.events_count || 0) + ')</button>';
+    html += '</div></div>';
+
+    /* Danger Zone */
+    html += '<div class="wd-panel" style="border:1px solid var(--danger);">';
+    html += '<div class="wd-panel-header" style="color:var(--danger);"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Danger Zone</div><div class="wd-panel-body">';
+    html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Full system reset deletes ALL data. Only settings are preserved.</p>';
+    html += '<button class="wd-btn" id="admin-full-reset" style="background:rgba(239,68,68,0.15);color:var(--danger);font-weight:600;border:1px solid var(--danger);"><i class="fa-solid fa-skull-crossbones"></i> Full System Reset</button>';
+    html += '</div></div>';
+
+    return html;
+  }
+
+  function _attachAdminEvents() {
+    var refreshBtn = document.getElementById('refresh-stats-btn');
+    if (refreshBtn) refreshBtn.addEventListener('click', _loadData);
+
+    var esBtn = document.getElementById('admin-emergency-stop');
+    if (esBtn) {
+      esBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: '\u26A0 EMERGENCY STOP ALL', type: 'danger',
+          bodyHtml: '<p style="font-weight:600;color:var(--danger);">This will immediately stop all strategies and close all positions.</p>',
+          confirmText: 'STOP EVERYTHING',
+          onConfirm: function () {
+            ApiClient.emergencyStopAll().then(function (r) {
+              ToastManager.show('Emergency stop: ' + (r.deployments_stopped || 0) + ' stopped.', 'warning', 8000);
+              _loadData();
+            }).catch(function (e) { ToastManager.show('Failed: ' + e.message, 'error'); });
+          }
+        });
+      });
+    }
+
+    document.querySelectorAll('.admin-delete-strategy').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var sid = btn.getAttribute('data-sid');
+        ModalManager.show({
+          title: 'Delete Strategy', type: 'danger',
+          bodyHtml: '<p>Permanently delete strategy <strong>' + sid + '</strong>?</p>',
+          confirmText: 'Delete',
+          onConfirm: function () {
+            ApiClient.adminDeleteStrategy(sid).then(function () { ToastManager.show('Deleted.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    });
+
+    document.querySelectorAll('.admin-remove-worker').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var wid = btn.getAttribute('data-wid');
+        ModalManager.show({
+          title: 'Remove Worker', type: 'danger',
+          bodyHtml: '<p>Remove worker <strong>' + wid + '</strong>?</p>',
+          confirmText: 'Remove',
+          onConfirm: function () {
+            ApiClient.adminRemoveWorker(wid).then(function () { ToastManager.show('Removed.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    });
+
+    var staleBtn = document.getElementById('remove-stale-btn');
+    if (staleBtn) staleBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Remove Stale Workers', bodyHtml: '<p>Remove workers with no recent heartbeat?</p>', confirmText: 'Remove Stale',
+        onConfirm: function () { ApiClient.adminRemoveStaleWorkers().then(function (d) { ToastManager.show((d.removed || 0) + ' removed.', 'success'); _loadData(); }); }
+      });
+    });
+
+    var clearTradesBtn = document.getElementById('admin-clear-trades');
+    if (clearTradesBtn) clearTradesBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Delete All Trades', type: 'danger', bodyHtml: '<p>Delete ALL trade records? Cannot be undone.</p>', confirmText: 'Delete All',
+        onConfirm: function () { ApiClient.adminClearTrades().then(function (d) { ToastManager.show((d.trades_deleted || 0) + ' deleted.', 'success'); _loadData(); }); }
+      });
+    });
+
+    var resetPortBtn = document.getElementById('admin-reset-portfolio');
+    if (resetPortBtn) resetPortBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Reset Portfolio', type: 'danger', bodyHtml: '<p>Delete all trades AND equity history?</p>', confirmText: 'Reset Portfolio',
+        onConfirm: function () { ApiClient.adminResetPortfolio().then(function () { ToastManager.show('Portfolio reset.', 'success'); _loadData(); }); }
+      });
+    });
+
+    var clearEventsBtn = document.getElementById('admin-clear-events');
+    if (clearEventsBtn) clearEventsBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Clear Events', bodyHtml: '<p>Delete all event logs?</p>', confirmText: 'Clear',
+        onConfirm: function () { ApiClient.adminClearEvents().then(function (d) { ToastManager.show((d.events_cleared || 0) + ' cleared.', 'success'); _loadData(); }); }
+      });
+    });
+
+    var fullResetBtn = document.getElementById('admin-full-reset');
+    if (fullResetBtn) fullResetBtn.addEventListener('click', function () {
+      ModalManager.show({
+        title: '\u26A0\uFE0F FULL SYSTEM RESET', type: 'danger',
+        bodyHtml: '<p>This deletes <strong>EVERYTHING</strong> except settings. Completely irreversible.</p>',
+        confirmText: 'RESET EVERYTHING',
+        onConfirm: function () { ApiClient.adminFullReset().then(function () { ToastManager.show('Full reset complete.', 'warning', 8000); _loadData(); }); }
+      });
+    });
+  }
+
+  function _renderTab() {
+    var el = document.getElementById('settings-content');
+    if (!el) return;
+    if (_activeTab === 'general') {
+      el.innerHTML = _renderGeneral();
+      _attachGeneralEvents();
+      _updateChangeCount();
+    } else {
+      el.innerHTML = _renderAdmin();
+      _attachAdminEvents();
+    }
+  }
+
+  function _loadData() {
+    Promise.all([
+      ApiClient.getSettings().catch(function () { return { settings: {} }; }),
+      ApiClient.getAdminStats().catch(function () { return { stats: {} }; }),
+      ApiClient.getStrategies().catch(function () { return { strategies: [] }; }),
+      ApiClient.getFleetWorkers().catch(function () { return { workers: [] }; })
+    ]).then(function (results) {
+      _settings = (results[0] && results[0].settings) || {};
+      _original = Object.assign({}, _settings);
+      _stats = (results[1] && results[1].stats) || {};
+      _strategies = (results[2] && results[2].strategies) || [];
+      _workers = (results[3] && results[3].workers) || [];
+      _renderTab();
+    }).catch(function () {
+      var el = document.getElementById('settings-content');
+      if (el) el.innerHTML = _emptyState('fa-circle-exclamation', 'Failed to Load', 'Could not fetch settings data.');
+    });
+  }
+
+  function render() {
+    document.getElementById('main-content').innerHTML = _buildPage();
+    document.querySelectorAll('#settings-tabs .port-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        _activeTab = tab.getAttribute('data-tab');
+        document.querySelectorAll('#settings-tabs .port-tab').forEach(function (t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        _renderTab();
+      });
+    });
+    _loadData();
+  }
+
+  function destroy() {}
+  return { render: render, destroy: destroy };
+})();
+
+
+/* ================================================================
+   12. APP — NAVIGATION + INITIALIZATION
+   ================================================================ */
+var App = (function () {
+  'use strict';
+  var currentPage = 'dashboard';
+  var _selectedWorker = null;
+
+  function init() {
+    ThemeManager.init();
+    setupNavigation();
+    startClock();
+    /* ★ Load global settings before first render */
+    GlobalSettings.load().then(function () {
+      navigateTo('dashboard');
+    });
+  }
+
+  function setupNavigation() {
+    document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (item) {
+      item.addEventListener('click', function (e) {
+        e.preventDefault();
+        navigateTo(item.getAttribute('data-page'));
+      });
+    });
+  }
+
+  function navigateTo(page) {
+    /* Destroy current page */
+    if (currentPage === 'dashboard') DashboardRenderer.destroy();
+    if (currentPage === 'fleet') FleetRenderer.destroy();
+    if (currentPage === 'workerDetail' && typeof WorkerDetailRenderer !== 'undefined') WorkerDetailRenderer.destroy();
+    if (currentPage === 'strategies') StrategiesRenderer.destroy();
+    if (currentPage === 'portfolio') PortfolioRenderer.destroy();
+    if (currentPage === 'logs') LogsRenderer.destroy();
+    if (currentPage === 'settings') SettingsRenderer.destroy();
+    if (currentPage === 'validation' && typeof ValidationRenderer !== 'undefined') ValidationRenderer.destroy();
+
+    currentPage = page;
+
+    /* Highlight active nav item */
+    var navPage = page === 'workerDetail' ? 'fleet' : page;
+    document.querySelectorAll('#sidebar-nav .nav-item').forEach(function (item) {
+      item.classList.toggle('active', item.getAttribute('data-page') === navPage);
+    });
+
+    /* Update topbar title */
+    var titleMap = {
+      dashboard: 'Dashboard',
+      fleet: 'Fleet Management',
+      workerDetail: 'Worker Detail',
+      strategies: 'Strategy Registry',
+      portfolio: 'Portfolio Analytics',
+      logs: 'Event Logs',
+      settings: 'Settings & Admin',
+      validation: 'Strategy Validation',
+    };
+    document.getElementById('topbar-title').textContent = titleMap[page] || (page.charAt(0).toUpperCase() + page.slice(1));
+
+    /* Render new page */
+    if (page === 'dashboard') {
+      DashboardRenderer.render();
+    } else if (page === 'fleet') {
+      FleetRenderer.render();
+    } else if (page === 'workerDetail' && _selectedWorker) {
+      if (typeof WorkerDetailRenderer !== 'undefined') {
+        WorkerDetailRenderer.render(_selectedWorker);
+      } else {
+        document.getElementById('main-content').innerHTML = _emptyState('fa-circle-exclamation', 'Worker Detail Unavailable', 'workerDetailRenderer.js may not be loaded. Check your HTML script tags.');
+      }
+    } else if (page === 'strategies') {
+      StrategiesRenderer.render();
+    } else if (page === 'portfolio') {
+      PortfolioRenderer.render();
+    } else if (page === 'logs') {
+      LogsRenderer.render();
+    } else if (page === 'settings') {
+      SettingsRenderer.render();
+    } else if (page === 'validation') {
+      if (typeof ValidationRenderer !== 'undefined') {
+        ValidationRenderer.render();
+      } else {
+        document.getElementById('main-content').innerHTML = _emptyState('fa-flask-vial', 'Validation Unavailable', 'validationRenderer.js not loaded.');
+      }
+    } else {
+      renderPlaceholder(page);
+    }
+  }
+
+  function navigateToWorkerDetail(workerData) {
+    _selectedWorker = workerData;
+    navigateTo('workerDetail');
+  }
+
+  function renderPlaceholder(page) {
+    document.getElementById('main-content').innerHTML = _emptyState(
+      'fa-gear',
+      page.charAt(0).toUpperCase() + page.slice(1),
+      'This page is under development.'
+    );
+  }
+
+  function startClock() {
+    function update() {
+      var now = new Date();
+      document.getElementById('topbar-clock').textContent =
+        String(now.getHours()).padStart(2, '0') + ':' +
+        String(now.getMinutes()).padStart(2, '0') + ':' +
+        String(now.getSeconds()).padStart(2, '0');
+    }
+    update();
+    setInterval(update, 1000);
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+
+  return {
+    navigateTo: navigateTo,
+    navigateToWorkerDetail: navigateToWorkerDetail
+  };
+})();
+
+
+
+/* ================================================================
+   GLOBAL SETTINGS — Fetches from backend, used everywhere
+   ================================================================ */
+
+var GlobalSettings = (function () {
+  'use strict';
+
+  var _settings = {
+    refresh_interval: '5',
+    default_symbol: 'XAUUSD',
+    default_bar_size: '100',
+    default_lot_size: '0.01',
+    default_max_bars: '500',
+    default_tick_lookback_value: '30',
+    default_tick_lookback_unit: 'minutes',
+    default_spread: '0',
+    default_commission: '0',
+    debug_mode: 'true',
+    worker_timeout_seconds: '90',
+    log_verbosity: 'INFO',
+  };
+
+  var _loaded = false;
+  var _listeners = [];
+
+  function load() {
+    return fetch('/api/admin/settings').then(function (r) {
+      return r.json();
+    }).then(function (data) {
+      if (data.settings) {
+        for (var k in data.settings) {
+          _settings[k] = data.settings[k];
+        }
+      }
+      _loaded = true;
+      _listeners.forEach(function (fn) { try { fn(_settings); } catch (e) {} });
+      _listeners = [];
+      console.log('[SETTINGS] Loaded:', _settings);
+      return _settings;
+    }).catch(function (e) {
+      console.warn('[SETTINGS] Failed to load, using defaults:', e);
+      _loaded = true;
+      return _settings;
+    });
+  }
+
+  function get(key, fallback) {
+    var val = _settings[key];
+    if (val === undefined || val === null || val === '') return fallback;
+    return val;
+  }
+
+  function getFloat(key, fallback) {
+    var val = parseFloat(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getInt(key, fallback) {
+    var val = parseInt(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getAll() {
+    return Object.assign({}, _settings);
+  }
+
+  function isLoaded() { return _loaded; }
+
+  function onReady(fn) {
+    if (_loaded) { fn(_settings); }
+    else { _listeners.push(fn); }
+  }
+
+  /* Convenience: get deployment defaults as an object */
+  function getDeploymentDefaults() {
     return {
-        "total_trades": n,
-        "wins": len(win_p), "losses": len(loss_p),
-        "gross_profit": gp, "gross_loss": gl, "net_pnl": net,
-        "win_rate": _r2(len(win_p) / n * 100) if n else 0,
-        "profit_factor": pf,
-        "expectancy": _r2(net / n) if n else 0,
-        "avg_trade": _r2(net / n) if n else 0,
-        "avg_winner": _r2(gp / len(win_p)) if win_p else 0,
-        "avg_loser": _r2(gl / len(loss_p)) if loss_p else 0,
-        "best_trade": _r2(max(profits)),
-        "worst_trade": _r2(min(profits)),
-        "max_drawdown_pct": _r2(dd_pct),
-        "max_drawdown_usd": _r2(dd_usd),
-        "recovery_factor": rf,
-        "sharpe_estimate": sharpe,
-        "sortino_estimate": sortino,
-        "avg_bars_held": _r2(sum(bars) / n) if n else 0,
-        "max_consec_wins": mcw,
-        "max_consec_losses": mcl,
-        "best_day": best_day, "worst_day": worst_day,
-        "trades_per_day": _r2(n / num_days),
-    }
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      tick_lookback_value: getInt('default_tick_lookback_value', 30),
+      tick_lookback_unit: get('default_tick_lookback_unit', 'minutes'),
+    };
+  }
 
-
-def get_portfolio_summary(strategy_id=None, worker_id=None,
-                           symbol=None) -> dict:
-    trades = get_all_trades_db(limit=50000, strategy_id=strategy_id,
-                                worker_id=worker_id, symbol=symbol)
-    workers = get_all_workers()
-    tb = te = tf = 0.0
-    tp = 0
-    has_acc = False
-
-    for w in workers:
-        if worker_id and w.get("worker_id") != worker_id:
-            continue
-        ab = w.get("account_balance", 0) or 0
-        ae = w.get("account_equity", 0) or 0
-        if ab > 0:
-            tb += ab; has_acc = True
-        if ae > 0:
-            te += ae; has_acc = True
-        tf += (w.get("floating_pnl") or 0)
-        tp += (w.get("open_positions_count") or 0)
-
-    stats = _compute_trade_stats(trades)
-
-    if not has_acc:
-        tb = stats["net_pnl"]
-        te = stats["net_pnl"] + tf
-
-    # Compute drawdown from equity snapshots if available (more accurate)
-    snapshots = get_equity_snapshots_db(limit=5000)
-    snap_dd_usd = 0.0
-    snap_dd_pct = 0.0
-    if snapshots:
-        eq_vals = [s.get("equity", 0) for s in snapshots if (s.get("equity") or 0) > 0]
-        if eq_vals:
-            pk = 0.0
-            for v in eq_vals:
-                if v > pk:
-                    pk = v
-                d = pk - v
-                if d > snap_dd_usd:
-                    snap_dd_usd = d
-                if pk > 0.01:
-                    dp = min((d / pk) * 100, 100.0)
-                    if dp > snap_dd_pct:
-                        snap_dd_pct = dp
-
-    # Use snapshot-based DD if available and meaningful, else trade-based
-    final_dd_usd = snap_dd_usd if snap_dd_usd > 0 else stats["max_drawdown_usd"]
-    final_dd_pct = snap_dd_pct if snap_dd_pct > 0 else stats["max_drawdown_pct"]
-
-    # Current drawdown
-    current_dd_pct = 0.0
-    if snapshots:
-        eq_vals = [s.get("equity", 0) for s in snapshots if (s.get("equity") or 0) > 0]
-        if eq_vals:
-            peak_eq = max(eq_vals)
-            current_eq = eq_vals[-1]
-            if peak_eq > 0.01:
-                current_dd_pct = min(((peak_eq - current_eq) / peak_eq) * 100, 100.0)
-
+  function getValidationDefaults() {
     return {
-        "total_balance": _r2(tb),
-        "total_equity": _r2(te),
-        "floating_pnl": _r2(tf),
-        "open_positions": tp,
-        "has_account_data": has_acc,
-        "active_workers": len([w for w in workers
-                               if w.get("state") in
-                               ("online", "running")]),
-        "max_drawdown_usd": _r2(final_dd_usd),
-        "max_drawdown_pct": _r2(final_dd_pct),
-        "current_drawdown_pct": _r2(current_dd_pct),
-        "peak_equity": _r2(max(eq_vals) if snapshots and eq_vals else te),
-        # All other stats from _compute_trade_stats (except DD which we override)
-        "total_trades": stats["total_trades"],
-        "wins": stats["wins"],
-        "losses": stats["losses"],
-        "gross_profit": stats["gross_profit"],
-        "gross_loss": stats["gross_loss"],
-        "net_pnl": stats["net_pnl"],
-        "win_rate": stats["win_rate"],
-        "profit_factor": stats["profit_factor"],
-        "expectancy": stats["expectancy"],
-        "avg_trade": stats["avg_trade"],
-        "avg_winner": stats["avg_winner"],
-        "avg_loser": stats["avg_loser"],
-        "best_trade": stats["best_trade"],
-        "worst_trade": stats["worst_trade"],
-        "recovery_factor": _r2(stats["net_pnl"] / final_dd_usd) if final_dd_usd > 0 else 0,
-        "sharpe_estimate": stats["sharpe_estimate"],
-        "sortino_estimate": stats["sortino_estimate"],
-        "avg_bars_held": stats["avg_bars_held"],
-        "max_consec_wins": stats["max_consec_wins"],
-        "max_consec_losses": stats["max_consec_losses"],
-        "best_day": stats["best_day"],
-        "worst_day": stats["worst_day"],
-        "trades_per_day": stats["trades_per_day"],
-    }
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      spread_points: getFloat('default_spread', 0),
+      commission_per_lot: getFloat('default_commission', 0),
+    };
+  }
+
+  return {
+    load: load,
+    get: get,
+    getFloat: getFloat,
+    getInt: getInt,
+    getAll: getAll,
+    isLoaded: isLoaded,
+    onReady: onReady,
+    getDeploymentDefaults: getDeploymentDefaults,
+    getValidationDefaults: getValidationDefaults,
+  };
+})();
 
-
-def get_equity_history() -> list:
-    trades = get_all_trades_db(limit=50000)
-    trade_curve = []
-    if trades:
-        sorted_t = sorted(trades, key=lambda t: t.get("id", 0))
-        cum = 0.0
-        for t in sorted_t:
-            cum += _r2(t.get("profit"))
-            ts = t.get("exit_time") or t.get("created_at") or ""
-            label = str(ts)[-8:] if len(str(ts)) >= 8 else str(ts)
-            trade_curve.append({
-                "timestamp": str(ts),
-                "equity": _r2(cum),
-                "balance": _r2(cum),
-                "floating_pnl": 0.0,
-                "realized_pnl": _r2(cum),
-                "label": label,
-                "source": "trade",
-            })
-
-    # Periodic snapshots
-    snapshots = get_equity_snapshots_db(limit=2000)
-    snap_curve = []
-    for s in snapshots:
-        eq = _r2(s.get("equity", 0))
-        bal = _r2(s.get("balance", 0))
-        # Skip zero-equity snapshots (worker not initialized yet)
-        if eq <= 0 and bal <= 0:
-            continue
-        ts = s.get("timestamp", "")
-        label = ts[-8:] if len(ts) >= 8 else ts
-        snap_curve.append({
-            "timestamp": ts,
-            "equity": eq,
-            "balance": bal,
-            "floating_pnl": _r2(s.get("floating_pnl", 0)),
-            "realized_pnl": _r2(s.get("cumulative_pnl", 0)),
-            "label": label,
-            "source": "snapshot",
-        })
-
-    if snap_curve:
-        # Downsample to one per minute
-        result, last_min = [], ""
-        for s in snap_curve:
-            m = s["timestamp"][:16]
-            if m != last_min:
-                result.append(s)
-                last_min = m
-        return result if result else snap_curve
-
-    if trade_curve:
-        return trade_curve
-
-    # No data at all — return empty (UI handles gracefully)
-    return []
-
-def get_portfolio_trades(strategy_id=None, worker_id=None,
-                          symbol=None, limit=500) -> list:
-    return get_all_trades_db(limit=limit, strategy_id=strategy_id,
-                             worker_id=worker_id, symbol=symbol)
-
-
-def get_portfolio_performance(strategy_id=None, worker_id=None,
-                               symbol=None) -> dict:
-    trades = get_all_trades_db(limit=50000, strategy_id=strategy_id,
-                                worker_id=worker_id, symbol=symbol)
-    if not trades:
-        return {"daily": [], "monthly": [],
-                "by_strategy": [], "by_worker": [], "by_symbol": []}
-
-    # ★ FIX: Daily uses _trade_exit_date (converts Unix → YYYY-MM-DD)
-    daily = {}
-    for t in trades:
-        d = _trade_exit_date(t)
-        if not d:
-            continue
-        if d not in daily:
-            daily[d] = {"date": d, "pnl": 0, "trades": 0, "wins": 0}
-        daily[d]["pnl"] += float(t.get("profit", 0) or 0)
-        daily[d]["trades"] += 1
-        if float(t.get("profit", 0) or 0) > 0:
-            daily[d]["wins"] += 1
-
-    daily_list = sorted(daily.values(), key=lambda x: x["date"])
-    cum = 0.0
-    for d in daily_list:
-        cum += d["pnl"]
-        d["pnl"] = _r2(d["pnl"])
-        d["cumulative"] = _r2(cum)
-
-    # ★ FIX: Monthly uses _trade_exit_month
-    monthly = {}
-    for t in trades:
-        m = _trade_exit_month(t)
-        if not m:
-            continue
-        if m not in monthly:
-            monthly[m] = {"month": m, "pnl": 0, "trades": 0, "wins": 0}
-        monthly[m]["pnl"] += float(t.get("profit", 0) or 0)
-        monthly[m]["trades"] += 1
-        if float(t.get("profit", 0) or 0) > 0:
-            monthly[m]["wins"] += 1
-
-    monthly_list = sorted(monthly.values(), key=lambda x: x["month"])
-    for m in monthly_list:
-        m["pnl"] = _r2(m["pnl"])
-        m["win_rate"] = _r2(
-            m["wins"] / m["trades"] * 100
-        ) if m["trades"] else 0
-
-    # Breakdowns
-    def _bk(key):
-        bk = {}
-        for t in trades:
-            k = t.get(key, "")
-            if not k:
-                continue
-            if k not in bk:
-                bk[k] = {key: k, "trades": 0, "pnl": 0,
-                         "wins": 0, "losses": 0, "total_bars": 0}
-            bk[k]["trades"] += 1
-            p = float(t.get("profit", 0) or 0)
-            bk[k]["pnl"] += p
-            bk[k]["total_bars"] += int(t.get("bars_held", 0) or 0)
-            if p > 0:
-                bk[k]["wins"] += 1
-            else:
-                bk[k]["losses"] += 1
-        for v in bk.values():
-            v["pnl"] = _r2(v["pnl"])
-            v["win_rate"] = _r2(
-                v["wins"] / v["trades"] * 100
-            ) if v["trades"] else 0
-            v["avg_bars"] = _r2(
-                v["total_bars"] / v["trades"]
-            ) if v["trades"] else 0
-            ws = sum(float(t.get("profit", 0) or 0)
-                     for t in trades
-                     if t.get(key) == v[key]
-                     and float(t.get("profit", 0) or 0) > 0)
-            ls = sum(abs(float(t.get("profit", 0) or 0))
-                     for t in trades
-                     if t.get(key) == v[key]
-                     and float(t.get("profit", 0) or 0) <= 0)
-            v["profit_factor"] = _r2(
-                ws / ls) if ls > 0 else (999.99 if ws > 0 else 0)
-        return list(bk.values())
-
-    return {
-        "daily": daily_list,
-        "monthly": monthly_list,
-        "by_strategy": _bk("strategy_id"),
-        "by_worker": _bk("worker_id"),
-        "by_symbol": _bk("symbol"),
-    }
-
-
-# =============================================================================
-# Events / Logs
-# =============================================================================
-
-def get_events_list(category=None, level=None, worker_id=None,
-                     deployment_id=None, search=None, limit=200) -> list:
-    min_level = get_setting("log_verbosity") or "DEBUG"
-    level_order = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3}
-    min_ord = level_order.get(min_level, 0)
-
-    events = get_events_db(limit=max(limit, 500), category=category,
-                           worker_id=worker_id,
-                           deployment_id=deployment_id)
-    if level:
-        events = [e for e in events if e.get("level") == level]
-    elif min_ord > 0:
-        events = [e for e in events
-                  if level_order.get(e.get("level", "INFO"), 1) >= min_ord]
-    if search:
-        sl = search.lower()
-        events = [e for e in events
-                  if sl in (e.get("message", "") or "").lower()
-                  or sl in (e.get("event_type", "") or "").lower()]
-    return events[:limit]
-
-
-# =============================================================================
-# Settings
-# =============================================================================
-
-def get_system_settings() -> dict:
-    return get_all_settings()
-
-
-def save_system_settings(settings: dict) -> dict:
-    save_settings_bulk(settings)
-    return get_all_settings()
-
-
-# =============================================================================
-# Emergency Stop
-# =============================================================================
-
-def emergency_stop_all() -> dict:
-    workers = get_all_workers()
-    deployments = get_all_deployments_db()
-    stopped = 0
-    for d in deployments:
-        if d.get("state") in ("running", "queued", "warming_up",
-                                "loading_strategy", "fetching_ticks",
-                                "generating_initial_bars"):
-            update_deployment_state_db(d["deployment_id"], "stopped")
-            stopped += 1
-    cmds = 0
-    for w in workers:
-        if w.get("state") in ("online", "running", "idle", "stale"):
-            enqueue_command(w["worker_id"], "emergency_close", {
-                "action": "close_all_positions",
-                "reason": "emergency_stop_all",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            enqueue_command(w["worker_id"], "stop_all_strategies", {
-                "reason": "emergency_stop_all",
-            })
-            cmds += 2
-    log_event_db("system", "emergency_stop",
-                 f"Emergency stop: {stopped} deps stopped, "
-                 f"{cmds} commands sent",
-                 level="WARNING")
-    return {"ok": True, "deployments_stopped": stopped,
-            "commands_sent": cmds,
-            "workers_notified": len(workers)}
-
-
-# =============================================================================
-# Admin
-# =============================================================================
-
-def admin_get_stats() -> dict:
-    stats = get_system_stats_db()
-    stats["fleet_summary"] = get_fleet_summary()
-    return stats
-
-
-def admin_delete_strategy(strategy_id: str) -> dict:
-    result = delete_strategy_full_db(strategy_id)
-    log_event_db("strategy", "deleted",
-                 f"Strategy {strategy_id} deleted",
-                 strategy_id=strategy_id, level="WARNING")
-    return result
-
-
-def admin_reset_portfolio() -> dict:
-    tc = delete_all_trades_db()
-    clear_equity_snapshots_db()
-    log_event_db("system", "portfolio_reset",
-                 f"{tc} trades deleted", level="WARNING")
-    return {"trades_deleted": tc, "equity_cleared": True}
-
-
-def admin_clear_trades() -> dict:
-    c = delete_all_trades_db()
-    log_event_db("system", "trades_cleared",
-                 f"{c} trades deleted", level="WARNING")
-    return {"trades_deleted": c}
-
-
-def admin_remove_worker(worker_id: str) -> dict:
-    with _worker_lock:
-        _workers_cache.pop(worker_id, None)
-    with _command_lock:
-        _command_queues.pop(worker_id, None)
-    result = remove_worker_db(worker_id)
-    log_event_db("worker", "removed",
-                 f"Worker {worker_id} removed",
-                 worker_id=worker_id, level="WARNING")
-    return result
-
-
-def admin_remove_stale_workers(threshold: int = 300) -> dict:
-    count = remove_stale_workers_db(threshold)
-    now = datetime.now(timezone.utc)
-    with _worker_lock:
-        stale = []
-        for wid, w in _workers_cache.items():
-            hb = w.get("last_heartbeat_at")
-            if hb:
-                try:
-                    last = datetime.fromisoformat(hb)
-                    if (now - last).total_seconds() > threshold:
-                        stale.append(wid)
-                except (TypeError, ValueError):
-                    stale.append(wid)
-        for wid in stale:
-            _workers_cache.pop(wid, None)
-    return {"removed": count}
-
-
-def admin_clear_events() -> dict:
-    c = clear_events_db()
-    return {"events_cleared": c}
-
-
-def admin_full_reset() -> dict:
-    counts = full_system_reset_db()
-    with _worker_lock:
-        _workers_cache.clear()
-    with _command_lock:
-        _command_queues.clear()
-    log_event_db("system", "full_reset",
-                 "Full system reset", level="WARNING")
-    return counts
-```
-
----
-
-## FILE: `vm/config.yaml`
-
-- Relative path: `vm/config.yaml`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/config.yaml`
-- Size bytes: `176`
-- SHA256: `a4d020f49abe16098429966ae5e1c28c4bf78f3aa1b01655ab96b48a6bff6ce7`
-- Guessed MIME type: `application/yaml`
-- Guessed encoding: `unknown`
-
-```yaml
-worker:
-  worker_id: "vm-worker-01"
-  worker_name: "Worker 01"
-
-mother_server:
-  url: "http://192.168.3.232:5100"
-
-heartbeat:
-  interval_seconds: 10
-
-agent:
-  version: "0.2.0"
-```
-
----
-
-## FILE: `vm/core/strategy_worker.py`
-
-- Relative path: `vm/core/strategy_worker.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/core/strategy_worker.py`
-- Size bytes: `89625`
-- SHA256: `a54431d22ffebc226bbac09172910aa81e2e9f28518e9da4f78850cc95728e1e`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI GRID — Combined Worker Runtime
-worker/strategyWorker.py
-"""
-
-from __future__ import annotations
-
-import importlib.util
-import os
-import sys
-import tempfile
-import threading
-import time
-import traceback
-import types
-from abc import ABC, abstractmethod
-from collections import deque
-from datetime import datetime, timezone, timedelta
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
-import requests
-
-from trading.indicators import IndicatorEngine, precompute_indicator_series
-from trading.execution import (
-    SIGNAL_BUY, SIGNAL_SELL, SIGNAL_HOLD, SIGNAL_CLOSE,
-    SIGNAL_CLOSE_LONG, SIGNAL_CLOSE_SHORT, VALID_SIGNALS,
-    PositionState, ExecutionLogger, MT5Executor,
-    validate_signal, compute_sl, compute_tp, build_trade_record,
-)
-
-
-# =============================================================================
-# Strategy Base Class
-# =============================================================================
-
-class BaseStrategy(ABC):
-    strategy_id: str = ""
-    name: str = ""
-    description: str = ""
-    version: str = "1.0"
-    min_lookback: int = 0
-
-    def get_metadata(self) -> Dict[str, Any]:
-        return {
-            "id": self.strategy_id, "name": self.name or self.strategy_id,
-            "description": self.description or "", "version": self.version,
-            "min_lookback": self.min_lookback,
-            "parameters": self.get_parameter_schema(),
-        }
-
-    def get_parameter_schema(self) -> Dict[str, Any]:
-        return getattr(self, "parameters", {})
-
-    def get_default_parameters(self) -> Dict[str, Any]:
-        schema = self.get_parameter_schema()
-        defaults = {}
-        for key, spec in schema.items():
-            if isinstance(spec, dict) and "default" in spec:
-                defaults[key] = spec["default"]
-        return defaults
-
-    def validate_parameters(self, raw_params: Dict[str, Any]) -> Dict[str, Any]:
-        params = dict(self.get_default_parameters())
-        for key, value in (raw_params or {}).items():
-            params[key] = value
-        return params
-
-    def build_indicators(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return []
-
-    def on_init(self, ctx: Any) -> None:
-        pass
-
-    def on_end(self, ctx: Any) -> None:
-        pass
-
-    @abstractmethod
-    def on_bar(self, ctx: Any) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError("Strategy must implement on_bar()")
-
-
-# =============================================================================
-# Strategy Context
-# =============================================================================
-
-class StrategyContext:
-    """
-    Strategy execution context — backtester-compatible.
-
-    ctx.index:           absolute monotonic bar counter (never resets, never wraps)
-    ctx.bar:             current bar dict (OHLCV)
-    ctx.bars:            rolling bar window (deque snapshot, use negative indexing for lookback)
-    ctx.indicators:      current bar indicator values {key: float}
-    ctx.ind_series:      full indicator series {key: [float]} over current bar window
-    ctx.prev_indicators: previous bar's indicator values (backtester compat)
-    ctx.position:        PositionState (has_position, direction, sl_level, tp_level, etc.)
-    ctx.params:          strategy parameters
-    ctx.state:           mutable dict — persists across bars (strategy's scratch space)
-    ctx.trades:          closed trade records (read-only list)
-    ctx.equity:          current mark-to-market equity
-    ctx.balance:         current realized balance
-    """
-
-    def __init__(self, bars: list, params: dict,
-                 position: Optional[PositionState] = None):
-        self._bars = bars
-        self._params = params
-        self._position = position or PositionState()
-        self._index: int = 0
-        self._bar_offset: int = 0
-        self._trades: list = []
-        self._equity: float = 0.0
-        self._balance: float = 0.0
-        self._indicators: dict = {}
-        self._ind_series: dict = {}
-        self._prev_indicators: dict = {}
-        self.state: dict = {}
-
-    @property
-    def index(self) -> int:
-        return self._index
-
-    @index.setter
-    def index(self, val: int):
-        self._index = val
-
-    @property
-    def bar(self) -> dict:
-        if 0 <= self._bar_offset < len(self._bars):
-            return self._bars[self._bar_offset]
-        return {}
-
-    @property
-    def bars(self) -> list:
-        return self._bars
-
-    @property
-    def indicators(self) -> dict:
-        return self._indicators
-
-    @property
-    def ind_series(self) -> dict:
-        return self._ind_series
-
-    @property
-    def prev_indicators(self) -> dict:
-        return self._prev_indicators
-
-    @property
-    def position(self) -> PositionState:
-        return self._position
-
-    @position.setter
-    def position(self, val: PositionState):
-        self._position = val
-
-    @property
-    def params(self) -> dict:
-        return self._params
-
-    @property
-    def trades(self) -> list:
-        return self._trades
-
-    @property
-    def equity(self) -> float:
-        return self._equity
-
-    @equity.setter
-    def equity(self, val: float):
-        self._equity = val
-
-    @property
-    def balance(self) -> float:
-        return self._balance
-
-    @balance.setter
-    def balance(self, val: float):
-        self._balance = val
-
-
-# =============================================================================
-# Range Bar Engine
-# =============================================================================
-
-def _make_bar(time_: int, open_: float, high_: float, low_: float,
-              close_: float, volume_: float) -> dict:
-    return {
-        "time": int(time_), "open": round(open_, 5), "high": round(high_, 5),
-        "low": round(low_, 5), "close": round(close_, 5),
-        "volume": round(volume_, 2),
-    }
-
-
-class RangeBarEngine:
-    def __init__(self, bar_size_points: float, max_bars: int = 500,
-                 on_bar: Optional[Callable[[dict], None]] = None,
-                 debug: bool = False):
-        self.range_size = float(bar_size_points)
-        self.max_bars = max_bars
-        self._on_bar = on_bar
-        self.debug = debug
-        self.trend = 0
-        self.bar: Optional[dict] = None
-        self.bars: deque = deque(maxlen=max_bars)
-        self._last_emitted_ts: Optional[int] = None
-        self.total_ticks = 0
-        self.total_bars_emitted = 0
-
-    @property
-    def current_bars_count(self) -> int:
-        return len(self.bars)
-
-    def _snap_to_grid(self, price: float) -> float:
-        level = round(price / self.range_size)
-        return round(level * self.range_size, 5)
-
-    def _emit(self, bar_dict: dict) -> None:
-        ts = int(bar_dict["time"])
-        if self._last_emitted_ts is not None and ts <= self._last_emitted_ts:
-            ts = self._last_emitted_ts + 1
-        bar_dict["time"] = ts
-        self._last_emitted_ts = ts
-        self.bars.append(bar_dict)
-        self.total_bars_emitted += 1
-        if self.debug and self._on_bar is None:
-            if self.total_bars_emitted <= 5 or self.total_bars_emitted % 100 == 0:
-                d = "UP" if bar_dict["close"] > bar_dict["open"] else "DN"
-                print(f"[RENKO] BAR #{self.total_bars_emitted} {d} | "
-                      f"O={bar_dict['open']:.5f} H={bar_dict['high']:.5f} "
-                      f"L={bar_dict['low']:.5f} C={bar_dict['close']:.5f} "
-                      f"| trend={self.trend}")
-        if self._on_bar:
-            self._on_bar(bar_dict)
-
-    def _start_bar(self, ts: int, price: float, volume: float) -> None:
-        snapped = self._snap_to_grid(price)
-        self.bar = {"time": ts, "open": snapped, "high": snapped,
-                    "low": snapped, "close": snapped, "volume": volume}
-        if self.debug:
-            print(f"[RENKO] Start bar: raw_price={price:.5f} "
-                  f"snapped_open={snapped:.5f} grid_size={self.range_size}")
-
-    def process_tick(self, ts: int, price: float, volume: float = 0.0) -> None:
-        self.total_ticks += 1
-        if self.bar is None:
-            self._start_bar(ts, price, volume)
-            return
-        p, rs = price, self.range_size
-        self.bar["volume"] += volume
-
-        while True:
-            o = self.bar["open"]
-            if self.trend == 0:
-                up_t = round(o + rs, 5)
-                dn_t = round(o - rs, 5)
-                if p >= up_t:
-                    self.bar["high"] = max(self.bar["high"], up_t)
-                    self.bar["low"] = min(self.bar["low"], o)
-                    self.bar["close"] = up_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.trend = 1
-                    self.bar = {"time": ts, "open": up_t, "high": up_t,
-                                "low": up_t, "close": up_t, "volume": 0.0}
-                    continue
-                if p <= dn_t:
-                    self.bar["high"] = max(self.bar["high"], o)
-                    self.bar["low"] = min(self.bar["low"], dn_t)
-                    self.bar["close"] = dn_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.trend = -1
-                    self.bar = {"time": ts, "open": dn_t, "high": dn_t,
-                                "low": dn_t, "close": dn_t, "volume": 0.0}
-                    continue
-                self.bar["high"] = max(self.bar["high"], p)
-                self.bar["low"] = min(self.bar["low"], p)
-                self.bar["close"] = p
-                break
-            if self.trend == 1:
-                cont_t = round(o + rs, 5)
-                rev_t = round(o - (2 * rs), 5)
-                if p >= cont_t:
-                    self.bar["high"] = max(self.bar["high"], cont_t)
-                    self.bar["low"] = min(self.bar["low"], o)
-                    self.bar["close"] = cont_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.bar = {"time": ts, "open": cont_t, "high": cont_t,
-                                "low": cont_t, "close": cont_t, "volume": 0.0}
-                    continue
-                if p <= rev_t:
-                    ro = round(o - rs, 5)
-                    rc = round(o - (2 * rs), 5)
-                    h_ = max(self.bar["high"], o)
-                    l_ = min(self.bar["low"], rc)
-                    self._emit(_make_bar(self.bar["time"], ro, h_, l_, rc,
-                               self.bar["volume"]))
-                    self.trend = -1
-                    self.bar = {"time": ts, "open": rc, "high": rc,
-                                "low": rc, "close": rc, "volume": 0.0}
-                    continue
-                self.bar["high"] = max(self.bar["high"], p)
-                self.bar["low"] = min(self.bar["low"], p)
-                self.bar["close"] = p
-                break
-            if self.trend == -1:
-                cont_t = round(o - rs, 5)
-                rev_t = round(o + (2 * rs), 5)
-                if p <= cont_t:
-                    self.bar["high"] = max(self.bar["high"], o)
-                    self.bar["low"] = min(self.bar["low"], cont_t)
-                    self.bar["close"] = cont_t
-                    self._emit(_make_bar(self.bar["time"], self.bar["open"],
-                               self.bar["high"], self.bar["low"],
-                               self.bar["close"], self.bar["volume"]))
-                    self.bar = {"time": ts, "open": cont_t, "high": cont_t,
-                                "low": cont_t, "close": cont_t, "volume": 0.0}
-                    continue
-                if p >= rev_t:
-                    ro = round(o + rs, 5)
-                    rc = round(o + (2 * rs), 5)
-                    h_ = max(self.bar["high"], rc)
-                    l_ = min(self.bar["low"], o)
-                    self._emit(_make_bar(self.bar["time"], ro, h_, l_, rc,
-                               self.bar["volume"]))
-                    self.trend = 1
-                    self.bar = {"time": ts, "open": rc, "high": rc,
-                                "low": rc, "close": rc, "volume": 0.0}
-                    continue
-                self.bar["high"] = max(self.bar["high"], p)
-                self.bar["low"] = min(self.bar["low"], p)
-                self.bar["close"] = p
-                break
-
-    def reset(self) -> None:
-        self.trend = 0
-        self.bar = None
-        self.bars.clear()
-        self._last_emitted_ts = None
-        self.total_ticks = 0
-        self.total_bars_emitted = 0
-
-
-# =============================================================================
-# MT5 Tick Normalizer + Connector
-# =============================================================================
-
-def _tick_field(raw, field: str, default: float = 0.0) -> float:
-    try:
-        return float(raw[field])
-    except (KeyError, IndexError, TypeError, ValueError):
-        pass
-    try:
-        return float(getattr(raw, field))
-    except (AttributeError, TypeError, ValueError):
-        pass
-    return default
-
-
-def normalize_tick(raw) -> Optional[dict]:
-    ts_val = _tick_field(raw, "time", -1.0)
-    if ts_val < 0:
-        return None
-    ts = int(ts_val)
-    time_msc_val = _tick_field(raw, "time_msc", -1.0)
-    time_msc = int(time_msc_val) if time_msc_val >= 0 else ts * 1000
-    bid = _tick_field(raw, "bid", 0.0)
-    ask = _tick_field(raw, "ask", 0.0)
-    last = _tick_field(raw, "last", 0.0)
-    volume = _tick_field(raw, "volume", 0.0)
-    price = bid if bid > 0 else (last if last > 0 else ask)
-    if price <= 0:
-        return None
-    return {"ts": ts, "time_msc": time_msc, "price": price,
-            "bid": bid, "ask": ask, "last": last, "volume": volume}
-
-
-def _import_mt5():
-    try:
-        import MetaTrader5 as mt5
-        return mt5
-    except ImportError:
-        return None
-
-
-def init_mt5() -> Tuple[bool, str]:
-    mt5 = _import_mt5()
-    if mt5 is None:
-        return False, "MetaTrader5 package not installed."
-    if not mt5.initialize():
-        return False, f"MT5 initialize() failed: {mt5.last_error()}"
-    info = mt5.terminal_info()
-    if info is None:
-        return False, "MT5 terminal_info() returned None."
-    account = mt5.account_info()
-    acct_str = f" | account={account.login} broker={account.company}" if account else ""
-    print(f"[MT5] Connected: {info.name}{acct_str}")
-    return True, "ok"
-
-
-def shutdown_mt5() -> None:
-    mt5 = _import_mt5()
-    if mt5:
-        mt5.shutdown()
-
-
-def get_mt5_account_info() -> Optional[dict]:
-    mt5 = _import_mt5()
-    if mt5 is None:
-        return None
-    account = mt5.account_info()
-    if account is None:
-        return None
-    terminal = mt5.terminal_info()
-    return {
-        "login": str(account.login),
-        "broker": str(account.company) if account.company else None,
-        "server": str(account.server) if account.server else None,
-        "balance": float(account.balance),
-        "equity": float(account.equity),
-        "terminal": str(terminal.name) if terminal else None,
-    }
-
-
-def fetch_historical_ticks(symbol, lookback_value, lookback_unit):
-    mt5 = _import_mt5()
-    if mt5 is None:
-        return None, "MetaTrader5 package not installed."
-    now = datetime.now(timezone.utc)
-    if lookback_unit == "minutes":
-        from_time = now - timedelta(minutes=lookback_value)
-    elif lookback_unit == "hours":
-        from_time = now - timedelta(hours=lookback_value)
-    elif lookback_unit == "days":
-        from_time = now - timedelta(days=lookback_value)
-    else:
-        return None, f"Invalid lookback_unit: {lookback_unit}"
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        return None, f"Symbol '{symbol}' not found in MT5."
-    if not symbol_info.visible:
-        if not mt5.symbol_select(symbol, True):
-            return None, f"Failed to enable symbol '{symbol}' in MT5."
-    print(f"[MT5] Fetching ticks: {symbol} from {from_time.isoformat()}")
-    ticks = mt5.copy_ticks_range(symbol, from_time, now, mt5.COPY_TICKS_ALL)
-    if ticks is None or len(ticks) == 0:
-        return None, f"No ticks for {symbol}. MT5 error: {mt5.last_error()}"
-    result, skipped = [], 0
-    for raw_tick in ticks:
-        n = normalize_tick(raw_tick)
-        if n is None:
-            skipped += 1
-            continue
-        result.append({"ts": n["ts"], "price": n["price"], "volume": n["volume"]})
-    if not result:
-        return None, f"All {len(ticks)} ticks had no valid price."
-    print(f"[MT5] Got {len(result)} ticks for {symbol} (skipped {skipped})")
-    return result, "ok"
-
-
-def stream_live_ticks(symbol, poll_interval=0.05):
-    mt5 = _import_mt5()
-    if mt5 is None:
-        raise RuntimeError("MetaTrader5 package not installed.")
-    cursor_time = datetime.now(timezone.utc)
-    last_tick_msc = 0
-    while True:
-        ticks = mt5.copy_ticks_from(symbol, cursor_time, 1000, mt5.COPY_TICKS_ALL)
-        if ticks is not None and len(ticks) > 0:
-            for raw_tick in ticks:
-                n = normalize_tick(raw_tick)
-                if n is None:
-                    continue
-                if n["time_msc"] <= last_tick_msc:
-                    continue
-                last_tick_msc = n["time_msc"]
-                yield {"ts": n["ts"], "price": n["price"], "volume": n["volume"]}
-            last_ts = _tick_field(ticks[-1], "time", 0.0)
-            if last_ts > 0:
-                cursor_time = datetime.fromtimestamp(int(last_ts), tz=timezone.utc)
-        time.sleep(poll_interval)
-
-
-class _MT5ConnectorFacade:
-    init_mt5 = staticmethod(init_mt5)
-    shutdown_mt5 = staticmethod(shutdown_mt5)
-    fetch_historical_ticks = staticmethod(fetch_historical_ticks)
-    stream_live_ticks = staticmethod(stream_live_ticks)
-    get_mt5_account_info = staticmethod(get_mt5_account_info)
-
-
-mt5_connector = _MT5ConnectorFacade()
-
-
-# =============================================================================
-# ★ FIX: MT5 Deal History Fetcher (inline, no external module needed)
-# =============================================================================
-
-def fetch_closed_position_from_mt5(position_ticket: int, symbol: str,
-                                    max_retries: int = 5,
-                                    retry_delay_ms: int = 300) -> Optional[dict]:
-    """
-    Fetch closed position data from MT5 deal history.
-    Retries because MT5 takes time to update history after close.
-    Returns dict with all trade data or None if not found.
-    """
-    mt5 = _import_mt5()
-    if mt5 is None:
-        print("[MT5] MetaTrader5 not installed — cannot fetch deal history")
-        return None
-
-    # MT5 deal entry types
-    DEAL_ENTRY_IN = 0
-    DEAL_ENTRY_OUT = 1
-    DEAL_ENTRY_INOUT = 2
-
-    # MT5 deal types
-    DEAL_TYPE_BUY = 0
-    DEAL_TYPE_SELL = 1
-
-    # MT5 deal reason enum
-    DEAL_REASON_CLIENT = 0
-    DEAL_REASON_MOBILE = 1
-    DEAL_REASON_WEB = 2
-    DEAL_REASON_EXPERT = 3
-    DEAL_REASON_SL = 4
-    DEAL_REASON_TP = 5
-    DEAL_REASON_SO = 6
-
-    for attempt in range(max_retries):
-        try:
-            now = datetime.now(timezone.utc)
-            start = now - timedelta(hours=24)
-            deals = mt5.history_deals_get(start, now, position=position_ticket)
-
-            if deals is None or len(deals) == 0:
-                if attempt < max_retries - 1:
-                    delay = retry_delay_ms / 1000.0
-                    print(f"[MT5] Deal history empty for ticket {position_ticket}, "
-                          f"retry {attempt + 2}/{max_retries} in {delay}s...")
-                    time.sleep(delay)
-                    continue
-                else:
-                    print(f"[MT5] No deals found for ticket {position_ticket} "
-                          f"after {max_retries} attempts")
-                    return None
-
-            # Separate entry and exit deals
-            entry_deal = None
-            exit_deal = None
-            all_deals = list(deals)
-
-            for deal in all_deals:
-                if deal.entry == DEAL_ENTRY_IN:
-                    entry_deal = deal
-                elif deal.entry == DEAL_ENTRY_OUT:
-                    exit_deal = deal
-                elif deal.entry == DEAL_ENTRY_INOUT:
-                    # Close-and-open in one deal (rare)
-                    exit_deal = deal
-
-            # Fallback: if no explicit OUT deal, find the one with profit != 0
-            if exit_deal is None:
-                for deal in all_deals:
-                    if deal.profit != 0 and deal != entry_deal:
-                        exit_deal = deal
-                        break
-
-            if exit_deal is None:
-                if attempt < max_retries - 1:
-                    delay = retry_delay_ms / 1000.0
-                    print(f"[MT5] No exit deal yet for ticket {position_ticket}, "
-                          f"retry {attempt + 2}/{max_retries} in {delay}s...")
-                    time.sleep(delay)
-                    continue
-                else:
-                    print(f"[MT5] No exit deal found for ticket {position_ticket} "
-                          f"after {max_retries} attempts. Deals found: {len(all_deals)}")
-                    return None
-
-            # Determine direction from entry deal
-            if entry_deal is not None:
-                direction = "long" if entry_deal.type == DEAL_TYPE_BUY else "short"
-                entry_price = entry_deal.price
-                entry_time_unix = entry_deal.time
-            else:
-                # Infer from exit deal (opposite direction)
-                direction = "short" if exit_deal.type == DEAL_TYPE_BUY else "long"
-                entry_price = 0.0
-                entry_time_unix = exit_deal.time
-
-            exit_price = exit_deal.price
-            exit_time_unix = exit_deal.time
-
-            # PnL from MT5 (source of truth)
-            profit = round(exit_deal.profit, 2)
-            commission_total = 0.0
-            swap_total = 0.0
-            fee_total = 0.0
-            deal_tickets = []
-
-            for deal in all_deals:
-                commission_total += deal.commission
-                swap_total += deal.swap
-                if hasattr(deal, 'fee'):
-                    fee_total += deal.fee
-                deal_tickets.append(deal.ticket)
-
-            commission_total = round(commission_total, 2)
-            swap_total = round(swap_total, 2)
-            fee_total = round(fee_total, 2)
-            net_pnl = round(profit + commission_total + swap_total + fee_total, 2)
-
-            # Determine close reason from MT5 deal reason
-            exit_reason = "UNKNOWN"
-            if hasattr(exit_deal, 'reason'):
-                reason_code = exit_deal.reason
-                if reason_code == DEAL_REASON_SL:
-                    exit_reason = "SL_HIT"
-                elif reason_code == DEAL_REASON_TP:
-                    exit_reason = "TP_HIT"
-                elif reason_code == DEAL_REASON_SO:
-                    exit_reason = "STOP_OUT"
-                elif reason_code == DEAL_REASON_EXPERT:
-                    exit_reason = "EA_CLOSE"
-                elif reason_code in (DEAL_REASON_CLIENT, DEAL_REASON_MOBILE,
-                                      DEAL_REASON_WEB):
-                    exit_reason = "MANUAL_CLOSE"
-                else:
-                    exit_reason = f"REASON_{reason_code}"
-
-            # Convert Unix timestamps to ISO strings
-            entry_time_iso = datetime.fromtimestamp(
-                entry_time_unix, tz=timezone.utc
-            ).isoformat() if entry_time_unix else None
-            exit_time_iso = datetime.fromtimestamp(
-                exit_time_unix, tz=timezone.utc
-            ).isoformat() if exit_time_unix else None
-
-            # Get lot size
-            lot_size = exit_deal.volume if exit_deal.volume > 0 else (
-                entry_deal.volume if entry_deal and entry_deal.volume > 0 else 0
-            )
-
-            # Comment from deal
-            mt5_comment = ""
-            if hasattr(exit_deal, 'comment') and exit_deal.comment:
-                mt5_comment = str(exit_deal.comment)
-
-            print(f"[MT5] Deal history fetched for ticket {position_ticket}: "
-                  f"profit={profit} comm={commission_total} swap={swap_total} "
-                  f"net={net_pnl} reason={exit_reason} deals={len(all_deals)}")
-
-            return {
-                "symbol": symbol,
-                "direction": direction,
-                "lot_size": lot_size,
-                "entry_price": round(entry_price, 5),
-                "exit_price": round(exit_price, 5),
-                "entry_time": entry_time_iso,
-                "exit_time": exit_time_iso,
-                "entry_time_unix": entry_time_unix,
-                "exit_time_unix": exit_time_unix,
-                "profit": profit,
-                "commission": commission_total,
-                "swap": swap_total,
-                "fee": fee_total,
-                "net_pnl": net_pnl,
-                "exit_reason": exit_reason,
-                "mt5_deal_tickets": deal_tickets,
-                "mt5_comment": mt5_comment,
-            }
-
-        except Exception as e:
-            print(f"[MT5] Error fetching deal history for ticket {position_ticket}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay_ms / 1000.0)
-            else:
-                traceback.print_exc()
-                return None
-
-    return None
-
-
-# =============================================================================
-# Strategy Loader
-# =============================================================================
-
-def load_strategy_from_source(source_code: str, class_name: str,
-                              strategy_id: str) -> Tuple[Optional[object], Optional[str]]:
-    try:
-        _ensure_base_importable()
-    except Exception as exc:
-        return None, f"Failed to prepare base imports: {exc}"
-
-    module_name = f"jinni_strategy_{strategy_id}"
-    try:
-        tmp_dir = tempfile.mkdtemp(prefix="jinni_strat_")
-        tmp_path = os.path.join(tmp_dir, f"{module_name}.py")
-        with open(tmp_path, "w", encoding="utf-8") as file:
-            file.write(source_code)
-        spec = importlib.util.spec_from_file_location(module_name, tmp_path)
-        if spec is None or spec.loader is None:
-            return None, "Failed to create module spec."
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        klass = getattr(module, class_name, None)
-        if klass is None:
-            available = [k for k in dir(module) if not k.startswith("_")]
-            return None, f"Class '{class_name}' not found. Available: {available}"
-        instance = klass()
-        if not hasattr(instance, "on_bar"):
-            return None, f"Class '{class_name}' has no on_bar() method."
-        print(f"[LOADER] Strategy loaded: {class_name} (id={strategy_id})")
-        return instance, None
-    except Exception as exc:
-        tb = traceback.format_exc()
-        print(f"[LOADER] Failed: {exc}\n{tb}")
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _ensure_base_importable():
-    current_module = sys.modules[__name__]
-    sys.modules["base_strategy"] = current_module
-    sys.modules["worker.base_strategy"] = current_module
-    if "backend" not in sys.modules:
-        bm = types.ModuleType("backend")
-        bm.__path__ = []
-        sys.modules["backend"] = bm
-    if "backend.strategies" not in sys.modules:
-        sm = types.ModuleType("backend.strategies")
-        sm.__path__ = []
-        sys.modules["backend.strategies"] = sm
-    sys.modules["backend.strategies.base"] = current_module
-
-
-# =============================================================================
-# Strategy Runner
-# =============================================================================
-
-# =============================================================================
-# Strategy Runner — RECODED to match engine_core.py backtester 1:1
-#
-# Execution model: signal-on-close, execute-on-next-open
-#   Bar N:   strategy sees completed bar → returns BUY → stored as PENDING
-#   Bar N+1: _on_new_bar fires → pending executed via MT5 at market
-#            → SL/TP computed from actual fill price
-#            → entry bar immune to MA cross exits
-#
-# This matches the backtester's 7-step per-bar loop exactly.
-# =============================================================================
-
-class StrategyRunner:
-
-    def __init__(self, deployment_config: dict, status_callback=None,
-                 trade_callback=None, debug: bool = True):
-        self.config = deployment_config
-        self._status_callback = status_callback
-        self._trade_callback = trade_callback
-        self.debug = debug
-
-        self.deployment_id: str = deployment_config["deployment_id"]
-        self.strategy_id: str = deployment_config["strategy_id"]
-        self.class_name: str = deployment_config.get("strategy_class_name", "")
-        self.source_code: str = deployment_config.get("strategy_file_content", "")
-        self.symbol: str = deployment_config["symbol"]
-        self.tick_lookback_value: int = deployment_config.get("tick_lookback_value", 30)
-        self.tick_lookback_unit: str = deployment_config.get("tick_lookback_unit", "minutes")
-        self.bar_size_points: float = deployment_config["bar_size_points"]
-        self.max_bars: int = deployment_config.get("max_bars_in_memory", 500)
-        self.lot_size: float = deployment_config.get("lot_size", 0.01)
-        self.strategy_parameters: dict = deployment_config.get("strategy_parameters") or {}
-        self.worker_id: str = deployment_config.get("worker_id", "")
-
-        self._deployment_id: str = self.deployment_id
-        self._strategy_id: str = self.strategy_id
-        self._worker_id: str = self.worker_id
-        self._mother_url = __import__("yaml").safe_load(
-            open("config.yaml"))["mother_server"]["url"]
-        self._unreported_trades: list = []
-
-        self._strategy = None
-        self._ctx: Optional[StrategyContext] = None
-        self._bar_engine: Optional[RangeBarEngine] = None
-        self._executor: Optional[MT5Executor] = None
-        self._exec_log: Optional[ExecutionLogger] = None
-        self._indicator_engine: Optional[IndicatorEngine] = None
-        self._runner_state: str = "idle"
-        self._last_signal: Optional[dict] = None
-        self._last_error: Optional[str] = None
-        self._started_at: Optional[str] = None
-        self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._bar_index: int = 0
-
-        # MT5 info
-        self._mt5_state: Optional[str] = None
-        self._mt5_broker: Optional[str] = None
-        self._mt5_account_id: Optional[str] = None
-        self._mt5_server: Optional[str] = None
-        self._mt5_balance: Optional[float] = None
-        self._mt5_equity: Optional[float] = None
-
-        # Pipeline counters
-        self._total_ticks_ingested: int = 0
-        self._total_bars_produced: int = 0
-        self._on_bar_call_count: int = 0
-        self._signal_count: int = 0
-        self._warmup_signal_count: int = 0
-        self._last_bar_time: Optional[int] = None
-        self._current_price: Optional[float] = None
-        self._trade_counter: int = 0
-
-        # Backtester-aligned execution state
-        self._absolute_bar_counter: int = -1
-        self._prev_indicators: dict = {}
-
-        # Active trade tracking
-        self._active_trade_meta: Optional[dict] = None
-
-        # ★ NEW: Backtester-aligned pending signal + entry bar immunity
-        self._pending_signal: Optional[dict] = None
-        self._just_entered_this_bar: bool = False
-
-    # ─────────────────────────────────────────────────────────
-    # Diagnostics (unchanged except pending_signal field)
-    # ─────────────────────────────────────────────────────────
-
-    def get_diagnostics(self) -> dict:
-        exec_stats = self._exec_log.get_stats() if self._exec_log else {}
-        open_count = self._executor.get_open_count() if self._executor else 0
-        floating = self._executor.get_floating_pnl() if self._executor else 0.0
-
-        if self._executor and self._executor._mt5:
-            try:
-                acct = self._executor._mt5.account_info()
-                if acct:
-                    self._mt5_balance = float(acct.balance)
-                    self._mt5_equity = float(acct.equity)
-            except Exception:
-                pass
-
-        return {
-            "runner_state": self._runner_state,
-            "strategy_id": self.strategy_id,
-            "symbol": self.symbol,
-            "mt5_state": self._mt5_state,
-            "broker": self._mt5_broker,
-            "account_id": self._mt5_account_id,
-            "mt5_server": self._mt5_server,
-            "mt5_balance": self._mt5_balance,
-            "mt5_equity": self._mt5_equity,
-            "total_ticks": self._total_ticks_ingested,
-            "total_bars": self._total_bars_produced,
-            "current_bars_in_memory": (
-                self._bar_engine.current_bars_count if self._bar_engine else 0
-            ),
-            "on_bar_calls": self._on_bar_call_count,
-            "signal_count": self._signal_count,
-            "warmup_signals": self._warmup_signal_count,
-            "last_bar_time": self._last_bar_time,
-            "current_price": self._current_price,
-            "last_signal": self._last_signal,
-            "last_error": self._last_error,
-            "started_at": self._started_at,
-            "open_positions_count": open_count,
-            "floating_pnl": floating,
-            "trade_count": self._trade_counter,
-            "pending_signal": (                                    # ★ NEW
-                self._pending_signal.get("direction")
-                if self._pending_signal else None
-            ),
-            **{f"exec_{k}": v for k, v in exec_stats.items()},
-            "account_balance": self._mt5_balance,
-            "account_equity": self._mt5_equity,
-        }
-
-    # ─────────────────────────────────────────────────────────
-    # Status / Trade Reporting — ALL UNCHANGED
-    # ─────────────────────────────────────────────────────────
-
-    def _report_status(self):
-        if not self._status_callback:
-            return
-        status = {
-            "deployment_id": self.deployment_id,
-            "strategy_id": self.strategy_id,
-            "strategy_name": (getattr(self._strategy, "name", None)
-                              if self._strategy else None),
-            "symbol": self.symbol,
-            "runner_state": self._runner_state,
-            "bar_size_points": self.bar_size_points,
-            "max_bars_in_memory": self.max_bars,
-            "current_bars_count": (self._bar_engine.current_bars_count
-                                   if self._bar_engine else 0),
-            "last_signal": self._last_signal,
-            "last_error": self._last_error,
-            "started_at": self._started_at,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        for attempt in range(3):
-            try:
-                self._status_callback(status)
-                return
-            except Exception as exc:
-                print(f"[RUNNER] Status report attempt {attempt + 1}/3 failed: {exc}")
-                if attempt < 2:
-                    time.sleep(1.0)
-
-    def _report_trade(self, record: dict):
-        mother_url = self._mother_url
-        if not mother_url:
-            print("[RUNNER] No mother URL configured — trade not reported")
-            return
-        url = f"{mother_url}/api/portfolio/trades/report"
-        payload = {}
-        for k, v in record.items():
-            if v is None:
-                payload[k] = None
-            elif isinstance(v, (list, dict)):
-                payload[k] = v
-            else:
-                try:
-                    payload[k] = float(v) if isinstance(v, (int, float)) else str(v)
-                except (ValueError, TypeError):
-                    payload[k] = str(v)
-        payload.setdefault("deployment_id", self._deployment_id)
-        payload.setdefault("strategy_id", self._strategy_id)
-        payload.setdefault("worker_id", self._worker_id)
-        payload.setdefault("symbol", self.symbol)
-
-        def _send():
-            last_err = None
-            for attempt in range(5):
-                try:
-                    resp = requests.post(url, json=payload, timeout=8)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data.get("ok"):
-                            print(f"[RUNNER] Trade #{record.get('trade_id', '?')} "
-                                  f"reported to mother (attempt {attempt + 1})")
-                            return
-                        else:
-                            last_err = f"Server returned ok=false: {data}"
-                    else:
-                        last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                except requests.exceptions.ConnectionError as e:
-                    last_err = f"Connection error: {e}"
-                except requests.exceptions.Timeout:
-                    last_err = "Timeout"
-                except Exception as e:
-                    last_err = str(e)
-                wait = 0.5 * (attempt + 1)
-                print(f"[RUNNER] Trade report attempt {attempt + 1} failed: "
-                      f"{last_err}. Retry in {wait}s...")
-                time.sleep(wait)
-            print(f"[RUNNER] CRITICAL: Failed to report trade after 5 attempts: "
-                  f"{last_err}")
-            self._unreported_trades.append(payload)
-        t = threading.Thread(target=_send, daemon=True)
-        t.start()
-
-    def retry_unreported_trades(self):
-        if not self._unreported_trades:
-            return
-        mother_url = self._mother_url
-        if not mother_url:
-            return
-        url = f"{mother_url}/api/portfolio/trades/report"
-        remaining = []
-        for payload in self._unreported_trades:
-            try:
-                resp = requests.post(url, json=payload, timeout=5)
-                if resp.status_code == 200 and resp.json().get("ok"):
-                    print(f"[RUNNER] Retried trade #{payload.get('trade_id', '?')} "
-                          f"reported successfully")
-                else:
-                    remaining.append(payload)
-            except Exception:
-                remaining.append(payload)
-        self._unreported_trades = remaining
-
-    def _set_state(self, state: str, error: str = None):
-        self._runner_state = state
-        if error:
-            self._last_error = error
-        print(f"[RUNNER] {self.deployment_id} -> {state}"
-              + (f" (error: {error})" if error else ""))
-        self._report_status()
-
-    # ─────────────────────────────────────────────────────────
-    # MT5 Info / Position Refresh / Pipeline Log — UNCHANGED
-    # ─────────────────────────────────────────────────────────
-
-    def _capture_mt5_info(self):
-        info = mt5_connector.get_mt5_account_info()
-        if info:
-            self._mt5_state = "connected"
-            self._mt5_broker = info.get("broker")
-            self._mt5_account_id = info.get("login")
-            self._mt5_server = info.get("server")
-            self._mt5_balance = info.get("balance")
-            self._mt5_equity = info.get("equity")
-            print(f"[RUNNER] MT5 info: broker={self._mt5_broker} "
-                  f"account={self._mt5_account_id} balance={self._mt5_balance}")
-        else:
-            self._mt5_state = "connected_no_account"
-
-    def _refresh_position(self):
-        if self._executor:
-            pos = self._executor.get_position_state()
-            if self._active_trade_meta and pos.has_position:
-                pos.entry_bar = self._active_trade_meta.get("entry_bar")
-                pos.bars_held = max(0, self._bar_index - (
-                    pos.entry_bar or self._bar_index))
-                close_price = self._current_price or 0.0
-                if pos.entry_price and close_price > 0:
-                    if pos.direction == "long":
-                        pos.unrealized_pts = round(
-                            close_price - pos.entry_price, 5)
-                    elif pos.direction == "short":
-                        pos.unrealized_pts = round(
-                            pos.entry_price - close_price, 5)
-                    pos.unrealized_pnl = round(pos.profit or 0.0, 2)
-            self._ctx.position = pos
-
-    def _log_pipeline(self, label: str = ""):
-        c = f" [{label}]" if label else ""
-        exec_s = self._exec_log.get_stats() if self._exec_log else {}
-        pos_n = self._executor.get_open_count() if self._executor else 0
-        print(
-            f"[PIPELINE]{c} dep={self.deployment_id} | "
-            f"ticks={self._total_ticks_ingested} "
-            f"bars={self._total_bars_produced} "
-            f"on_bar={self._on_bar_call_count} "
-            f"signals={self._signal_count} "
-            f"buys={exec_s.get('buys_filled', 0)} "
-            f"sells={exec_s.get('sells_filled', 0)} "
-            f"closes={exec_s.get('closes_filled', 0)} "
-            f"ma_exits={exec_s.get('ma_cross_exits', 0)} "
-            f"positions={pos_n} "
-            f"trades={self._trade_counter} "
-            f"pending={'YES' if self._pending_signal else 'no'} "
-            f"price={self._current_price}"
-        )
-
-    # ─────────────────────────────────────────────────────────
-    # MA-Cross Exit Check — UNCHANGED
-    # (entry bar guard is in _on_new_bar, not here)
-    # ─────────────────────────────────────────────────────────
-
-    def _check_ma_cross_exit(self, bar: dict) -> bool:
-        if not self._active_trade_meta:
-            return False
-        pos = self._ctx.position
-        if not pos.has_position:
-            return False
-        close_price = float(bar.get("close", 0))
-        direction = pos.direction
-
-        tp_ma_key = self._active_trade_meta.get("engine_tp_ma_key")
-        if tp_ma_key:
-            tp_ma_val = self._ctx.indicators.get(tp_ma_key)
-            if tp_ma_val is not None:
-                if direction == "long" and close_price < tp_ma_val:
-                    self._exec_log.log_ma_cross_exit(
-                        tp_ma_key, direction, tp_ma_val, close_price)
-                    self._close_and_record("MA_TP_EXIT", bar)
-                    return True
-                if direction == "short" and close_price > tp_ma_val:
-                    self._exec_log.log_ma_cross_exit(
-                        tp_ma_key, direction, tp_ma_val, close_price)
-                    self._close_and_record("MA_TP_EXIT", bar)
-                    return True
-
-        sl_ma_key = self._active_trade_meta.get("engine_sl_ma_key")
-        if sl_ma_key:
-            sl_ma_val = self._ctx.indicators.get(sl_ma_key)
-            if sl_ma_val is not None:
-                if direction == "long" and close_price < sl_ma_val:
-                    self._exec_log.log_ma_cross_exit(
-                        sl_ma_key, direction, sl_ma_val, close_price)
-                    self._close_and_record("MA_SL_EXIT", bar)
-                    return True
-                if direction == "short" and close_price > sl_ma_val:
-                    self._exec_log.log_ma_cross_exit(
-                        sl_ma_key, direction, sl_ma_val, close_price)
-                    self._close_and_record("MA_SL_EXIT", bar)
-                    return True
-        return False
-
-    # ─────────────────────────────────────────────────────────
-    # Close + Record / Broker Close — ALL UNCHANGED
-    # ─────────────────────────────────────────────────────────
-
-    def _close_and_record(self, reason: str, bar: dict):
-        pos = self._ctx.position
-        if not pos.has_position:
-            return
-        results = self._executor.close_all_positions()
-        self._exec_log.log_close(results, reason=reason)
-        meta = self._active_trade_meta or {}
-        for r in results:
-            if r.get("success"):
-                self._trade_counter += 1
-                ticket = r.get("ticket") or meta.get("ticket")
-                mt5_record = None
-                if ticket:
-                    mt5_record = fetch_closed_position_from_mt5(
-                        position_ticket=ticket, symbol=self.symbol,
-                        max_retries=5, retry_delay_ms=300)
-                if mt5_record:
-                    record = {
-                        "mt5_ticket": ticket,
-                        "trade_id": self._trade_counter,
-                        "deployment_id": self._deployment_id,
-                        "strategy_id": self._strategy_id,
-                        "worker_id": self._worker_id,
-                        "symbol": mt5_record["symbol"],
-                        "direction": mt5_record["direction"],
-                        "lot_size": mt5_record["lot_size"],
-                        "entry_price": mt5_record["entry_price"],
-                        "exit_price": mt5_record["exit_price"],
-                        "entry_time": mt5_record["entry_time"],
-                        "exit_time": mt5_record["exit_time"],
-                        "entry_time_unix": mt5_record.get("entry_time_unix"),
-                        "exit_time_unix": mt5_record.get("exit_time_unix"),
-                        "profit": mt5_record["profit"],
-                        "commission": mt5_record["commission"],
-                        "swap": mt5_record["swap"],
-                        "fee": mt5_record.get("fee", 0),
-                        "net_pnl": mt5_record["net_pnl"],
-                        "exit_reason": reason,
-                        "mt5_exit_reason": mt5_record["exit_reason"],
-                        "mt5_source": True,
-                        "entry_bar": meta.get("entry_bar", self._bar_index),
-                        "exit_bar": self._bar_index,
-                        "bars_held": max(0, self._bar_index - meta.get(
-                            "entry_bar", self._bar_index)),
-                        "mt5_deal_tickets": mt5_record.get(
-                            "mt5_deal_tickets", []),
-                        "mt5_comment": mt5_record.get("mt5_comment", ""),
-                        "sl": meta.get("sl") or pos.sl,
-                        "tp": meta.get("tp") or pos.tp,
-                    }
-                    print(f"[TRADE #{self._trade_counter}] MT5 CONFIRMED | "
-                          f"ticket={ticket} {mt5_record['direction'].upper()} "
-                          f"entry={mt5_record['entry_price']:.5f} "
-                          f"exit={mt5_record['exit_price']:.5f} "
-                          f"profit={mt5_record['profit']:.2f} "
-                          f"comm={mt5_record['commission']:.2f} "
-                          f"swap={mt5_record['swap']:.2f} "
-                          f"net={mt5_record['net_pnl']:.2f} "
-                          f"reason={reason}")
-                else:
-                    record = build_trade_record(
-                        trade_id=self._trade_counter,
-                        direction=pos.direction or "long",
-                        entry_price=pos.entry_price or 0,
-                        entry_bar=meta.get("entry_bar", self._bar_index),
-                        entry_time=meta.get("entry_time", bar.get("time", 0)),
-                        exit_price=r.get("price", 0),
-                        exit_bar=self._bar_index,
-                        exit_time=bar.get("time", 0),
-                        exit_reason=reason, sl=pos.sl, tp=pos.tp,
-                        lot_size=pos.size or self.lot_size,
-                        ticket=ticket, profit=r.get("profit", 0))
-                    record["deployment_id"] = self._deployment_id
-                    record["strategy_id"] = self._strategy_id
-                    record["worker_id"] = self._worker_id
-                    record["mt5_source"] = False
-                    record["commission"] = 0.0
-                    record["swap"] = 0.0
-                    record["fee"] = 0.0
-                    record["net_pnl"] = round(float(r.get("profit", 0)), 2)
-                    print(f"[TRADE #{self._trade_counter}] FALLBACK | "
-                          f"{record['direction'].upper()} "
-                          f"entry={record['entry_price']} "
-                          f"exit={record['exit_price']} "
-                          f"reason={reason} profit={r.get('profit', 0):.2f}")
-                self._ctx._trades.append(record)
-                self._report_trade(record)
-        self._active_trade_meta = None
-        self._refresh_position()
-
-    def _handle_broker_close(self, bar: dict):
-        meta = self._active_trade_meta
-        if not meta:
-            return
-        ticket = meta.get("ticket")
-        if not ticket:
-            print(f"[RUNNER] WARNING: No MT5 ticket — recording with estimates.")
-            self._trade_counter += 1
-            record = build_trade_record(
-                trade_id=self._trade_counter,
-                direction=meta.get("direction", "long"),
-                entry_price=meta.get("entry_price", 0),
-                entry_bar=meta.get("entry_bar", self._bar_index),
-                entry_time=meta.get("entry_time", bar.get("time", 0)),
-                exit_price=self._current_price or float(bar.get("close", 0)),
-                exit_bar=self._bar_index,
-                exit_time=bar.get("time", 0),
-                exit_reason="BROKER_CLOSE_NO_TICKET",
-                sl=meta.get("sl"), tp=meta.get("tp"),
-                lot_size=self.lot_size, ticket=None, profit=0)
-            record["deployment_id"] = self._deployment_id
-            record["strategy_id"] = self._strategy_id
-            record["worker_id"] = self._worker_id
-            self._ctx._trades.append(record)
-            self._report_trade(record)
-            self._active_trade_meta = None
-            self._exec_log.closes_filled += 1
-            return
-
-        print(f"[RUNNER] Position {ticket} closed — fetching MT5 history...")
-        mt5_record = fetch_closed_position_from_mt5(
-            position_ticket=ticket, symbol=self.symbol,
-            max_retries=5, retry_delay_ms=300)
-
-        if mt5_record is None:
-            print(f"[RUNNER] WARNING: MT5 history unavailable for {ticket}.")
-            self._trade_counter += 1
-            entry_price = meta.get("entry_price", 0)
-            exit_price = self._current_price or float(bar.get("close", 0))
-            direction = meta.get("direction", "long")
-            mt5 = _import_mt5()
-            contract_size = 100000
-            if mt5:
-                try:
-                    sym_info = mt5.symbol_info(self.symbol)
-                    if sym_info and sym_info.trade_contract_size:
-                        contract_size = sym_info.trade_contract_size
-                except Exception:
-                    pass
-            if direction == "long":
-                points_pnl = exit_price - entry_price
-            else:
-                points_pnl = entry_price - exit_price
-            estimated_profit = round(points_pnl * self.lot_size * contract_size, 2)
-            record = build_trade_record(
-                trade_id=self._trade_counter, direction=direction,
-                entry_price=entry_price,
-                entry_bar=meta.get("entry_bar", self._bar_index),
-                entry_time=meta.get("entry_time", bar.get("time", 0)),
-                exit_price=exit_price, exit_bar=self._bar_index,
-                exit_time=bar.get("time", 0),
-                exit_reason="BROKER_CLOSE_ESTIMATED",
-                sl=meta.get("sl"), tp=meta.get("tp"),
-                lot_size=self.lot_size, ticket=ticket,
-                profit=estimated_profit)
-            record["deployment_id"] = self._deployment_id
-            record["strategy_id"] = self._strategy_id
-            record["worker_id"] = self._worker_id
-            record["mt5_source"] = False
-            self._ctx._trades.append(record)
-            self._report_trade(record)
-            print(f"[TRADE #{self._trade_counter}] ESTIMATED | "
-                  f"ticket={ticket} {direction.upper()} "
-                  f"entry={entry_price:.5f} exit={exit_price:.5f} "
-                  f"profit={estimated_profit:.2f}")
-            self._active_trade_meta = None
-            self._exec_log.closes_filled += 1
-            return
-
-        self._trade_counter += 1
-        record = {
-            "mt5_ticket": ticket,
-            "trade_id": self._trade_counter,
-            "deployment_id": self._deployment_id,
-            "strategy_id": self._strategy_id,
-            "worker_id": self._worker_id,
-            "symbol": mt5_record["symbol"],
-            "direction": mt5_record["direction"],
-            "lot_size": mt5_record["lot_size"],
-            "entry_price": mt5_record["entry_price"],
-            "exit_price": mt5_record["exit_price"],
-            "entry_time": mt5_record["entry_time"],
-            "exit_time": mt5_record["exit_time"],
-            "profit": mt5_record["profit"],
-            "commission": mt5_record["commission"],
-            "swap": mt5_record["swap"],
-            "fee": mt5_record.get("fee", 0),
-            "net_pnl": mt5_record["net_pnl"],
-            "exit_reason": mt5_record["exit_reason"],
-            "mt5_source": True,
-            "entry_bar": meta.get("entry_bar", 0),
-            "exit_bar": self._bar_index,
-            "bars_held": max(0, self._bar_index - meta.get("entry_bar", 0)),
-            "mt5_deal_tickets": mt5_record.get("mt5_deal_tickets", []),
-            "mt5_comment": mt5_record.get("mt5_comment", ""),
-            "sl": meta.get("sl"), "tp": meta.get("tp"),
-        }
-        self._ctx._trades.append(record)
-        self._report_trade(record)
-        print(f"[TRADE #{self._trade_counter}] MT5 CONFIRMED | "
-              f"ticket={ticket} {mt5_record['direction'].upper()} "
-              f"entry={mt5_record['entry_price']:.5f} "
-              f"exit={mt5_record['exit_price']:.5f} "
-              f"profit={mt5_record['profit']:.2f} "
-              f"comm={mt5_record['commission']:.2f} "
-              f"net={mt5_record['net_pnl']:.2f} "
-              f"reason={mt5_record['exit_reason']}")
-        self._active_trade_meta = None
-        self._exec_log.closes_filled += 1
-
-    # =================================================================
-    # ★ NEW: Process Pending Entry — Backtester Step 1
-    #
-    # Executes a signal stored on the PREVIOUS bar.
-    # Computes SL/TP from actual MT5 fill price, matching
-    # engine_core.py's entry-time computation exactly.
-    # =================================================================
-
-    def _process_pending_entry(self, bar: dict) -> bool:
-        if self._pending_signal is None:
-            return False
-
-        pos = self._ctx.position
-        if pos.has_position:
-            print(f"[EXEC] Pending consumed: already in position")
-            self._pending_signal = None
-            return False
-
-        pending = self._pending_signal
-        self._pending_signal = None
-
-        direction = pending["direction"]
-        sig = SIGNAL_BUY if direction == "long" else SIGNAL_SELL
-
-        # ── Compute initial SL for order placement ──────────
-        # We need an SL on the order for safety. For modes that
-        # depend on fill price, we estimate then recompute after.
-        entry_estimate = self._current_price or float(
-            bar.get("close", 0))
-
-        initial_sl = None
-        sl_mode = pending.get("sl_mode")
-
-        if sl_mode == "fixed":
-            pts = float(pending.get("sl_pts", 0) or 0)
-            if pts > 0:
-                initial_sl = round(
-                    (entry_estimate - pts) if direction == "long"
-                    else (entry_estimate + pts), 5)
-        elif sl_mode == "ma_snapshot":
-            ma_val = pending.get("sl_ma_val")
-            if ma_val is not None:
-                fma = float(ma_val)
-                if direction == "long" and fma < entry_estimate:
-                    initial_sl = round(fma, 5)
-                elif direction == "short" and fma > entry_estimate:
-                    initial_sl = round(fma, 5)
-        elif pending.get("sl") is not None:
-            initial_sl = round(float(pending["sl"]), 5)
-
-        # Validate initial SL direction
-        if initial_sl is not None:
-            if direction == "long" and initial_sl >= entry_estimate:
-                print(f"[EXEC] Pending: Long SL {initial_sl:.5f} >= "
-                      f"estimate {entry_estimate:.5f}, clearing")
-                initial_sl = None
-            elif direction == "short" and initial_sl <= entry_estimate:
-                print(f"[EXEC] Pending: Short SL {initial_sl:.5f} <= "
-                      f"estimate {entry_estimate:.5f}, clearing")
-                initial_sl = None
-
-        # ── Place order (TP computed after fill) ────────────
-        comment = pending.get("comment", f"JG_{sig}")
-
-        if sig == SIGNAL_BUY:
-            result = self._executor.open_buy(
-                sl=initial_sl, tp=None, comment=comment)
-        else:
-            result = self._executor.open_sell(
-                sl=initial_sl, tp=None, comment=comment)
-
-        self._exec_log.log_open(sig, result, initial_sl, None)
-
-        if not result.get("success"):
-            print(f"[EXEC] Pending entry FAILED: {result}")
-            return False
-
-        fill_price = result.get("price", entry_estimate)
-
-        # ── Recompute SL from fill (backtester-exact) ───────
-        sl_level = None
-        risk_pts = None
-
-        if sl_mode == "fixed":
-            pts = float(pending.get("sl_pts", 0) or 0)
-            if pts > 0:
-                sl_level = round(
-                    (fill_price - pts) if direction == "long"
-                    else (fill_price + pts), 5)
-                risk_pts = pts
-        elif sl_mode == "ma_snapshot":
-            ma_val = pending.get("sl_ma_val")
-            if ma_val is not None:
-                fma = float(ma_val)
-                if direction == "long" and fma < fill_price:
-                    sl_level = round(fma, 5)
-                    risk_pts = round(abs(fill_price - sl_level), 5)
-                elif direction == "short" and fma > fill_price:
-                    sl_level = round(fma, 5)
-                    risk_pts = round(abs(fill_price - sl_level), 5)
-        elif pending.get("sl") is not None:
-            sl_level = round(float(pending["sl"]), 5)
-            risk_pts = round(abs(fill_price - sl_level), 5)
-
-        # Validate SL from actual fill
-        if sl_level is not None:
-            if direction == "long" and sl_level >= fill_price:
-                print(f"[EXEC] Fill SL invalid: long SL "
-                      f"{sl_level:.5f} >= fill {fill_price:.5f}")
-                sl_level = None
-                risk_pts = None
-            elif direction == "short" and sl_level <= fill_price:
-                print(f"[EXEC] Fill SL invalid: short SL "
-                      f"{sl_level:.5f} <= fill {fill_price:.5f}")
-                sl_level = None
-                risk_pts = None
-
-        if risk_pts is not None and risk_pts <= 0:
-            sl_level = None
-            risk_pts = None
-
-        # ── Compute TP from fill (backtester-exact) ─────────
-        tp_level = None
-        tp_mode = pending.get("tp_mode")
-
-        if tp_mode == "r_multiple":
-            r = float(pending.get("tp_r", 1.0) or 1.0)
-            if risk_pts and risk_pts > 0:
-                if direction == "long":
-                    tp_level = round(fill_price + risk_pts * r, 5)
-                else:
-                    tp_level = round(fill_price - risk_pts * r, 5)
-        elif pending.get("tp") is not None:
-            tp_level = round(float(pending["tp"]), 5)
-
-        # Validate TP
-        if tp_level is not None:
-            if direction == "long" and tp_level <= fill_price:
-                print(f"[EXEC] TP invalid: long TP {tp_level:.5f} "
-                      f"<= fill {fill_price:.5f}")
-                tp_level = None
-            elif direction == "short" and tp_level >= fill_price:
-                print(f"[EXEC] TP invalid: short TP {tp_level:.5f} "
-                      f">= fill {fill_price:.5f}")
-                tp_level = None
-
-        # ── Modify position with final SL/TP ────────────────
-        ticket = result.get("ticket")
-        if ticket and (sl_level != initial_sl or tp_level is not None):
-            mod_result = self._executor.modify_sl_tp(
-                ticket, sl=sl_level, tp=tp_level)
-            self._exec_log.log_modify(
-                mod_result, sl=sl_level, tp=tp_level)
-
-        print(f"[EXEC] PENDING EXECUTED: {direction.upper()} "
-              f"fill={fill_price:.5f} SL={sl_level} TP={tp_level} "
-              f"risk={risk_pts} R={pending.get('tp_r')}")
-
-        # ── Store active trade metadata ─────────────────────
-        self._active_trade_meta = {
-            "entry_bar": self._bar_index,
-            "entry_time": bar.get("time", 0),
-            "entry_price": fill_price,
-            "direction": direction,
-            "sl": sl_level,
-            "tp": tp_level,
-            "ticket": ticket,
-            "engine_sl_ma_key": pending.get("engine_sl_ma_key"),
-            "engine_tp_ma_key": pending.get("engine_tp_ma_key"),
-        }
-
-        self._just_entered_this_bar = True
-        self._signal_count += 1
-        self._refresh_position()
-        self._report_status()
-        return True
-
-    # =================================================================
-    # ★ NEW: Store Pending Signal — Backtester Step 6
-    #
-    # REPLACES the old _handle_signal. Does NOT execute immediately.
-    # Stores all signal parameters for next-bar execution.
-    # =================================================================
-
-    def _store_pending_signal(self, action: dict, bar: dict):
-        sig = action.get("signal")
-        if sig not in (SIGNAL_BUY, SIGNAL_SELL):
-            return
-
-        # Backtester: Step 6 only fires if flat
-        if self._ctx.position.has_position:
-            self._exec_log.log_skip(
-                sig, "in position — use CLOSE first")
-            return
-
-        direction = "long" if sig == SIGNAL_BUY else "short"
-
-        # Store ALL signal parameters (backtester-exact copy)
-        self._pending_signal = {
-            "direction": direction,
-            "sl":             action.get("sl"),
-            "tp":             action.get("tp"),
-            "sl_mode":        action.get("sl_mode"),
-            "sl_pts":         action.get("sl_pts"),
-            "sl_ma_key":      action.get("sl_ma_key"),
-            "sl_ma_val":      action.get("sl_ma_val"),
-            "tp_mode":        action.get("tp_mode"),
-            "tp_r":           action.get("tp_r"),
-            "engine_sl_ma_key": action.get("engine_sl_ma_key"),
-            "engine_tp_ma_key": action.get("engine_tp_ma_key"),
-            "comment":        action.get("comment", f"JG_{sig}"),
-        }
-
-        self._last_signal = action
-        self._exec_log.log_signal(
-            sig, self._bar_index, self._last_bar_time,
-            self._current_price, self._ctx.position)
-
-        print(f"[RUNNER] Signal PENDING: {sig} dir={direction} "
-              f"SL={action.get('sl')} tp_mode={action.get('tp_mode')} "
-              f"tp_r={action.get('tp_r')} (execute next bar)")
-
-    # =================================================================
-    # ★ FULL REWRITE: _on_new_bar — Backtester 7-Step Loop
-    #
-    # Step 1: Process pending entry (signal from PREVIOUS bar)
-    # Step 2: Refresh position + detect broker close
-    # Step 3: MA cross exits (SKIPPED if just_entered)
-    # Step 4: Call strategy.on_bar()
-    # Step 5: Handle CLOSE + re-call for flip → stores PENDING
-    # Step 6: Dynamic SL/TP updates (HOLD while in position)
-    # Step 7: BUY/SELL → store as PENDING (NOT immediate)
-    # Step 8: Store prev indicators
-    # =================================================================
-
-    def _on_new_bar(self, bar: dict):
-        self._total_bars_produced += 1
-        self._last_bar_time = bar.get("time")
-        self._just_entered_this_bar = False          # reset each bar
-
-        if self._stop_event.is_set():
-            return
-        if self._strategy is None or self._ctx is None:
-            return
-
-        # ── Update context ──────────────────────────────────
-        self._absolute_bar_counter += 1
-        bars_list = list(self._bar_engine.bars)
-        self._ctx._bars = bars_list
-        self._ctx._bar_offset = len(bars_list) - 1
-        self._ctx._index = self._absolute_bar_counter
-        self._bar_index = self._absolute_bar_counter
-        self._ctx._prev_indicators = dict(self._prev_indicators)
-
-        if self._indicator_engine:
-            self._indicator_engine.update(bars_list, self._ctx)
-
-        # ══════════════════════════════════════════════════════
-        # STEP 1: Process pending entry (backtester Step 1)
-        # Signal was stored on previous bar, execute now.
-        # ══════════════════════════════════════════════════════
-        if self._pending_signal is not None:
-            self._refresh_position()
-            self._process_pending_entry(bar)
-
-        # ══════════════════════════════════════════════════════
-        # STEP 2: Refresh position + detect broker close
-        # (MT5 handles SL/TP — detect if broker closed us)
-        # ══════════════════════════════════════════════════════
-        self._refresh_position()
-
-        if self._active_trade_meta and not self._ctx.position.has_position:
-            # Position vanished → broker hit SL or TP
-            # This is the live equivalent of _check_exit() in backtester.
-            # In backtester: engine checks H/L vs SL/TP each bar.
-            # In live: MT5 broker does this for us — we just detect it.
-            #
-            # Entry bar immunity: if _just_entered_this_bar is True,
-            # we JUST opened via pending. If MT5 already closed it
-            # (SL/TP hit on entry bar), we still record it — this is
-            # a real broker event, not our engine's decision.
-            self._handle_broker_close(bar)
-
-        # ══════════════════════════════════════════════════════
-        # STEP 3: MA cross exits (backtester Step 2 continued)
-        #
-        # CRITICAL: Skip on entry bar (_just_entered_this_bar).
-        # Matches backtester's `not just_entered` guard exactly.
-        # ══════════════════════════════════════════════════════
-        if (self._ctx.position.has_position
-                and not self._just_entered_this_bar):
-            if self._check_ma_cross_exit(bar):
-                self._refresh_position()
-
-        # ── Min lookback gate ───────────────────────────────
-        min_lb = getattr(self._strategy, "min_lookback", 0) or 0
-        if self._absolute_bar_counter < min_lb:
-            self._prev_indicators = dict(self._ctx._indicators)
-            return
-
-        self._on_bar_call_count += 1
-
-        # ══════════════════════════════════════════════════════
-        # STEP 4: Call strategy.on_bar() (backtester Step 3)
-        # ══════════════════════════════════════════════════════
-        try:
-            raw_signal = self._strategy.on_bar(self._ctx)
-        except Exception as exc:
-            tb = traceback.format_exc()
-            print(f"[RUNNER] on_bar() error: {exc}\n{tb}")
-            self._set_state("failed",
-                            f"on_bar error: {type(exc).__name__}: {exc}")
-            self._stop_event.set()
-            return
-
-        action = validate_signal(raw_signal, self._bar_index)
-        sig = action.get("signal")
-
-        # ══════════════════════════════════════════════════════
-        # STEP 5: Handle CLOSE (backtester Step 4)
-        #
-        # If strategy says CLOSE while in position:
-        #   1. Close the position via MT5
-        #   2. Re-call on_bar() with flat position
-        #   3. If re-call returns BUY/SELL → store as PENDING
-        #      (NOT immediate — matches backtester exactly)
-        # ══════════════════════════════════════════════════════
-        closed_position = False
-
-        if ((sig == SIGNAL_CLOSE or action.get("close"))
-                and self._ctx.position.has_position):
-            reason = action.get("close_reason", "strategy_close")
-            self._close_and_record(reason, bar)
-            self._signal_count += 1
-            self._last_signal = action
-            closed_position = True
-
-        elif sig == SIGNAL_CLOSE_LONG:
-            if (self._ctx.position.has_position
-                    and self._ctx.position.direction == "long"):
-                self._close_and_record("strategy_close_long", bar)
-                self._signal_count += 1
-                self._last_signal = action
-                closed_position = True
-            else:
-                self._exec_log.log_skip("CLOSE_LONG", "no long position")
-
-        elif sig == SIGNAL_CLOSE_SHORT:
-            if (self._ctx.position.has_position
-                    and self._ctx.position.direction == "short"):
-                self._close_and_record("strategy_close_short", bar)
-                self._signal_count += 1
-                self._last_signal = action
-                closed_position = True
-            else:
-                self._exec_log.log_skip("CLOSE_SHORT", "no short position")
-
-        if closed_position:
-            self._refresh_position()
-            # ── Re-call for flip (backtester Step 4 continued) ──
-            # Backtester re-calls on_bar() after close to allow
-            # immediate flip. But the flip signal goes to PENDING,
-            # executing NEXT bar — matching the 1-bar delay.
-            if not self._ctx.position.has_position:
-                try:
-                    raw2 = self._strategy.on_bar(self._ctx)
-                    action2 = validate_signal(raw2, self._bar_index)
-                    sig2 = action2.get("signal")
-                    if sig2 in (SIGNAL_BUY, SIGNAL_SELL):
-                        print(f"[RUNNER] Post-CLOSE re-call: {sig2} → "
-                              f"PENDING (backtester flip)")
-                        self._store_pending_signal(action2, bar)
-                    elif ("update_sl" in action2
-                          or "update_tp" in action2):
-                        self._handle_modify(action2)
-                except Exception as exc:
-                    print(f"[RUNNER] Re-call on_bar() after CLOSE "
-                          f"error: {exc}")
-
-        # ══════════════════════════════════════════════════════
-        # STEP 6: Dynamic SL/TP updates (backtester Step 5)
-        # ══════════════════════════════════════════════════════
-        elif self._ctx.position.has_position and not closed_position:
-            if "update_sl" in action or "update_tp" in action:
-                self._handle_modify(action)
-            if sig == SIGNAL_HOLD or sig is None:
-                self._exec_log.log_hold()
-
-        # ══════════════════════════════════════════════════════
-        # STEP 7: BUY/SELL → PENDING (backtester Step 6)
-        #
-        # Signal stored. Will execute NEXT bar in Step 1.
-        # This is THE critical difference from old live code.
-        # ══════════════════════════════════════════════════════
-        elif sig in (SIGNAL_BUY, SIGNAL_SELL):
-            if self._ctx.position.has_position:
-                # Backtester only stores pending if flat.
-                # If in position and strategy wants to flip,
-                # it should return CLOSE first (or close=True).
-                self._exec_log.log_skip(
-                    sig, "in position — must CLOSE first or "
-                         "use close=True flag")
-            else:
-                self._store_pending_signal(action, bar)
-
-        elif sig == SIGNAL_HOLD or sig is None:
-            self._exec_log.log_hold()
-
-        # ── Periodic pipeline log ───────────────────────────
-        if self._on_bar_call_count % 50 == 0:
-            self._log_pipeline("LIVE_BAR")
-
-        # ══════════════════════════════════════════════════════
-        # STEP 8: Store prev indicators (backtester end of loop)
-        # ══════════════════════════════════════════════════════
-        self._prev_indicators = dict(self._ctx._indicators)
-
-    # ─────────────────────────────────────────────────────────
-    # Handle Modify — UNCHANGED
-    # ─────────────────────────────────────────────────────────
-
-    def _handle_modify(self, action: dict):
-        pos = self._ctx.position
-        if not pos.has_position or not pos.ticket:
-            self._exec_log.log_skip("MODIFY", "no position")
-            return
-        new_sl = action.get("update_sl")
-        new_tp = action.get("update_tp")
-        result = self._executor.modify_sl_tp(
-            pos.ticket, sl=new_sl, tp=new_tp)
-        self._exec_log.log_modify(result, sl=new_sl, tp=new_tp)
-        self._refresh_position()
-
-    # =================================================================
-    # Lifecycle — start / stop / _run / _run_lifecycle
-    # =================================================================
-
-    def start(self):
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop_event.set()
-        self._set_state("stopped")
-        if self._thread:
-            self._thread.join(timeout=10)
-
-    def _run(self):
-        try:
-            self._run_lifecycle()
-        except Exception as exc:
-            tb = traceback.format_exc()
-            print(f"[RUNNER] FATAL: {self.deployment_id}:\n{tb}")
-            self._set_state("failed",
-                            f"{type(exc).__name__}: {exc}")
-            try:
-                mt5_connector.shutdown_mt5()
-            except Exception:
-                pass
-
-    def _run_lifecycle(self):
-        self._started_at = datetime.now(timezone.utc).isoformat()
-
-        # ── Phase 1: Load Strategy ──────────────────────────
-        self._set_state("loading_strategy")
-        strategy_instance, load_error = load_strategy_from_source(
-            self.source_code, self.class_name, self.strategy_id)
-        if load_error:
-            self._set_state("failed",
-                            f"Strategy load failed: {load_error}")
-            return
-        self._strategy = strategy_instance
-        params = self._strategy.validate_parameters(
-            self.strategy_parameters)
-        self._ctx = StrategyContext(bars=[], params=params)
-
-        indicator_defs = self._strategy.build_indicators(params)
-        self._indicator_engine = IndicatorEngine(indicator_defs)
-
-        try:
-            self._strategy.on_init(self._ctx)
-        except Exception as exc:
-            self._set_state(
-                "failed",
-                f"on_init() failed: {type(exc).__name__}: {exc}")
-            return
-        print(f"[RUNNER] Strategy loaded: {self.class_name} | "
-              f"min_lookback="
-              f"{getattr(self._strategy, 'min_lookback', 0)} | "
-              f"indicators={len(indicator_defs)} | params={params}")
-
-        # ── Phase 2: Init MT5 ──────────────────────────────
-        ok, msg = mt5_connector.init_mt5()
-        if not ok:
-            self._set_state("failed", f"MT5 init failed: {msg}")
-            return
-        self._capture_mt5_info()
-
-        self._executor = MT5Executor(
-            self.symbol, self.lot_size, self.deployment_id)
-        self._exec_log = ExecutionLogger(
-            self.deployment_id, self.symbol)
-
-        # ── Phase 3: Fetch Historical Ticks ─────────────────
-        self._set_state("fetching_ticks")
-        ticks, tick_err = mt5_connector.fetch_historical_ticks(
-            self.symbol, self.tick_lookback_value,
-            self.tick_lookback_unit)
-        if ticks is None:
-            self._set_state("failed",
-                            f"Tick fetch failed: {tick_err}")
-            mt5_connector.shutdown_mt5()
-            return
-        if len(ticks) == 0:
-            self._set_state("failed",
-                            "No ticks returned from MT5.")
-            mt5_connector.shutdown_mt5()
-            return
-        self._total_ticks_ingested = len(ticks)
-        self._current_price = ticks[-1]["price"]
-        print(f"[RUNNER] Fetched {len(ticks)} historical ticks "
-              f"for {self.symbol}")
-
-        if self.debug:
-            prices = [t["price"] for t in ticks]
-            print(f"[DEBUG] Tick price range: "
-                  f"min={min(prices):.5f} "
-                  f"max={max(prices):.5f} "
-                  f"last={prices[-1]:.5f} "
-                  f"spread={max(prices)-min(prices):.5f}")
-            grid_snap = round(
-                round(prices[-1] / self.bar_size_points)
-                * self.bar_size_points, 5)
-            print(f"[DEBUG] Grid alignment: "
-                  f"bar_size={self.bar_size_points} "
-                  f"nearest_grid_level={grid_snap}")
-
-        # ── Phase 4: Generate Initial Bars ──────────────────
-        self._set_state("generating_initial_bars")
-        self._bar_engine = RangeBarEngine(
-            bar_size_points=self.bar_size_points,
-            max_bars=self.max_bars,
-            on_bar=None,
-            debug=self.debug)
-        for tick in ticks:
-            self._bar_engine.process_tick(
-                tick["ts"], tick["price"], tick["volume"])
-
-        initial_count = self._bar_engine.current_bars_count
-        self._total_bars_produced = self._bar_engine.total_bars_emitted
-        if self._bar_engine.bars:
-            self._last_bar_time = self._bar_engine.bars[-1].get(
-                "time")
-
-        print(f"[RUNNER] Initial bars: {initial_count} "
-              f"(total emitted: {self._total_bars_produced}) "
-              f"(from {len(ticks)} ticks, "
-              f"bar_size={self.bar_size_points}pt)")
-
-        if self.debug and initial_count > 0:
-            b_first = self._bar_engine.bars[0]
-            b_last = self._bar_engine.bars[-1]
-            opens = [b["open"] for b in self._bar_engine.bars]
-            closes = [b["close"] for b in self._bar_engine.bars]
-            all_grid = True
-            for v in opens + closes:
-                remainder = round(v % self.bar_size_points, 10)
-                if (remainder > 1e-8
-                        and abs(remainder - self.bar_size_points)
-                        > 1e-8):
-                    all_grid = False
-                    break
-            grid_status = ("\u2705 ALL GRID-ALIGNED" if all_grid
-                           else "\u26a0\ufe0f SOME OFF-GRID")
-            print(f"[DEBUG] Bar[0]:  O={b_first['open']:.5f} "
-                  f"C={b_first['close']:.5f}")
-            print(f"[DEBUG] Bar[-1]: O={b_last['open']:.5f} "
-                  f"C={b_last['close']:.5f}")
-            print(f"[DEBUG] Grid check: {grid_status}")
-
-        if initial_count == 0:
-            self._set_state(
-                "failed",
-                f"No bars from {len(ticks)} ticks. "
-                f"bar_size_points={self.bar_size_points} "
-                f"may be too large for {self.symbol}.")
-            mt5_connector.shutdown_mt5()
-            return
-
-        self._log_pipeline("INITIAL_BARS")
-
-        # ══════════════════════════════════════════════════════
-        # Phase 5: Warm Up — Backtester-Aligned
-        #
-        # Replays historical bars through strategy to build up:
-        #   - Strategy internal state (ctx.state)
-        #   - Indicator values
-        #   - Streak counters, etc.
-        #
-        # ★ KEY: We track pending signals during warmup and
-        # "consume" them on the next bar. This keeps the
-        # strategy's state aligned with what it would see if
-        # it had been running live (i.e., the strategy sees
-        # has_position=False and its counters reset correctly
-        # after signals fire, matching backtester behavior
-        # where pending signals are consumed even during the
-        # lookback period).
-        # ══════════════════════════════════════════════════════
-        self._set_state("warming_up")
-        bars_list = list(self._bar_engine.bars)
-        min_lb = getattr(self._strategy, "min_lookback", 0) or 0
-        self._prev_indicators = {}
-        warmup_pending = None  # track pending during warmup
-
-        print(f"[WARMUP] {len(bars_list)} bars | "
-              f"min_lookback={min_lb}")
-
-        for i in range(len(bars_list)):
-            if self._stop_event.is_set():
-                return
-
-            warmup_slice = bars_list[:i + 1]
-            self._ctx._bars = warmup_slice
-            self._ctx._bar_offset = len(warmup_slice) - 1
-            self._ctx._index = i
-            self._bar_index = i
-            self._absolute_bar_counter = i
-            self._ctx._prev_indicators = dict(
-                self._prev_indicators)
-
-            if self._indicator_engine:
-                self._indicator_engine.update(
-                    warmup_slice, self._ctx)
-
-            self._refresh_position()
-
-            # ── Consume warmup pending (backtester Step 1) ──
-            # In backtester, pending is consumed at bar open
-            # even during lookback. We simulate this by just
-            # clearing it — we can't execute historically.
-            if warmup_pending is not None:
-                self._warmup_signal_count += 1
-                print(f"[WARMUP] Pending {warmup_pending['direction']}"
-                      f" consumed at bar {i} (NOT executed)")
-                warmup_pending = None
-
-            if i < min_lb:
-                self._prev_indicators = dict(
-                    self._ctx._indicators)
-                continue
-
-            self._on_bar_call_count += 1
-            try:
-                raw_signal = self._strategy.on_bar(self._ctx)
-                if raw_signal:
-                    s = raw_signal.get("signal")
-                    if s in (SIGNAL_BUY, SIGNAL_SELL):
-                        # Store as warmup pending — consumed
-                        # next iteration (backtester-aligned)
-                        direction = ("long" if s == SIGNAL_BUY
-                                     else "short")
-                        warmup_pending = {
-                            "direction": direction,
-                            "signal": s,
-                        }
-                        print(f"[WARMUP] Signal at bar {i}: "
-                              f"{s} → pending (consume next bar)")
-                    elif s in (SIGNAL_CLOSE, SIGNAL_CLOSE_LONG,
-                               SIGNAL_CLOSE_SHORT):
-                        self._warmup_signal_count += 1
-                        print(f"[WARMUP] Signal at bar {i}: "
-                              f"{s} (no position, ignored)")
-            except Exception as exc:
-                print(f"[WARMUP] on_bar error at bar {i}: {exc}")
-
-            self._prev_indicators = dict(self._ctx._indicators)
-
-        # Clear any trailing warmup pending
-        if warmup_pending is not None:
-            self._warmup_signal_count += 1
-            print(f"[WARMUP] Trailing pending "
-                  f"{warmup_pending['direction']} discarded")
-            warmup_pending = None
-
-        print(f"[RUNNER] Warmup complete. "
-              f"on_bar={self._on_bar_call_count} | "
-              f"warmup_signals={self._warmup_signal_count} "
-              f"(all skipped) | "
-              f"absolute_bar_counter="
-              f"{self._absolute_bar_counter}")
-        self._log_pipeline("WARMUP_DONE")
-
-        # ══════════════════════════════════════════════════════
-        # Phase 6: Live Tick Loop
-        #
-        # Hook _on_new_bar into the bar engine.
-        # Each completed range bar triggers the full 8-step
-        # backtester-aligned loop.
-        # ══════════════════════════════════════════════════════
-        self._set_state("running")
-        self._bar_engine._on_bar = self._on_new_bar
-        live_tick_count = 0
-
-        try:
-            for tick in mt5_connector.stream_live_ticks(
-                    self.symbol):
-                if self._stop_event.is_set():
-                    break
-                self._total_ticks_ingested += 1
-                self._current_price = tick["price"]
-                live_tick_count += 1
-                self._bar_engine.process_tick(
-                    tick["ts"], tick["price"], tick["volume"])
-                if live_tick_count % 5000 == 0:
-                    self._log_pipeline("LIVE_TICK")
-        except Exception as exc:
-            if not self._stop_event.is_set():
-                tb = traceback.format_exc()
-                print(f"[RUNNER] Live loop error: {exc}\n{tb}")
-                self._set_state(
-                    "failed",
-                    f"Live loop error: "
-                    f"{type(exc).__name__}: {exc}")
-        finally:
-            self._log_pipeline("SHUTDOWN")
-            mt5_connector.shutdown_mt5()
-            self._mt5_state = "disconnected"
-            if not self._stop_event.is_set():
-                self._set_state("stopped")
 ```

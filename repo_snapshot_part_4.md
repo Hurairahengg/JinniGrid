@@ -1,865 +1,28 @@
-# Repository Snapshot - Part 4 of 4
+# Repo Snapshot — Part 4/5
 
-- Total files indexed: `27`
-- Files in this chunk: `7`
-## Full Project Tree
+- Root: `/home/hurairahengg/Documents/JinniGrid`
+- Total files: `28` | This chunk: `9`
+- you knwo my whole jinni grid systeM/ basically it is thereliek a kubernetes server setup what it does is basically a mother server with ui and bunch of lank state VMs. the vms run a speacial typa of renko style bars not normal timeframe u will get more context in the codes but yeha and we can uipload strategy codes though mother ui and it wiill run strategy mt5 report and ecetra ecetra.theres the whole ui with a professional protfolio and contorls such as settings and fleet management and so on yeah. currently im mostly dont and need bug fixes for many thigns so yeah. understand each code its role and keep in ur context i will give u big promtps to update code later duinerstood
+
+## Files in Part 4
 
 ```text
-app/__init__.py
-app/config.py
+ui/js/workerDetailRenderer.js
+app/persistence.py
+vm/core/validation_runner.py
+vm/trading/mt5_history.py
 app/logging_config.py
-app/persistence.py
-app/routes/__init__.py
-app/routes/mainRoutes.py
-app/services/__init__.py
-app/services/mainServices.py
-app/services/strategy_registry.py
+app/__init__.py
 config.yaml
-main.py
-README.md
-requirements.txt
-ui/css/style.css
-ui/index.html
-ui/js/main.js
-ui/js/workerDetailRenderer.js
 vm/config.yaml
-vm/core/strategy_worker.py
-vm/logging/event_log.py
-vm/README.md
 vm/requirements.txt
-vm/trading/execution.py
-vm/trading/indicators.py
-vm/trading/mt5_history.py
-vm/trading/portfolio.py
-vm/worker_agent.py
 ```
 
-## Files In This Chunk - Part 4
-
-```text
-app/persistence.py
-ui/js/workerDetailRenderer.js
-vm/logging/event_log.py
-vm/README.md
-vm/trading/indicators.py
-vm/trading/mt5_history.py
-vm/trading/portfolio.py
-```
-
-## File Contents
-
+## Contents
 
 ---
 
-## FILE: `app/persistence.py`
-
-- Relative path: `app/persistence.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/app/persistence.py`
-- Size bytes: `27118`
-- SHA256: `ed250499267854275500277608cdb27b74558fdd6cfb86640801e4879b19c8ca`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
-
-```python
-"""
-JINNI GRID — Database Persistence Layer
-app/persistence.py
-
-All raw data storage. Every monetary value rounded to 2 decimals at write time.
-Trade UIDs are globally unique (deployment_id + trade_counter).
-Timestamps stored as both Unix int AND ISO string for correct date grouping.
-"""
-
-import json
-import os
-import sqlite3
-import threading
-from datetime import datetime, timezone
-
-_DB_PATH = None
-_local = threading.local()
-
-_DEFAULT_SETTINGS = {
-    "refresh_interval": "5",
-    "default_symbol": "XAUUSD",
-    "default_bar_size": "100",
-    "default_lot_size": "0.01",
-    "debug_mode": "true",
-    "worker_timeout_seconds": "90",
-    "log_verbosity": "INFO",
-}
-
-
-# ── Connection ──────────────────────────────────────────────
-
-def _get_conn() -> sqlite3.Connection:
-    if not hasattr(_local, "conn") or _local.conn is None:
-        _local.conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
-        _local.conn.row_factory = sqlite3.Row
-        _local.conn.execute("PRAGMA journal_mode=WAL")
-        _local.conn.execute("PRAGMA busy_timeout=5000")
-    return _local.conn
-
-
-def _r2(v):
-    if v is None:
-        return 0.0
-    try:
-        return round(float(v), 2)
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def _unix_to_iso(ts):
-    """Convert Unix timestamp (int/float) to ISO 8601 UTC string."""
-    if ts is None:
-        return None
-    try:
-        v = int(ts)
-        if v > 946684800:  # after year 2000
-            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
-    except (ValueError, TypeError, OSError):
-        pass
-    s = str(ts)
-    if "T" in s or (len(s) >= 10 and s[4] == "-"):
-        return s
-    return None
-
-
-def _unix_to_date(ts):
-    """Convert Unix timestamp to YYYY-MM-DD."""
-    if ts is None:
-        return None
-    try:
-        v = int(ts)
-        if v > 946684800:
-            return datetime.fromtimestamp(v, tz=timezone.utc).strftime("%Y-%m-%d")
-    except (ValueError, TypeError, OSError):
-        pass
-    s = str(ts)
-    if len(s) >= 10 and s[4] == "-":
-        return s[:10]
-    return None
-
-
-# ── Schema ──────────────────────────────────────────────────
-
-def init_db(db_path: str = "jinni_grid.db"):
-    global _DB_PATH
-    _DB_PATH = db_path
-    conn = _get_conn()
-
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS workers (
-            worker_id TEXT PRIMARY KEY,
-            worker_name TEXT,
-            host TEXT,
-            state TEXT DEFAULT 'unknown',
-            mt5_state TEXT,
-            broker TEXT,
-            account_id TEXT,
-            mt5_server TEXT,
-            account_balance REAL DEFAULT 0.0,
-            account_equity REAL DEFAULT 0.0,
-            agent_version TEXT,
-            last_heartbeat_at TEXT,
-            data_json TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS strategies (
-            strategy_id TEXT PRIMARY KEY,
-            name TEXT,
-            description TEXT,
-            version TEXT,
-            class_name TEXT,
-            file_hash TEXT,
-            file_content TEXT,
-            min_lookback INTEGER DEFAULT 0,
-            parameters_json TEXT,
-            uploaded_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS deployments (
-            deployment_id TEXT PRIMARY KEY,
-            strategy_id TEXT,
-            worker_id TEXT,
-            symbol TEXT,
-            state TEXT DEFAULT 'queued',
-            tick_lookback_value INTEGER DEFAULT 30,
-            tick_lookback_unit TEXT DEFAULT 'minutes',
-            bar_size_points REAL DEFAULT 100,
-            max_bars_in_memory INTEGER DEFAULT 500,
-            lot_size REAL DEFAULT 0.01,
-            strategy_parameters_json TEXT,
-            last_error TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            trade_uid TEXT UNIQUE,
-            trade_id INTEGER,
-            deployment_id TEXT,
-            strategy_id TEXT,
-            worker_id TEXT,
-            symbol TEXT,
-            direction TEXT,
-            entry_price REAL,
-            exit_price REAL,
-            entry_time_unix INTEGER,
-            exit_time_unix INTEGER,
-            entry_time TEXT,
-            exit_time TEXT,
-            entry_bar INTEGER,
-            exit_bar INTEGER,
-            bars_held INTEGER DEFAULT 0,
-            lot_size REAL,
-            ticket INTEGER,
-            sl REAL,
-            tp REAL,
-            profit REAL DEFAULT 0.0,
-            commission REAL DEFAULT 0.0,
-            swap REAL DEFAULT 0.0,
-            exit_reason TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS equity_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            worker_id TEXT,
-            balance REAL DEFAULT 0.0,
-            equity REAL DEFAULT 0.0,
-            floating_pnl REAL DEFAULT 0.0,
-            open_positions INTEGER DEFAULT 0,
-            cumulative_pnl REAL DEFAULT 0.0,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            category TEXT,
-            event_type TEXT,
-            message TEXT,
-            level TEXT DEFAULT 'INFO',
-            worker_id TEXT,
-            strategy_id TEXT,
-            deployment_id TEXT,
-            symbol TEXT,
-            data_json TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-    """)
-
-    # Indexes
-    for sql in [
-        "CREATE INDEX IF NOT EXISTS idx_trades_worker ON trades(worker_id)",
-        "CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id)",
-        "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)",
-        "CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_time)",
-        "CREATE INDEX IF NOT EXISTS idx_trades_ticket ON trades(ticket)",
-        "CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(timestamp)",
-        "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)",
-        "CREATE INDEX IF NOT EXISTS idx_events_cat ON events(category)",
-    ]:
-        try:
-            conn.execute(sql)
-        except sqlite3.OperationalError:
-            pass
-
-    # Migrations for older DBs
-    _mig = [
-        ("workers", "account_balance", "REAL DEFAULT 0.0"),
-        ("workers", "account_equity", "REAL DEFAULT 0.0"),
-        ("trades", "trade_uid", "TEXT"),
-        ("trades", "commission", "REAL DEFAULT 0.0"),
-        ("trades", "swap", "REAL DEFAULT 0.0"),
-        ("trades", "entry_time", "TEXT"),
-        ("trades", "exit_time", "TEXT"),
-        ("trades", "entry_time_unix", "INTEGER"),
-        ("trades", "exit_time_unix", "INTEGER"),
-        ("equity_snapshots", "worker_id", "TEXT"),
-    ]
-    for table, col, col_type in _mig:
-        try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass
-
-    # Seed defaults
-    for k, v in _DEFAULT_SETTINGS.items():
-        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-
-    conn.commit()
-    print(f"[DB] Initialized: {db_path}")
-
-
-# ── Workers ─────────────────────────────────────────────────
-
-def save_worker(worker_id: str, data: dict):
-    conn = _get_conn()
-    conn.execute("""
-        INSERT INTO workers (worker_id, worker_name, host, state, mt5_state,
-            broker, account_id, mt5_server, account_balance, account_equity,
-            agent_version, last_heartbeat_at, data_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(worker_id) DO UPDATE SET
-            worker_name=excluded.worker_name, host=excluded.host,
-            state=excluded.state, mt5_state=excluded.mt5_state,
-            broker=excluded.broker, account_id=excluded.account_id,
-            mt5_server=excluded.mt5_server,
-            account_balance=excluded.account_balance,
-            account_equity=excluded.account_equity,
-            agent_version=excluded.agent_version,
-            last_heartbeat_at=excluded.last_heartbeat_at,
-            data_json=excluded.data_json,
-            updated_at=datetime('now')
-    """, (
-        worker_id,
-        data.get("worker_name"),
-        data.get("host"),
-        data.get("reported_state", data.get("state", "online")),
-        data.get("mt5_state"),
-        data.get("broker"),
-        data.get("account_id"),
-        data.get("mt5_server"),
-        _r2(data.get("account_balance")),
-        _r2(data.get("account_equity")),
-        data.get("agent_version"),
-        data.get("last_heartbeat_at"),
-        json.dumps({k: v for k, v in data.items()
-                     if k not in ("_last_heartbeat_dt",)}, default=str),
-    ))
-    conn.commit()
-
-
-def get_all_workers_db() -> list:
-    conn = _get_conn()
-    rows = conn.execute("SELECT * FROM workers ORDER BY worker_id").fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        # Merge extra data from data_json
-        if d.get("data_json"):
-            try:
-                extra = json.loads(d["data_json"])
-                for k, v in extra.items():
-                    if k not in d or d[k] is None:
-                        d[k] = v
-            except (json.JSONDecodeError, TypeError):
-                pass
-        result.append(d)
-    return result
-
-
-def get_worker_db(worker_id: str):
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM workers WHERE worker_id=?",
-                       (worker_id,)).fetchone()
-    return dict(row) if row else None
-
-
-# ── Strategies ──────────────────────────────────────────────
-
-def save_strategy(strategy_id: str, data: dict):
-    conn = _get_conn()
-    conn.execute("""
-        INSERT INTO strategies (strategy_id, name, description, version,
-            class_name, file_hash, file_content, min_lookback, parameters_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(strategy_id) DO UPDATE SET
-            name=excluded.name, description=excluded.description,
-            version=excluded.version, class_name=excluded.class_name,
-            file_hash=excluded.file_hash, file_content=excluded.file_content,
-            min_lookback=excluded.min_lookback,
-            parameters_json=excluded.parameters_json
-    """, (
-        strategy_id,
-        data.get("name", strategy_id),
-        data.get("description", ""),
-        data.get("version", "1.0"),
-        data.get("class_name", ""),
-        data.get("file_hash", ""),
-        data.get("file_content", ""),
-        data.get("min_lookback", 0),
-        json.dumps(data.get("parameters", {})),
-    ))
-    conn.commit()
-
-
-def get_all_strategies_db() -> list:
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM strategies ORDER BY uploaded_at DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_strategy_db(strategy_id: str):
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM strategies WHERE strategy_id=?",
-                       (strategy_id,)).fetchone()
-    return dict(row) if row else None
-
-
-# ── Deployments ─────────────────────────────────────────────
-
-def save_deployment(deployment_id: str, data: dict):
-    conn = _get_conn()
-    conn.execute("""
-        INSERT INTO deployments (deployment_id, strategy_id, worker_id, symbol,
-            state, tick_lookback_value, tick_lookback_unit, bar_size_points,
-            max_bars_in_memory, lot_size, strategy_parameters_json, last_error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(deployment_id) DO UPDATE SET
-            state=excluded.state, last_error=excluded.last_error,
-            updated_at=datetime('now')
-    """, (
-        deployment_id,
-        data.get("strategy_id"),
-        data.get("worker_id"),
-        data.get("symbol"),
-        data.get("state", "queued"),
-        data.get("tick_lookback_value", 30),
-        data.get("tick_lookback_unit", "minutes"),
-        data.get("bar_size_points", 100),
-        data.get("max_bars_in_memory", 500),
-        data.get("lot_size", 0.01),
-        json.dumps(data.get("strategy_parameters", {})),
-        data.get("last_error"),
-    ))
-    conn.commit()
-
-
-def get_all_deployments_db() -> list:
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM deployments ORDER BY created_at DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_deployment_db(deployment_id: str):
-    conn = _get_conn()
-    row = conn.execute("SELECT * FROM deployments WHERE deployment_id=?",
-                       (deployment_id,)).fetchone()
-    return dict(row) if row else None
-
-
-def update_deployment_state_db(deployment_id: str, state: str,
-                                error: str = None):
-    conn = _get_conn()
-    conn.execute("""
-        UPDATE deployments SET state=?, last_error=?, updated_at=datetime('now')
-        WHERE deployment_id=?
-    """, (state, error, deployment_id))
-    conn.commit()
-
-
-# ── Trades (THE CRITICAL FIX) ──────────────────────────────
-
-def save_trade_db(data: dict) -> bool:
-    """
-    Save a closed trade. Uses MT5 position ticket as the unique ID
-    (globally unique per MT5 account, never reused).
-
-    Uniqueness: trade_uid = {worker_id}_{mt5_ticket}
-    Fallback:   trade_uid = {deployment_id}_{worker_id}_{trade_id}_{exit_time}
-    """
-    conn = _get_conn()
-
-    # Build globally unique trade ID
-    mt5_ticket = data.get("mt5_ticket") or data.get("ticket")
-    wk_id = data.get("worker_id", "none")
-    dep_id = data.get("deployment_id", "none")
-    t_id = data.get("trade_id", 0)
-    exit_ts = data.get("exit_time", "0")
-
-    if mt5_ticket:
-        # Best case: MT5 ticket is globally unique per account
-        trade_uid = f"{wk_id}_{mt5_ticket}"
-    else:
-        # Fallback: include exit_time to prevent restart collisions
-        trade_uid = f"{dep_id}_{wk_id}_{t_id}_{exit_ts}"
-
-    # Convert timestamps
-    entry_ts = data.get("entry_time")
-    exit_ts_raw = data.get("exit_time")
-    entry_iso = _unix_to_iso(entry_ts)
-    exit_iso = _unix_to_iso(exit_ts_raw)
-
-    # Bars held
-    bars_held = data.get("bars_held")
-    if bars_held is None or bars_held == 0:
-        eb = int(data.get("entry_bar", 0) or 0)
-        xb = int(data.get("exit_bar", 0) or 0)
-        bars_held = max(0, xb - eb)
-
-    # Use net_pnl if available (MT5 source), else fall back to profit
-    profit = data.get("net_pnl") or data.get("profit") or 0
-
-    try:
-        conn.execute("""
-            INSERT OR IGNORE INTO trades (
-                trade_uid, trade_id, deployment_id, strategy_id, worker_id,
-                symbol, direction, entry_price, exit_price,
-                entry_time_unix, exit_time_unix, entry_time, exit_time,
-                entry_bar, exit_bar, bars_held,
-                lot_size, ticket, sl, tp,
-                profit, commission, swap, exit_reason
-            ) VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?)
-        """, (
-            trade_uid,
-            t_id,
-            dep_id,
-            data.get("strategy_id"),
-            wk_id,
-            data.get("symbol"),
-            data.get("direction"),
-            _r2(data.get("entry_price")),
-            _r2(data.get("exit_price")),
-            int(entry_ts) if entry_ts and str(entry_ts).isdigit() else None,
-            int(exit_ts_raw) if exit_ts_raw and str(exit_ts_raw).isdigit() else None,
-            entry_iso,
-            exit_iso,
-            data.get("entry_bar"),
-            data.get("exit_bar"),
-            bars_held,
-            data.get("lot_size"),
-            mt5_ticket or data.get("ticket"),
-            data.get("sl"),
-            data.get("tp"),
-            _r2(profit),
-            _r2(data.get("commission")),
-            _r2(data.get("swap")),
-            data.get("exit_reason"),
-        ))
-        conn.commit()
-        changes = conn.execute("SELECT changes()").fetchone()[0]
-        if changes == 0:
-            print(f"[DB] Trade {trade_uid} already exists (skipped duplicate)")
-        else:
-            src = "MT5" if data.get("mt5_source") else "EST"
-            print(f"[DB] Trade SAVED [{src}]: uid={trade_uid} "
-                  f"{data.get('direction','')} {data.get('symbol','')} "
-                  f"profit={_r2(profit)} reason={data.get('exit_reason','')}")
-        return True
-    except Exception as e:
-        print(f"[DB] save_trade_db FAILED: {e}")
-        return False
-
-
-def get_all_trades_db(limit: int = 10000, strategy_id: str = None,
-                       worker_id: str = None, symbol: str = None) -> list:
-    conn = _get_conn()
-    query = "SELECT * FROM trades"
-    params = []
-    wheres = []
-    if strategy_id:
-        wheres.append("strategy_id = ?")
-        params.append(strategy_id)
-    if worker_id:
-        wheres.append("worker_id = ?")
-        params.append(worker_id)
-    if symbol:
-        wheres.append("symbol = ?")
-        params.append(symbol)
-    if wheres:
-        query += " WHERE " + " AND ".join(wheres)
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
-    rows = conn.execute(query, params).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        # Ensure exit_time is always an ISO string for portfolio computation
-        if not d.get("exit_time") and d.get("exit_time_unix"):
-            d["exit_time"] = _unix_to_iso(d["exit_time_unix"])
-        if not d.get("entry_time") and d.get("entry_time_unix"):
-            d["entry_time"] = _unix_to_iso(d["entry_time_unix"])
-        result.append(d)
-    return result
-
-
-# ── Equity Snapshots ────────────────────────────────────────
-
-def save_equity_snapshot_db(balance: float = 0, equity: float = 0,
-                             floating_pnl: float = 0, open_positions: int = 0,
-                             cumulative_pnl: float = 0,
-                             worker_id: str = None):
-    conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("""
-        INSERT INTO equity_snapshots (timestamp, worker_id, balance, equity,
-            floating_pnl, open_positions, cumulative_pnl)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (now, worker_id, _r2(balance), _r2(equity),
-          _r2(floating_pnl), open_positions, _r2(cumulative_pnl)))
-    conn.commit()
-
-
-def get_equity_snapshots_db(limit: int = 2000,
-                             worker_id: str = None) -> list:
-    conn = _get_conn()
-    if worker_id:
-        rows = conn.execute(
-            "SELECT * FROM equity_snapshots WHERE worker_id=? "
-            "ORDER BY id DESC LIMIT ?", (worker_id, limit)
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM equity_snapshots ORDER BY id DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-    result = [dict(r) for r in rows]
-    result.reverse()
-    return result
-
-
-def clear_equity_snapshots_db():
-    conn = _get_conn()
-    conn.execute("DELETE FROM equity_snapshots")
-    conn.commit()
-
-
-# ── Events ──────────────────────────────────────────────────
-
-def log_event_db(category: str, event_type: str, message: str,
-                  worker_id: str = None, strategy_id: str = None,
-                  deployment_id: str = None, symbol: str = None,
-                  data: dict = None, level: str = "INFO"):
-    conn = _get_conn()
-    now = datetime.now(timezone.utc).isoformat()
-    data_json = json.dumps(data, default=str) if data else None
-    try:
-        conn.execute("""
-            INSERT INTO events (timestamp, category, event_type, message, level,
-                worker_id, strategy_id, deployment_id, symbol, data_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (now, category, event_type, message, level,
-              worker_id, strategy_id, deployment_id, symbol, data_json))
-        conn.commit()
-    except Exception as e:
-        print(f"[DB] log_event error: {e}")
-
-
-def get_events_db(limit: int = 200, category: str = None,
-                   worker_id: str = None,
-                   deployment_id: str = None) -> list:
-    conn = _get_conn()
-    query = "SELECT * FROM events"
-    params = []
-    wheres = []
-    if category:
-        wheres.append("category = ?")
-        params.append(category)
-    if worker_id:
-        wheres.append("worker_id = ?")
-        params.append(worker_id)
-    if deployment_id:
-        wheres.append("deployment_id = ?")
-        params.append(deployment_id)
-    if wheres:
-        query += " WHERE " + " AND ".join(wheres)
-    query += " ORDER BY id DESC LIMIT ?"
-    params.append(limit)
-    rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]
-
-
-# ── Settings ────────────────────────────────────────────────
-
-def get_setting(key: str):
-    conn = _get_conn()
-    row = conn.execute("SELECT value FROM settings WHERE key=?",
-                       (key,)).fetchone()
-    return row[0] if row else None
-
-
-def get_all_settings() -> dict:
-    conn = _get_conn()
-    rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    return {r[0]: r[1] for r in rows}
-
-
-def save_setting(key: str, value: str):
-    conn = _get_conn()
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        (key, value)
-    )
-    conn.commit()
-
-
-def save_settings_bulk(settings: dict):
-    conn = _get_conn()
-    for k, v in settings.items():
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            (k, str(v))
-        )
-    conn.commit()
-
-
-# ── Admin / Delete ──────────────────────────────────────────
-
-def delete_all_trades_db() -> int:
-    conn = _get_conn()
-    c = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
-    conn.execute("DELETE FROM trades")
-    conn.commit()
-    return c
-
-
-def delete_trades_by_strategy_db(strategy_id: str) -> int:
-    conn = _get_conn()
-    c = conn.execute("SELECT COUNT(*) FROM trades WHERE strategy_id=?",
-                     (strategy_id,)).fetchone()[0]
-    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
-    conn.commit()
-    return c
-
-
-def delete_trades_by_worker_db(worker_id: str) -> int:
-    conn = _get_conn()
-    c = conn.execute("SELECT COUNT(*) FROM trades WHERE worker_id=?",
-                     (worker_id,)).fetchone()[0]
-    conn.execute("DELETE FROM trades WHERE worker_id=?", (worker_id,))
-    conn.commit()
-    return c
-
-
-def delete_strategy_full_db(strategy_id: str) -> dict:
-    conn = _get_conn()
-    dep_c = conn.execute(
-        "SELECT COUNT(*) FROM deployments WHERE strategy_id=?",
-        (strategy_id,)
-    ).fetchone()[0]
-    conn.execute("DELETE FROM deployments WHERE strategy_id=?",
-                 (strategy_id,))
-    trade_c = conn.execute(
-        "SELECT COUNT(*) FROM trades WHERE strategy_id=?",
-        (strategy_id,)
-    ).fetchone()[0]
-    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
-    conn.execute("DELETE FROM strategies WHERE strategy_id=?",
-                 (strategy_id,))
-    conn.commit()
-    # Delete files
-    try:
-        import glob
-        for p in glob.glob(f"strategies/*{strategy_id}*"):
-            os.remove(p)
-    except Exception:
-        pass
-    return {"ok": True, "strategy_id": strategy_id,
-            "deployments_deleted": dep_c, "trades_deleted": trade_c}
-
-
-def remove_worker_db(worker_id: str) -> dict:
-    conn = _get_conn()
-    conn.execute("DELETE FROM workers WHERE worker_id=?", (worker_id,))
-    conn.commit()
-    return {"ok": True, "worker_id": worker_id}
-
-
-def remove_stale_workers_db(threshold_seconds: int = 300) -> int:
-    conn = _get_conn()
-    cutoff = datetime.now(timezone.utc)
-    rows = conn.execute("SELECT worker_id, last_heartbeat_at FROM workers"
-                        ).fetchall()
-    removed = 0
-    for r in rows:
-        hb = r[1]
-        if not hb:
-            continue
-        try:
-            last = datetime.fromisoformat(hb)
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if (cutoff - last).total_seconds() > threshold_seconds:
-                conn.execute("DELETE FROM workers WHERE worker_id=?",
-                             (r[0],))
-                removed += 1
-        except (ValueError, TypeError):
-            pass
-    conn.commit()
-    return removed
-
-
-def clear_events_db() -> int:
-    conn = _get_conn()
-    c = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    conn.execute("DELETE FROM events")
-    conn.commit()
-    return c
-
-
-def get_system_stats_db() -> dict:
-    conn = _get_conn()
-    stats = {}
-    for table in ["strategies", "workers", "deployments", "trades",
-                   "events", "equity_snapshots", "settings"]:
-        try:
-            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            stats[f"{table}_count"] = c
-        except Exception:
-            stats[f"{table}_count"] = 0
-    # Active deployments
-    try:
-        stats["active_deployments"] = conn.execute(
-            "SELECT COUNT(*) FROM deployments WHERE state='running'"
-        ).fetchone()[0]
-    except Exception:
-        stats["active_deployments"] = 0
-    # DB size
-    try:
-        stats["db_size_bytes"] = os.path.getsize(_DB_PATH)
-    except Exception:
-        stats["db_size_bytes"] = 0
-    return stats
-
-
-def full_system_reset_db() -> dict:
-    conn = _get_conn()
-    counts = {}
-    for table in ["trades", "events", "deployments", "equity_snapshots",
-                   "workers", "strategies"]:
-        try:
-            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            conn.execute(f"DELETE FROM {table}")
-            counts[f"{table}_deleted"] = c
-        except Exception:
-            counts[f"{table}_deleted"] = 0
-    conn.commit()
-    try:
-        import glob
-        for p in glob.glob("strategies/*.py"):
-            os.remove(p)
-    except Exception:
-        pass
-    return counts
-```
-
----
-
-## FILE: `ui/js/workerDetailRenderer.js`
-
-- Relative path: `ui/js/workerDetailRenderer.js`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/ui/js/workerDetailRenderer.js`
-- Size bytes: `41768`
-- SHA256: `08588cb5c5cb16d35d9d08077ad0980f2e922f904e9d74508f16b8d9885db6d4`
-- Guessed MIME type: `text/javascript`
-- Guessed encoding: `unknown`
+## `ui/js/workerDetailRenderer.js`
 
 ```javascript
 /* workerDetailRenderer.js */
@@ -946,9 +109,16 @@ var WorkerDetailRenderer = (function () {
     _selectedStrategy = null;
     _deployments = [];
 
-    var defaults = DeploymentConfig.runtimeDefaults;
-    _runtimeConfig = {};
-    for (var k in defaults) _runtimeConfig[k] = defaults[k];
+    /* ★ Pull defaults from GlobalSettings (wired to Settings page) */
+    var defaults = GlobalSettings.getDeploymentDefaults();
+    _runtimeConfig = {
+      symbol: defaults.symbol,
+      lot_size: defaults.lot_size,
+      bar_size_points: defaults.bar_size_points,
+      max_bars_memory: defaults.max_bars_memory,
+      tick_lookback_value: defaults.tick_lookback_value,
+      tick_lookback_unit: defaults.tick_lookback_unit,
+    };
 
     _parameterValues = {};
     _parameterDefaults = {};
@@ -1798,24 +968,16 @@ var WorkerDetailRenderer = (function () {
 
 ---
 
-## FILE: `vm/logging/event_log.py`
-
-- Relative path: `vm/logging/event_log.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/logging/event_log.py`
-- Size bytes: `3457`
-- SHA256: `df8ec517a77b4d6762a2911bb760f6b2873b1f23a3029a0ad1eac449f9e7bf3d`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
+## `app/persistence.py`
 
 ```python
 """
-JINNI GRID — Worker-Side Structured Event Logger
-worker/event_log.py
+JINNI GRID — Database Persistence Layer
+app/persistence.py
 
-Writes structured events to a local SQLite DB on the worker machine.
-Events are also forwarded to Mother via heartbeat/status reports.
-
-Categories: SYSTEM, EXECUTION, STRATEGY, PIPELINE, ERROR
+All raw data storage. Every monetary value rounded to 2 decimals at write time.
+Trade UIDs are globally unique (deployment_id + trade_counter).
+Timestamps stored as both Unix int AND ISO string for correct date grouping.
 """
 
 import json
@@ -1825,392 +987,1359 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_DB_PATH = None
+_local = threading.local()
+
+_DEFAULT_SETTINGS = {
+    "refresh_interval": "5",
+    "default_symbol": "XAUUSD",
+    "default_bar_size": "100",
+    "default_lot_size": "0.01",
+    "default_max_bars": "500",
+    "default_tick_lookback_value": "30",
+    "default_tick_lookback_unit": "minutes",
+    "default_spread": "0",
+    "default_commission": "0",
+    "debug_mode": "true",
+    "worker_timeout_seconds": "90",
+    "log_verbosity": "INFO",
+}
 
 
-class WorkerEventLog:
-    """Per-worker persistent event log."""
+# ── Connection ──────────────────────────────────────────────
 
-    def __init__(self, worker_id: str):
-        self.worker_id = worker_id
-        self._lock = threading.Lock()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        self._db_path = os.path.join(DATA_DIR, f"events_{worker_id}.db")
-        self._init_db()
+def _get_conn() -> sqlite3.Connection:
+    if not hasattr(_local, "conn") or _local.conn is None:
+        _local.conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _local.conn.row_factory = sqlite3.Row
+        _local.conn.execute("PRAGMA journal_mode=WAL")
+        _local.conn.execute("PRAGMA busy_timeout=5000")
+    return _local.conn
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=15)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=3000")
-        conn.row_factory = sqlite3.Row
-        return conn
 
-    def _init_db(self):
-        conn = self._get_conn()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                category TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                deployment_id TEXT,
-                strategy_id TEXT,
-                symbol TEXT,
-                message TEXT,
-                data_json TEXT,
-                level TEXT DEFAULT 'INFO'
-            );
-            CREATE INDEX IF NOT EXISTS idx_wevents_ts ON events(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_wevents_cat ON events(category);
-        """)
-        conn.commit()
-        conn.close()
+def _r2(v):
+    if v is None:
+        return 0.0
+    try:
+        return round(float(v), 2)
+    except (ValueError, TypeError):
+        return 0.0
 
-    def log(self, category: str, event_type: str, message: str,
-            deployment_id: str = None, strategy_id: str = None,
-            symbol: str = None, data: dict = None, level: str = "INFO"):
-        """Write a structured event."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                conn.execute("""
-                    INSERT INTO events (timestamp, category, event_type,
-                        deployment_id, strategy_id, symbol, message,
-                        data_json, level)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    now, category, event_type, deployment_id, strategy_id,
-                    symbol, message,
-                    json.dumps(data, default=str) if data else None, level,
-                ))
-                conn.commit()
-            finally:
-                conn.close()
 
-        # Also print for console visibility
-        print(f"[EVENT:{category}] {event_type} | {message}")
+def _unix_to_iso(ts):
+    """Convert Unix timestamp (int/float) to ISO 8601 UTC string."""
+    if ts is None:
+        return None
+    try:
+        v = int(ts)
+        if v > 946684800:  # after year 2000
+            return datetime.fromtimestamp(v, tz=timezone.utc).isoformat()
+    except (ValueError, TypeError, OSError):
+        pass
+    s = str(ts)
+    if "T" in s or (len(s) >= 10 and s[4] == "-"):
+        return s
+    return None
 
-    def get_recent(self, limit: int = 100, category: str = None) -> list:
-        conn = self._get_conn()
+
+def _unix_to_date(ts):
+    """Convert Unix timestamp to YYYY-MM-DD."""
+    if ts is None:
+        return None
+    try:
+        v = int(ts)
+        if v > 946684800:
+            return datetime.fromtimestamp(v, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (ValueError, TypeError, OSError):
+        pass
+    s = str(ts)
+    if len(s) >= 10 and s[4] == "-":
+        return s[:10]
+    return None
+
+
+# ── Schema ──────────────────────────────────────────────────
+
+def init_db(db_path: str = "jinni_grid.db"):
+    global _DB_PATH
+    _DB_PATH = db_path
+    conn = _get_conn()
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS workers (
+            worker_id TEXT PRIMARY KEY,
+            worker_name TEXT,
+            host TEXT,
+            state TEXT DEFAULT 'unknown',
+            mt5_state TEXT,
+            broker TEXT,
+            account_id TEXT,
+            mt5_server TEXT,
+            account_balance REAL DEFAULT 0.0,
+            account_equity REAL DEFAULT 0.0,
+            agent_version TEXT,
+            last_heartbeat_at TEXT,
+            data_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS strategies (
+            strategy_id TEXT PRIMARY KEY,
+            name TEXT,
+            description TEXT,
+            version TEXT,
+            class_name TEXT,
+            file_hash TEXT,
+            file_content TEXT,
+            min_lookback INTEGER DEFAULT 0,
+            parameters_json TEXT,
+            uploaded_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS deployments (
+            deployment_id TEXT PRIMARY KEY,
+            strategy_id TEXT,
+            worker_id TEXT,
+            symbol TEXT,
+            state TEXT DEFAULT 'queued',
+            tick_lookback_value INTEGER DEFAULT 30,
+            tick_lookback_unit TEXT DEFAULT 'minutes',
+            bar_size_points REAL DEFAULT 100,
+            max_bars_in_memory INTEGER DEFAULT 500,
+            lot_size REAL DEFAULT 0.01,
+            strategy_parameters_json TEXT,
+            last_error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_uid TEXT UNIQUE,
+            trade_id INTEGER,
+            deployment_id TEXT,
+            strategy_id TEXT,
+            worker_id TEXT,
+            symbol TEXT,
+            direction TEXT,
+            entry_price REAL,
+            exit_price REAL,
+            entry_time_unix INTEGER,
+            exit_time_unix INTEGER,
+            entry_time TEXT,
+            exit_time TEXT,
+            entry_bar INTEGER,
+            exit_bar INTEGER,
+            bars_held INTEGER DEFAULT 0,
+            lot_size REAL,
+            ticket INTEGER,
+            sl REAL,
+            tp REAL,
+            profit REAL DEFAULT 0.0,
+            commission REAL DEFAULT 0.0,
+            swap REAL DEFAULT 0.0,
+            exit_reason TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            worker_id TEXT,
+            balance REAL DEFAULT 0.0,
+            equity REAL DEFAULT 0.0,
+            floating_pnl REAL DEFAULT 0.0,
+            open_positions INTEGER DEFAULT 0,
+            cumulative_pnl REAL DEFAULT 0.0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            category TEXT,
+            event_type TEXT,
+            message TEXT,
+            level TEXT DEFAULT 'INFO',
+            worker_id TEXT,
+            strategy_id TEXT,
+            deployment_id TEXT,
+            symbol TEXT,
+            data_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+    """)
+
+    # Indexes
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS idx_trades_worker ON trades(worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_time)",
+        "CREATE INDEX IF NOT EXISTS idx_trades_ticket ON trades(ticket)",
+        "CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_events_cat ON events(category)",
+    ]:
         try:
-            if category:
-                rows = conn.execute(
-                    "SELECT * FROM events WHERE category=? ORDER BY id DESC LIMIT ?",
-                    (category, limit)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass
+
+    # Migrations for older DBs
+    _mig = [
+        ("workers", "account_balance", "REAL DEFAULT 0.0"),
+        ("workers", "account_equity", "REAL DEFAULT 0.0"),
+        ("trades", "trade_uid", "TEXT"),
+        ("trades", "commission", "REAL DEFAULT 0.0"),
+        ("trades", "swap", "REAL DEFAULT 0.0"),
+        ("trades", "entry_time", "TEXT"),
+        ("trades", "exit_time", "TEXT"),
+        ("trades", "entry_time_unix", "INTEGER"),
+        ("trades", "exit_time_unix", "INTEGER"),
+        ("equity_snapshots", "worker_id", "TEXT"),
+    ]
+    for table, col, col_type in _mig:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
+    # Seed defaults
+    for k, v in _DEFAULT_SETTINGS.items():
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
+
+    conn.commit()
+    # Ensure validation tables
+    _ensure_validation_tables()
+    print(f"[DB] Initialized: {db_path}")
+
+
+# ── Workers ─────────────────────────────────────────────────
+
+def save_worker(worker_id: str, data: dict):
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO workers (worker_id, worker_name, host, state, mt5_state,
+            broker, account_id, mt5_server, account_balance, account_equity,
+            agent_version, last_heartbeat_at, data_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(worker_id) DO UPDATE SET
+            worker_name=excluded.worker_name, host=excluded.host,
+            state=excluded.state, mt5_state=excluded.mt5_state,
+            broker=excluded.broker, account_id=excluded.account_id,
+            mt5_server=excluded.mt5_server,
+            account_balance=excluded.account_balance,
+            account_equity=excluded.account_equity,
+            agent_version=excluded.agent_version,
+            last_heartbeat_at=excluded.last_heartbeat_at,
+            data_json=excluded.data_json,
+            updated_at=datetime('now')
+    """, (
+        worker_id,
+        data.get("worker_name"),
+        data.get("host"),
+        data.get("reported_state", data.get("state", "online")),
+        data.get("mt5_state"),
+        data.get("broker"),
+        data.get("account_id"),
+        data.get("mt5_server"),
+        _r2(data.get("account_balance")),
+        _r2(data.get("account_equity")),
+        data.get("agent_version"),
+        data.get("last_heartbeat_at"),
+        json.dumps({k: v for k, v in data.items()
+                     if k not in ("_last_heartbeat_dt",)}, default=str),
+    ))
+    conn.commit()
+
+
+def get_all_workers_db() -> list:
+    conn = _get_conn()
+    rows = conn.execute("SELECT * FROM workers ORDER BY worker_id").fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Merge extra data from data_json
+        if d.get("data_json"):
+            try:
+                extra = json.loads(d["data_json"])
+                for k, v in extra.items():
+                    if k not in d or d[k] is None:
+                        d[k] = v
+            except (json.JSONDecodeError, TypeError):
+                pass
+        result.append(d)
+    return result
+
+
+def get_worker_db(worker_id: str):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM workers WHERE worker_id=?",
+                       (worker_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── Strategies ──────────────────────────────────────────────
+
+def save_strategy(strategy_id: str, data: dict):
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO strategies (strategy_id, name, description, version,
+            class_name, file_hash, file_content, min_lookback, parameters_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(strategy_id) DO UPDATE SET
+            name=excluded.name, description=excluded.description,
+            version=excluded.version, class_name=excluded.class_name,
+            file_hash=excluded.file_hash, file_content=excluded.file_content,
+            min_lookback=excluded.min_lookback,
+            parameters_json=excluded.parameters_json
+    """, (
+        strategy_id,
+        data.get("name", strategy_id),
+        data.get("description", ""),
+        data.get("version", "1.0"),
+        data.get("class_name", ""),
+        data.get("file_hash", ""),
+        data.get("file_content", ""),
+        data.get("min_lookback", 0),
+        json.dumps(data.get("parameters", {})),
+    ))
+    conn.commit()
+
+
+def get_all_strategies_db() -> list:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM strategies ORDER BY uploaded_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_strategy_db(strategy_id: str):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM strategies WHERE strategy_id=?",
+                       (strategy_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── Deployments ─────────────────────────────────────────────
+
+def save_deployment(deployment_id: str, data: dict):
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO deployments (deployment_id, strategy_id, worker_id, symbol,
+            state, tick_lookback_value, tick_lookback_unit, bar_size_points,
+            max_bars_in_memory, lot_size, strategy_parameters_json, last_error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(deployment_id) DO UPDATE SET
+            state=excluded.state, last_error=excluded.last_error,
+            updated_at=datetime('now')
+    """, (
+        deployment_id,
+        data.get("strategy_id"),
+        data.get("worker_id"),
+        data.get("symbol"),
+        data.get("state", "queued"),
+        data.get("tick_lookback_value", 30),
+        data.get("tick_lookback_unit", "minutes"),
+        data.get("bar_size_points", 100),
+        data.get("max_bars_in_memory", 500),
+        data.get("lot_size", 0.01),
+        json.dumps(data.get("strategy_parameters", {})),
+        data.get("last_error"),
+    ))
+    conn.commit()
+
+
+def get_all_deployments_db() -> list:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM deployments ORDER BY created_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_deployment_db(deployment_id: str):
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM deployments WHERE deployment_id=?",
+                       (deployment_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_deployment_state_db(deployment_id: str, state: str,
+                                error: str = None):
+    conn = _get_conn()
+    conn.execute("""
+        UPDATE deployments SET state=?, last_error=?, updated_at=datetime('now')
+        WHERE deployment_id=?
+    """, (state, error, deployment_id))
+    conn.commit()
+
+
+# ── Trades (THE CRITICAL FIX) ──────────────────────────────
+
+def save_trade_db(data: dict) -> bool:
+    """
+    Save a closed trade. Uses MT5 position ticket as the unique ID
+    (globally unique per MT5 account, never reused).
+
+    Uniqueness: trade_uid = {worker_id}_{mt5_ticket}
+    Fallback:   trade_uid = {deployment_id}_{worker_id}_{trade_id}_{exit_time}
+    """
+    conn = _get_conn()
+
+    # Build globally unique trade ID
+    mt5_ticket = data.get("mt5_ticket") or data.get("ticket")
+    wk_id = data.get("worker_id", "none")
+    dep_id = data.get("deployment_id", "none")
+    t_id = data.get("trade_id", 0)
+    exit_ts = data.get("exit_time", "0")
+
+    if mt5_ticket:
+        # Best case: MT5 ticket is globally unique per account
+        trade_uid = f"{wk_id}_{mt5_ticket}"
+    else:
+        # Fallback: include exit_time to prevent restart collisions
+        trade_uid = f"{dep_id}_{wk_id}_{t_id}_{exit_ts}"
+
+    # Convert timestamps
+    entry_ts = data.get("entry_time")
+    exit_ts_raw = data.get("exit_time")
+    entry_iso = _unix_to_iso(entry_ts)
+    exit_iso = _unix_to_iso(exit_ts_raw)
+
+    # Bars held
+    bars_held = data.get("bars_held")
+    if bars_held is None or bars_held == 0:
+        eb = int(data.get("entry_bar", 0) or 0)
+        xb = int(data.get("exit_bar", 0) or 0)
+        bars_held = max(0, xb - eb)
+
+    # Use net_pnl if available (MT5 source), else fall back to profit
+    profit = data.get("net_pnl") or data.get("profit") or 0
+
+    try:
+        conn.execute("""
+            INSERT OR IGNORE INTO trades (
+                trade_uid, trade_id, deployment_id, strategy_id, worker_id,
+                symbol, direction, entry_price, exit_price,
+                entry_time_unix, exit_time_unix, entry_time, exit_time,
+                entry_bar, exit_bar, bars_held,
+                lot_size, ticket, sl, tp,
+                profit, commission, swap, exit_reason
+            ) VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?)
+        """, (
+            trade_uid,
+            t_id,
+            dep_id,
+            data.get("strategy_id"),
+            wk_id,
+            data.get("symbol"),
+            data.get("direction"),
+            _r2(data.get("entry_price")),
+            _r2(data.get("exit_price")),
+            int(entry_ts) if entry_ts and str(entry_ts).isdigit() else None,
+            int(exit_ts_raw) if exit_ts_raw and str(exit_ts_raw).isdigit() else None,
+            entry_iso,
+            exit_iso,
+            data.get("entry_bar"),
+            data.get("exit_bar"),
+            bars_held,
+            data.get("lot_size"),
+            mt5_ticket or data.get("ticket"),
+            data.get("sl"),
+            data.get("tp"),
+            _r2(profit),
+            _r2(data.get("commission")),
+            _r2(data.get("swap")),
+            data.get("exit_reason"),
+        ))
+        conn.commit()
+        changes = conn.execute("SELECT changes()").fetchone()[0]
+        if changes == 0:
+            print(f"[DB] Trade {trade_uid} already exists (skipped duplicate)")
+        else:
+            src = "MT5" if data.get("mt5_source") else "EST"
+            print(f"[DB] Trade SAVED [{src}]: uid={trade_uid} "
+                  f"{data.get('direction','')} {data.get('symbol','')} "
+                  f"profit={_r2(profit)} reason={data.get('exit_reason','')}")
+        return True
+    except Exception as e:
+        print(f"[DB] save_trade_db FAILED: {e}")
+        return False
+
+
+def get_all_trades_db(limit: int = 10000, strategy_id: str = None,
+                       worker_id: str = None, symbol: str = None) -> list:
+    conn = _get_conn()
+    query = "SELECT * FROM trades"
+    params = []
+    wheres = []
+    if strategy_id:
+        wheres.append("strategy_id = ?")
+        params.append(strategy_id)
+    if worker_id:
+        wheres.append("worker_id = ?")
+        params.append(worker_id)
+    if symbol:
+        wheres.append("symbol = ?")
+        params.append(symbol)
+    if wheres:
+        query += " WHERE " + " AND ".join(wheres)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Ensure exit_time is always an ISO string for portfolio computation
+        if not d.get("exit_time") and d.get("exit_time_unix"):
+            d["exit_time"] = _unix_to_iso(d["exit_time_unix"])
+        if not d.get("entry_time") and d.get("entry_time_unix"):
+            d["entry_time"] = _unix_to_iso(d["entry_time_unix"])
+        result.append(d)
+    return result
+
+
+# ── Equity Snapshots ────────────────────────────────────────
+
+def save_equity_snapshot_db(balance: float = 0, equity: float = 0,
+                             floating_pnl: float = 0, open_positions: int = 0,
+                             cumulative_pnl: float = 0,
+                             worker_id: str = None):
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("""
+        INSERT INTO equity_snapshots (timestamp, worker_id, balance, equity,
+            floating_pnl, open_positions, cumulative_pnl)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (now, worker_id, _r2(balance), _r2(equity),
+          _r2(floating_pnl), open_positions, _r2(cumulative_pnl)))
+    conn.commit()
+
+
+def get_equity_snapshots_db(limit: int = 2000,
+                             worker_id: str = None) -> list:
+    conn = _get_conn()
+    if worker_id:
+        rows = conn.execute(
+            "SELECT * FROM equity_snapshots WHERE worker_id=? "
+            "ORDER BY id DESC LIMIT ?", (worker_id, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM equity_snapshots ORDER BY id DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    result = [dict(r) for r in rows]
+    result.reverse()
+    return result
+
+
+def clear_equity_snapshots_db():
+    conn = _get_conn()
+    conn.execute("DELETE FROM equity_snapshots")
+    conn.commit()
+
+
+# ── Events ──────────────────────────────────────────────────
+
+def log_event_db(category: str, event_type: str, message: str,
+                  worker_id: str = None, strategy_id: str = None,
+                  deployment_id: str = None, symbol: str = None,
+                  data: dict = None, level: str = "INFO"):
+    conn = _get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    data_json = json.dumps(data, default=str) if data else None
+    try:
+        conn.execute("""
+            INSERT INTO events (timestamp, category, event_type, message, level,
+                worker_id, strategy_id, deployment_id, symbol, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (now, category, event_type, message, level,
+              worker_id, strategy_id, deployment_id, symbol, data_json))
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] log_event error: {e}")
+
+
+def get_events_db(limit: int = 200, category: str = None,
+                   worker_id: str = None,
+                   deployment_id: str = None) -> list:
+    conn = _get_conn()
+    query = "SELECT * FROM events"
+    params = []
+    wheres = []
+    if category:
+        wheres.append("category = ?")
+        params.append(category)
+    if worker_id:
+        wheres.append("worker_id = ?")
+        params.append(worker_id)
+    if deployment_id:
+        wheres.append("deployment_id = ?")
+        params.append(deployment_id)
+    if wheres:
+        query += " WHERE " + " AND ".join(wheres)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Settings ────────────────────────────────────────────────
+
+def get_setting(key: str):
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM settings WHERE key=?",
+                       (key,)).fetchone()
+    return row[0] if row else None
+
+
+def get_all_settings() -> dict:
+    conn = _get_conn()
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def save_setting(key: str, value: str):
+    conn = _get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (key, value)
+    )
+    conn.commit()
+
+
+def save_settings_bulk(settings: dict):
+    conn = _get_conn()
+    for k, v in settings.items():
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (k, str(v))
+        )
+    conn.commit()
+
+
+# ── Admin / Delete ──────────────────────────────────────────
+
+def delete_all_trades_db() -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    conn.execute("DELETE FROM trades")
+    conn.commit()
+    return c
+
+
+def delete_trades_by_strategy_db(strategy_id: str) -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM trades WHERE strategy_id=?",
+                     (strategy_id,)).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
+    conn.commit()
+    return c
+
+
+def delete_trades_by_worker_db(worker_id: str) -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM trades WHERE worker_id=?",
+                     (worker_id,)).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE worker_id=?", (worker_id,))
+    conn.commit()
+    return c
+
+
+def delete_strategy_full_db(strategy_id: str) -> dict:
+    conn = _get_conn()
+    dep_c = conn.execute(
+        "SELECT COUNT(*) FROM deployments WHERE strategy_id=?",
+        (strategy_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM deployments WHERE strategy_id=?",
+                 (strategy_id,))
+    trade_c = conn.execute(
+        "SELECT COUNT(*) FROM trades WHERE strategy_id=?",
+        (strategy_id,)
+    ).fetchone()[0]
+    conn.execute("DELETE FROM trades WHERE strategy_id=?", (strategy_id,))
+    conn.execute("DELETE FROM strategies WHERE strategy_id=?",
+                 (strategy_id,))
+    conn.commit()
+    # Delete files
+    try:
+        import glob
+        for p in glob.glob(f"strategies/*{strategy_id}*"):
+            os.remove(p)
+    except Exception:
+        pass
+    return {"ok": True, "strategy_id": strategy_id,
+            "deployments_deleted": dep_c, "trades_deleted": trade_c}
+
+
+def remove_worker_db(worker_id: str) -> dict:
+    conn = _get_conn()
+    conn.execute("DELETE FROM workers WHERE worker_id=?", (worker_id,))
+    conn.commit()
+    return {"ok": True, "worker_id": worker_id}
+
+
+def remove_stale_workers_db(threshold_seconds: int = 300) -> int:
+    conn = _get_conn()
+    cutoff = datetime.now(timezone.utc)
+    rows = conn.execute("SELECT worker_id, last_heartbeat_at FROM workers"
+                        ).fetchall()
+    removed = 0
+    for r in rows:
+        hb = r[1]
+        if not hb:
+            continue
+        try:
+            last = datetime.fromisoformat(hb)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (cutoff - last).total_seconds() > threshold_seconds:
+                conn.execute("DELETE FROM workers WHERE worker_id=?",
+                             (r[0],))
+                removed += 1
+        except (ValueError, TypeError):
+            pass
+    conn.commit()
+    return removed
+
+
+def clear_events_db() -> int:
+    conn = _get_conn()
+    c = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    conn.execute("DELETE FROM events")
+    conn.commit()
+    return c
+
+
+def get_system_stats_db() -> dict:
+    conn = _get_conn()
+    stats = {}
+    for table in ["strategies", "workers", "deployments", "trades",
+                   "events", "equity_snapshots", "settings"]:
+        try:
+            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            stats[f"{table}_count"] = c
+        except Exception:
+            stats[f"{table}_count"] = 0
+    # Active deployments
+    try:
+        stats["active_deployments"] = conn.execute(
+            "SELECT COUNT(*) FROM deployments WHERE state='running'"
+        ).fetchone()[0]
+    except Exception:
+        stats["active_deployments"] = 0
+    # DB size
+    try:
+        stats["db_size_bytes"] = os.path.getsize(_DB_PATH)
+    except Exception:
+        stats["db_size_bytes"] = 0
+    return stats
+
+
+def full_system_reset_db() -> dict:
+    conn = _get_conn()
+    counts = {}
+    for table in ["trades", "events", "deployments", "equity_snapshots",
+                   "workers", "strategies"]:
+        try:
+            c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+            counts[f"{table}_deleted"] = c
+        except Exception:
+            counts[f"{table}_deleted"] = 0
+    conn.commit()
+    try:
+        import glob
+        for p in glob.glob("strategies/*.py"):
+            os.remove(p)
+    except Exception:
+        pass
+    return counts
+# ══════════════════════════════════════════════════════════════
+# VALIDATION JOBS
+# ══════════════════════════════════════════════════════════════
+
+def _ensure_validation_tables():
+    """Create validation tables if they don't exist. Safe to call multiple times."""
+    conn = _get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS validation_jobs (
+            job_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_name TEXT,
+            worker_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            month INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            lot_size REAL DEFAULT 0.01,
+            bar_size_points REAL DEFAULT 100,
+            max_bars_memory INTEGER DEFAULT 500,
+            spread_points REAL DEFAULT 0,
+            commission_per_lot REAL DEFAULT 0,
+            state TEXT DEFAULT 'queued',
+            progress REAL DEFAULT 0,
+            progress_message TEXT,
+            error TEXT,
+            summary_json TEXT,
+            equity_curve_json TEXT,
+            trades_json TEXT,
+            total_ticks INTEGER DEFAULT 0,
+            total_bars INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_val_state ON validation_jobs(state);
+        CREATE INDEX IF NOT EXISTS idx_val_created ON validation_jobs(created_at);
+    """)
+    conn.commit()
+
+
+def save_validation_job(job_id: str, data: dict):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("""
+        INSERT INTO validation_jobs (
+            job_id, strategy_id, strategy_name, worker_id,
+            symbol, month, year, lot_size, bar_size_points,
+            max_bars_memory, spread_points, commission_per_lot,
+            state, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(job_id) DO UPDATE SET
+            state=excluded.state
+    """, (
+        job_id,
+        data.get("strategy_id"),
+        data.get("strategy_name"),
+        data.get("worker_id"),
+        data.get("symbol"),
+        data.get("month"),
+        data.get("year"),
+        data.get("lot_size", 0.01),
+        data.get("bar_size_points", 100),
+        data.get("max_bars_memory", 500),
+        data.get("spread_points", 0),
+        data.get("commission_per_lot", 0),
+        data.get("state", "queued"),
+    ))
+    conn.commit()
+
+
+def update_validation_progress(job_id: str, progress: float, message: str):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("""
+        UPDATE validation_jobs
+        SET progress=?, progress_message=?, state='running',
+            started_at=COALESCE(started_at, datetime('now'))
+        WHERE job_id=?
+    """, (round(progress, 1), message, job_id))
+    conn.commit()
+
+
+def complete_validation_job(job_id: str, results: dict):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    summary = results.get("summary", {})
+    equity_curve = results.get("equity_curve", [])
+    trades = results.get("trades", [])
+
+    conn.execute("""
+        UPDATE validation_jobs
+        SET state='completed', progress=100,
+            progress_message='Validation complete',
+            summary_json=?, equity_curve_json=?, trades_json=?,
+            total_ticks=?, total_bars=?,
+            completed_at=datetime('now')
+        WHERE job_id=?
+    """, (
+        json.dumps(summary),
+        json.dumps(equity_curve),
+        json.dumps(trades),
+        results.get("total_ticks", 0),
+        results.get("total_bars", 0),
+        job_id,
+    ))
+    conn.commit()
+
+
+def fail_validation_job(job_id: str, error: str):
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("""
+        UPDATE validation_jobs
+        SET state='failed', error=?, completed_at=datetime('now')
+        WHERE job_id=?
+    """, (error, job_id))
+    conn.commit()
+
+
+def get_validation_job(job_id: str) -> Optional[dict]:
+    _ensure_validation_tables()
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM validation_jobs WHERE job_id=?", (job_id,)
+    ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    # Parse JSON fields
+    for field in ("summary_json", "equity_curve_json", "trades_json"):
+        raw = d.get(field)
+        if raw:
+            try:
+                d[field.replace("_json", "")] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d[field.replace("_json", "")] = None
+        else:
+            d[field.replace("_json", "")] = None
+    return d
+
+
+def get_all_validation_jobs(limit: int = 100) -> list:
+    _ensure_validation_tables()
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT job_id, strategy_id, strategy_name, worker_id, symbol, "
+        "month, year, lot_size, bar_size_points, state, progress, "
+        "progress_message, error, total_ticks, total_bars, "
+        "created_at, started_at, completed_at, summary_json "
+        "FROM validation_jobs ORDER BY created_at DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        raw = d.pop("summary_json", None)
+        if raw:
+            try:
+                d["summary"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                d["summary"] = None
+        else:
+            d["summary"] = None
+        result.append(d)
+    return result
+
+
+def delete_validation_job(job_id: str) -> bool:
+    _ensure_validation_tables()
+    conn = _get_conn()
+    conn.execute("DELETE FROM validation_jobs WHERE job_id=?", (job_id,))
+    conn.commit()
+    return True
 ```
 
 ---
 
-## FILE: `vm/README.md`
-
-- Relative path: `vm/README.md`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/README.md`
-- Size bytes: `1215`
-- SHA256: `28ead786e4eb10d807621099ef8cec7fec39d645e950a3b2dd1180cea90184c1`
-- Guessed MIME type: `text/markdown`
-- Guessed encoding: `unknown`
-
-````markdown
-# JINNI Grid — Worker Agent
-
-## What It Does
-
-Sends periodic heartbeat POST requests to the JINNI Grid Mother Server.
-The Mother Server uses these heartbeats to track worker status in the Fleet dashboard.
-
-## Prerequisites
-
-- Python 3.10+
-- `requests` and `pyyaml` packages
-
-## Setup
-
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Edit `config.yaml`:
-   - Set `worker_id` to a unique ID for this worker
-   - Set `worker_name` to a human-readable name
-   - Set `mother_server.url` to your Mother Server's IP and port
-   - Adjust `heartbeat.interval_seconds` if needed
-
-3. Run the agent:
-   ```bash
-   python worker_agent.py
-   ```
-
-## Config Reference
-
-```yaml
-worker:
-  worker_id: "vm-worker-01"      # Unique worker identifier
-  worker_name: "Worker 01"       # Display name
-
-mother_server:
-  url: "http://192.168.1.100:5100"  # Mother Server address
-
-heartbeat:
-  interval_seconds: 5            # Seconds between heartbeats
-
-agent:
-  version: "0.1.0"               # Agent version reported to Mother Server
-```
-
-## What It Does NOT Do
-
-- No MT5 connectivity
-- No trading execution
-- No strategy deployment
-- No broker/account detection
-
-Those features come in future phases.
-````
-
----
-
-## FILE: `vm/trading/indicators.py`
-
-- Relative path: `vm/trading/indicators.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/indicators.py`
-- Size bytes: `7085`
-- SHA256: `91b2f5f74c0354d5f48ec8887a79fa64817afc12718014bf054de243b480eac7`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
+## `vm/core/validation_runner.py`
 
 ```python
 """
-JINNI GRID — Indicator Engine
-worker/indicators.py
+JINNI GRID — Validation Runner (Thin Orchestrator)
+vm/core/validation_runner.py
 
-Ported from JINNI ZERO backtester shared.py / engine_core.py.
-Supports: SMA, EMA, WMA, HMA precomputation on range bar series.
-Populates ctx.indicators (current bar values) and ctx.ind_series (full series).
+Fetches historical ticks → creates SimulatedExecutor →
+calls StrategyRunner.run_validation() which uses the
+EXACT SAME _on_new_bar() as live trading.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional
+import os
+import threading
+import traceback
+from datetime import datetime, timezone
+from typing import Optional
 
 
-# =============================================================================
-# Core MA Functions (matching JINNI ZERO backtester exactly)
-# =============================================================================
+class ValidationRunner:
+    """Orchestrates a validation job using the real StrategyRunner engine."""
 
-def precompute_sma(values: List[float], period: int) -> List[Optional[float]]:
-    """Simple Moving Average — full series."""
-    n = len(values)
-    result = [None] * n
-    if period <= 0 or n < period:
-        return result
-    window_sum = sum(values[:period])
-    result[period - 1] = window_sum / period
-    for i in range(period, n):
-        window_sum += values[i] - values[i - period]
-        result[i] = window_sum / period
-    return result
+    def __init__(self, job_config: dict,
+                 progress_callback=None,
+                 results_callback=None):
+        self.job_id = job_config["job_id"]
+        self.strategy_id = job_config["strategy_id"]
+        self.symbol = job_config["symbol"]
+        self.month = int(job_config["month"])
+        self.year = int(job_config["year"])
+        self.lot_size = float(job_config.get("lot_size", 0.01))
+        self.bar_size_points = float(job_config.get("bar_size_points", 100))
+        self.max_bars_memory = int(job_config.get("max_bars_memory", 500))
+        self.spread_points = float(job_config.get("spread_points", 0))
+        self.commission_per_lot = float(job_config.get("commission_per_lot", 0))
+        self.strategy_file_content = job_config.get("strategy_file_content", "")
+        self.strategy_class_name = job_config.get("strategy_class_name", "")
+        self.strategy_parameters = job_config.get("strategy_parameters", {})
+        self._job_config = job_config
 
+        self._progress_cb = progress_callback
+        self._results_cb = results_callback
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._runner = None
 
-def precompute_ema(values: List[float], period: int) -> List[Optional[float]]:
-    """Exponential Moving Average — full series."""
-    n = len(values)
-    result = [None] * n
-    if period <= 0 or n < period:
-        return result
-    # Seed with SMA
-    seed = sum(values[:period]) / period
-    result[period - 1] = seed
-    k = 2.0 / (period + 1)
-    prev = seed
-    for i in range(period, n):
-        val = values[i] * k + prev * (1 - k)
-        result[i] = val
-        prev = val
-    return result
+        # Collected from trade_callback
+        self._trades = []
+        self._equity_snapshots = []
 
+    # ── Lifecycle ────────────────────────────────────────────
 
-def precompute_wma(values: List[float], period: int) -> List[Optional[float]]:
-    """Weighted Moving Average — full series."""
-    n = len(values)
-    result = [None] * n
-    if period <= 0 or n < period:
-        return result
-    denom = period * (period + 1) / 2.0
-    for i in range(period - 1, n):
-        w_sum = 0.0
-        for j in range(period):
-            w_sum += values[i - period + 1 + j] * (j + 1)
-        result[i] = w_sum / denom
-    return result
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
+    def stop(self):
+        self._stop_event.set()
+        if self._runner:
+            self._runner.stop()
+        if self._thread:
+            self._thread.join(timeout=30)
 
-def precompute_hma(values: List[float], period: int) -> List[Optional[float]]:
-    """
-    Hull Moving Average — full series.
-    HMA(n) = WMA( 2*WMA(n/2) - WMA(n), sqrt(n) )
-    """
-    n = len(values)
-    result = [None] * n
-    if period <= 0 or n < period:
-        return result
+    # ── Progress / Results ───────────────────────────────────
 
-    half = max(int(period / 2), 1)
-    sqrt_p = max(int(math.sqrt(period)), 1)
+    def _report_progress(self, pct: float, msg: str):
+        if self._progress_cb:
+            try:
+                self._progress_cb({
+                    "job_id": self.job_id,
+                    "progress": round(min(pct, 100), 1),
+                    "progress_message": msg,
+                })
+            except Exception:
+                pass
 
-    wma_half = precompute_wma(values, half)
-    wma_full = precompute_wma(values, period)
+    def _report_results(self, results: dict):
+        if self._results_cb:
+            try:
+                self._results_cb({"job_id": self.job_id, "results": results})
+            except Exception as e:
+                print(f"[VALIDATION] Results report failed: {e}")
 
-    # Build diff series: 2*WMA(half) - WMA(full)
-    diff = []
-    diff_start = None
-    for i in range(n):
-        if wma_half[i] is not None and wma_full[i] is not None:
-            diff.append(2.0 * wma_half[i] - wma_full[i])
-            if diff_start is None:
-                diff_start = i
+    def _report_error(self, error: str):
+        if self._results_cb:
+            try:
+                self._results_cb({"job_id": self.job_id, "error": error})
+            except Exception:
+                pass
+
+    # ── Trade Callback (collects trades from StrategyRunner) ─
+
+    def _on_trade(self, record: dict):
+        """Called by StrategyRunner when a trade closes — same callback API as live."""
+        self._trades.append(record)
+        balance = sum(t.get("profit", 0) for t in self._trades)
+        print(f"[VALIDATION] Trade #{len(self._trades)}: "
+              f"{record.get('direction', '?')} {record.get('symbol', '?')} "
+              f"pnl={record.get('profit', 0):.2f} bal={balance:.2f}")
+
+    # ── Main Run ─────────────────────────────────────────────
+
+    def _run(self):
+        try:
+            self._report_progress(0, "Initializing validation…")
+            print(f"[VALIDATION] Job {self.job_id}: "
+                  f"{self.strategy_id} on {self.symbol} "
+                  f"{self.year}-{self.month:02d}")
+
+            # ── 1. Connect MT5 (for tick data ONLY) ──
+            self._report_progress(5, "Connecting to MT5 for tick data…")
+            mt5, sym_info = self._init_mt5()
+            if mt5 is None:
+                return
+
+            point = sym_info.point
+            tick_size = sym_info.trade_tick_size or point
+            tick_value = sym_info.trade_tick_value or 1.0
+
+            print(f"[VALIDATION] Symbol: point={point} "
+                  f"tick_size={tick_size} tick_value={tick_value}")
+
+            # ── 2. Fetch historical ticks ──
+            self._report_progress(10, f"Fetching {self.symbol} ticks "
+                                  f"for {self.year}-{self.month:02d}…")
+            ticks = self._fetch_ticks(mt5)
+            if not ticks:
+                self._report_error(
+                    f"No tick data for {self.symbol} "
+                    f"{self.year}-{self.month:02d}")
+                return
+
+            total_ticks = len(ticks)
+            print(f"[VALIDATION] Fetched {total_ticks:,} ticks")
+            self._report_progress(20, f"Got {total_ticks:,} ticks. "
+                                  "Starting engine…")
+
+            # ── 3. Create SimulatedExecutor ──
+            from trading.sim_executor import SimulatedExecutor
+            sim_executor = SimulatedExecutor(
+                symbol=self.symbol,
+                lot_size=self.lot_size,
+                deployment_id=self.job_id,
+                point=point,
+                tick_size=tick_size,
+                tick_value=tick_value,
+            )
+
+            # ── 4. Build deployment config (same format as live) ──
+            deploy_config = {
+                "deployment_id": self.job_id,
+                "strategy_id": self.strategy_id,
+                "strategy_file_content": self.strategy_file_content,
+                "strategy_class_name": self.strategy_class_name,
+                "strategy_parameters": self.strategy_parameters,
+                "symbol": self.symbol,
+                "lot_size": self.lot_size,
+                "bar_size_points": self.bar_size_points,
+                "max_bars_in_memory": self.max_bars_memory,
+                "worker_id": self._job_config.get("worker_id", "validation"),
+            }
+
+            # ── 5. Create StrategyRunner in VALIDATION MODE ──
+            from core.strategy_worker import StrategyRunner
+
+            self._runner = StrategyRunner(
+                deployment_config=deploy_config,
+                status_callback=None,
+                trade_callback=self._on_trade,
+                validation_mode=True,           # ← THE KEY FLAG
+            )
+
+            # ── 6. Run validation — feeds ticks through the
+            #        SAME _on_new_bar() that runs live ──
+            self._report_progress(25, "Running simulation…")
+
+            def progress_bridge(pct, msg):
+                # Map runner's 0-100 to our 25-90
+                mapped = 25 + (pct / 100) * 65
+                self._report_progress(mapped, msg)
+
+            self._runner.run_validation(
+                ticks=ticks,
+                executor=sim_executor,
+                progress_cb=progress_bridge,
+            )
+
+            if self._stop_event.is_set():
+                self._report_error("Cancelled by user")
+                return
+
+            # ── 7. Compute stats from collected trades ──
+            self._report_progress(92, "Computing statistics…")
+            results = self._compute_results(total_ticks, tick_size, tick_value)
+            self._report_progress(100, "Validation complete!")
+            self._report_results(results)
+
+            print(f"[VALIDATION] Job {self.job_id} done: "
+                  f"{len(self._trades)} trades, "
+                  f"net={results['summary']['net_pnl']:.2f}")
+
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[VALIDATION] FAILED: {e}\n{tb}")
+            self._report_error(f"{type(e).__name__}: {e}")
+
+    # ── MT5 Init (for tick data only) ────────────────────────
+
+    def _init_mt5(self):
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            self._report_error("MetaTrader5 package not installed")
+            return None, None
+
+        if not mt5.initialize():
+            self._report_error(f"MT5 init failed: {mt5.last_error()}")
+            return None, None
+
+        sym_info = mt5.symbol_info(self.symbol)
+        if sym_info is None:
+            self._report_error(f"Symbol '{self.symbol}' not found")
+            mt5.shutdown()
+            return None, None
+
+        if not sym_info.visible:
+            mt5.symbol_select(self.symbol, True)
+
+        return mt5, sym_info
+
+    # ── Tick Fetching ────────────────────────────────────────
+
+    def _fetch_ticks(self, mt5):
+        from_dt = datetime(self.year, self.month, 1, tzinfo=timezone.utc)
+        if self.month == 12:
+            to_dt = datetime(self.year + 1, 1, 1, tzinfo=timezone.utc)
         else:
-            diff.append(0.0)
+            to_dt = datetime(self.year, self.month + 1, 1, tzinfo=timezone.utc)
 
-    if diff_start is None:
-        return result
+        raw_ticks = mt5.copy_ticks_range(
+            self.symbol, from_dt, to_dt, mt5.COPY_TICKS_ALL)
 
-    # Only use valid portion of diff
-    valid_diff = diff[diff_start:]
-    hma_of_diff = precompute_wma(valid_diff, sqrt_p)
-
-    for i, val in enumerate(hma_of_diff):
-        target_idx = diff_start + i
-        if target_idx < n:
-            result[target_idx] = val
-
-    return result
-
-
-def precompute_ma(values: List[float], kind: str, period: int) -> List[Optional[float]]:
-    """
-    Dispatch to the correct MA precompute function.
-    Matches JINNI ZERO backtester shared.py exactly.
-    """
-    kind_upper = kind.upper()
-    if kind_upper == "SMA":
-        return precompute_sma(values, period)
-    elif kind_upper == "EMA":
-        return precompute_ema(values, period)
-    elif kind_upper == "WMA":
-        return precompute_wma(values, period)
-    elif kind_upper == "HMA":
-        return precompute_hma(values, period)
-    else:
-        print(f"[INDICATORS] WARNING: Unknown MA kind '{kind}', falling back to SMA")
-        return precompute_sma(values, period)
-
-
-# =============================================================================
-# Source Extraction
-# =============================================================================
-
-def _source_values(bars: list, source: str) -> List[float]:
-    """Extract price series from bars by source name."""
-    if source == "open":
-        return [float(b.get("open", 0)) for b in bars]
-    elif source == "high":
-        return [float(b.get("high", 0)) for b in bars]
-    elif source == "low":
-        return [float(b.get("low", 0)) for b in bars]
-    else:
-        return [float(b.get("close", 0)) for b in bars]
-
-
-def precompute_indicator_series(bars: list, spec: dict) -> List[Optional[float]]:
-    """
-    Precompute a full indicator series from bars + spec.
-    Spec format (from strategy.build_indicators()):
-        {"key": "hma_200", "kind": "HMA", "period": 200, "source": "close"}
-    """
-    kind = spec.get("kind", "SMA").upper()
-    source = spec.get("source", "close")
-    period = int(spec.get("period", 14))
-    values = _source_values(bars, source)
-    return precompute_ma(values, kind, period)
-
-
-# =============================================================================
-# Indicator Engine (live — recomputes on every new bar)
-# =============================================================================
-
-class IndicatorEngine:
-    """
-    Manages indicator computation for live trading.
-
-    On each new bar:
-      1. Recomputes full series for all declared indicators
-      2. Updates ctx.indicators with current-bar values
-      3. Updates ctx.ind_series with full series (for strategy lookback)
-
-    This matches backtester behavior where indicators are precomputed
-    over the full bar array. For live, we recompute on the growing
-    bar deque — slightly less efficient but guarantees identical values.
-    """
-
-    def __init__(self, indicator_defs: List[Dict[str, Any]]):
-        self._defs = indicator_defs
-        self._warned: set = set()
-
-        if self._defs:
-            keys = [d["key"] for d in self._defs]
-            print(f"[INDICATORS] Registered {len(self._defs)} indicators: {keys}")
-        else:
-            print("[INDICATORS] No indicators requested by strategy.")
-
-    def update(self, bars: list, ctx) -> None:
-        """Recompute all indicators from current bar list and update ctx."""
-        for defn in self._defs:
-            key = defn["key"]
-            kind = defn.get("kind", "SMA").upper()
-            source = defn.get("source", "close")
-            period = int(defn.get("period", 14))
-
-            values = _source_values(bars, source)
-            series = precompute_ma(values, kind, period)
-
-            # Store full series
-            ctx._ind_series[key] = series
-
-            # Store current value (last bar)
-            if series and len(series) > 0:
-                ctx._indicators[key] = series[-1]
-            else:
-                ctx._indicators[key] = None
-
-    def get_series_at(self, indicator_store: dict, key: str, index: int) -> Optional[float]:
-        """Get indicator value at a specific bar index."""
-        series = indicator_store.get(key)
-        if series is None or index < 0 or index >= len(series):
+        if raw_ticks is None or len(raw_ticks) == 0:
             return None
-        return series[index]
+
+        result = []
+        for raw in raw_ticks:
+            try:
+                ts = int(raw.time) if hasattr(raw, 'time') else int(raw[0])
+                bid = float(raw.bid) if hasattr(raw, 'bid') else float(raw[1])
+                ask = float(raw.ask) if hasattr(raw, 'ask') else float(raw[2])
+                vol = float(raw.volume) if hasattr(raw, 'volume') else 0
+            except (ValueError, TypeError, IndexError):
+                continue
+            price = bid if bid > 0 else ask
+            if price <= 0:
+                continue
+            result.append({"ts": ts, "price": price, "bid": bid,
+                           "ask": ask, "volume": vol})
+
+        return result
+
+    # ── Results Computation ──────────────────────────────────
+
+    def _compute_results(self, total_ticks, tick_size, tick_value):
+        trades = self._trades
+        n = len(trades)
+
+        # Build equity curve from trade sequence
+        balance = 0.0
+        equity_curve = [{"trade_index": 0, "balance": 0, "equity": 0}]
+        for i, t in enumerate(trades):
+            pnl = float(t.get("profit", 0) or 0)
+            comm = 0.0
+            if self.commission_per_lot > 0:
+                lot = float(t.get("lot_size", self.lot_size) or self.lot_size)
+                comm = round(-self.commission_per_lot * lot * 2, 2)
+            net = round(pnl + comm, 2)
+            t["commission"] = comm
+            t["net_pnl"] = net
+            balance = round(balance + net, 2)
+            t["balance_after"] = balance
+            equity_curve.append({
+                "trade_index": i + 1,
+                "balance": balance,
+                "equity": balance,
+            })
+
+        if n == 0:
+            return {
+                "summary": self._empty_summary(),
+                "trades": [],
+                "equity_curve": equity_curve,
+                "total_ticks": total_ticks,
+            }
+
+        profits = [t["net_pnl"] for t in trades]
+        wins = [p for p in profits if p > 0]
+        losses = [p for p in profits if p <= 0]
+
+        gp = round(sum(wins), 2) if wins else 0
+        gl = round(sum(losses), 2) if losses else 0
+        net = round(gp + gl, 2)
+        agl = abs(gl)
+
+        # Max drawdown
+        cum, peak, dd_usd, dd_pct = 0.0, 0.0, 0.0, 0.0
+        for p in profits:
+            cum += p
+            if cum > peak:
+                peak = cum
+            d = peak - cum
+            dd_usd = max(dd_usd, d)
+            if peak > 0.01:
+                dd_pct = max(dd_pct, min((d / peak) * 100, 100.0))
+
+        # Sharpe
+        mean = net / n if n else 0
+        if n > 1:
+            var = sum((p - mean) ** 2 for p in profits) / (n - 1)
+            std = math.sqrt(var) if var > 0 else 0
+            sharpe = round(mean / std * math.sqrt(252), 2) if std > 0 else 0
+        else:
+            sharpe = 0
+
+        # Sortino
+        down = [p for p in profits if p < 0]
+        if down:
+            dvar = sum(p ** 2 for p in down) / len(down)
+            dstd = math.sqrt(dvar) if dvar > 0 else 0
+            sortino = round(mean / dstd * math.sqrt(252), 2) if dstd > 0 else 0
+        else:
+            sortino = 0
+
+        # Consecutive
+        mcw, mcl, cw, cl = 0, 0, 0, 0
+        for p in profits:
+            if p > 0:
+                cw += 1; cl = 0
+            else:
+                cl += 1; cw = 0
+            mcw = max(mcw, cw)
+            mcl = max(mcl, cl)
+
+        bars_list = [int(t.get("bars_held", 0) or 0) for t in trades]
+        pf = round(gp / agl, 2) if agl > 0 else (999.99 if gp > 0 else 0)
+        rf = round(net / dd_usd, 2) if dd_usd > 0 else 0
+
+        summary = {
+            "total_trades": n,
+            "wins": len(wins),
+            "losses": len(losses),
+            "gross_profit": gp,
+            "gross_loss": gl,
+            "net_pnl": net,
+            "win_rate": round(len(wins) / n * 100, 1) if n else 0,
+            "profit_factor": pf,
+            "expectancy": round(net / n, 2) if n else 0,
+            "avg_trade": round(net / n, 2) if n else 0,
+            "avg_winner": round(gp / len(wins), 2) if wins else 0,
+            "avg_loser": round(gl / len(losses), 2) if losses else 0,
+            "best_trade": round(max(profits), 2),
+            "worst_trade": round(min(profits), 2),
+            "max_drawdown_pct": round(dd_pct, 2),
+            "max_drawdown_usd": round(dd_usd, 2),
+            "recovery_factor": rf,
+            "sharpe_estimate": sharpe,
+            "sortino_estimate": sortino,
+            "avg_bars_held": round(sum(bars_list) / n, 1) if n else 0,
+            "max_consec_wins": mcw,
+            "max_consec_losses": mcl,
+        }
+
+        return {
+            "summary": summary,
+            "trades": trades,
+            "equity_curve": equity_curve,
+            "total_ticks": total_ticks,
+        }
+
+    def _empty_summary(self):
+        return {k: 0 for k in (
+            "total_trades", "wins", "losses", "gross_profit", "gross_loss",
+            "net_pnl", "win_rate", "profit_factor", "expectancy",
+            "avg_trade", "avg_winner", "avg_loser", "best_trade",
+            "worst_trade", "max_drawdown_pct", "max_drawdown_usd",
+            "recovery_factor", "sharpe_estimate", "sortino_estimate",
+            "avg_bars_held", "max_consec_wins", "max_consec_losses",
+        )}
 ```
 
 ---
 
-## FILE: `vm/trading/mt5_history.py`
-
-- Relative path: `vm/trading/mt5_history.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/mt5_history.py`
-- Size bytes: `12908`
-- SHA256: `8d244e9f97831fc051bd2f492e4f5611e5458cc56c3bd6fe2ec4daf78d87cde9`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
+## `vm/trading/mt5_history.py`
 
 ```python
 """
@@ -2584,265 +2713,236 @@ def fetch_recent_closed_positions(since_hours: int = 24) -> list:
 
 ---
 
-## FILE: `vm/trading/portfolio.py`
-
-- Relative path: `vm/trading/portfolio.py`
-- Absolute path at snapshot time: `/home/hurairahengg/Documents/JinniGrid/vm/trading/portfolio.py`
-- Size bytes: `10094`
-- SHA256: `a78fb92e3c0b342bdc454bc956e657ca79c1610712bd0347cb590986731c3c29`
-- Guessed MIME type: `text/x-python`
-- Guessed encoding: `unknown`
+## `app/logging_config.py`
 
 ```python
 """
-JINNI GRID — Portfolio / Trade Ledger
-worker/portfolio.py
+JINNI GRID — Structured Logging Configuration
+app/logging_config.py
 
-Persistent trade history + rolling stats + equity tracking.
-SQLite-backed, one DB per worker in data/portfolio_{worker_id}.db.
+Categories:
+  jinni.system    — server lifecycle, config, startup/shutdown
+  jinni.worker    — worker registry, heartbeat, commands
+  jinni.execution — trade signals, order sends, fills, rejects
+  jinni.strategy  — strategy upload, validation, loading
+  jinni.error     — all errors (also logged to category logger)
 
-API:
-  ledger = TradeLedger(worker_id)
-  ledger.add_trade(trade_record)
-  ledger.get_all_trades()
-  ledger.get_summary()
-  ledger.get_equity_curve()
-  ledger.export_summary()
+Console: human-readable
+Files: JSON-lines in data/logs/ (rotating, 10MB x 5 backups)
 """
 
-from __future__ import annotations
-
 import json
+import logging
+import logging.handlers
 import os
-import sqlite3
-import threading
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
-
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 
-class TradeLedger:
-    """Persistent trade ledger for a single worker."""
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "logs")
 
-    def __init__(self, worker_id: str):
-        self.worker_id = worker_id
-        self._lock = threading.Lock()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        self._db_path = os.path.join(DATA_DIR, f"portfolio_{worker_id}.db")
-        self._init_db()
+CATEGORIES = ["jinni.system", "jinni.worker", "jinni.execution", "jinni.strategy", "jinni.error"]
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=15)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=3000")
-        conn.row_factory = sqlite3.Row
-        return conn
 
-    def _init_db(self):
-        conn = self._get_conn()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                trade_id INTEGER,
-                deployment_id TEXT,
-                strategy_id TEXT,
-                symbol TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                entry_price REAL NOT NULL,
-                exit_price REAL,
-                entry_bar INTEGER,
-                exit_bar INTEGER,
-                entry_time INTEGER,
-                exit_time INTEGER,
-                exit_reason TEXT,
-                sl_level REAL,
-                tp_level REAL,
-                lot_size REAL DEFAULT 0.01,
-                ticket INTEGER,
-                points_pnl REAL DEFAULT 0.0,
-                profit REAL DEFAULT 0.0,
-                bars_held INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'open',
-                opened_at TEXT NOT NULL,
-                closed_at TEXT,
-                data_json TEXT
-            );
+class JsonLineFormatter(logging.Formatter):
+    """One JSON object per line — machine-parseable."""
 
-            CREATE TABLE IF NOT EXISTS equity_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                balance REAL,
-                equity REAL,
-                floating_pnl REAL,
-                open_positions INTEGER DEFAULT 0,
-                cumulative_pnl REAL DEFAULT 0.0
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
-            CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
-            CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy_id);
-        """)
-        conn.commit()
-        conn.close()
-
-    # ── Trade Management ────────────────────────────────────
-
-    def add_trade(self, record: dict, deployment_id: str = None,
-                  strategy_id: str = None) -> int:
-        """Add a closed trade record. Returns the DB row ID."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                cur = conn.execute("""
-                    INSERT INTO trades (trade_id, deployment_id, strategy_id, symbol,
-                        direction, entry_price, exit_price, entry_bar, exit_bar,
-                        entry_time, exit_time, exit_reason, sl_level, tp_level,
-                        lot_size, ticket, points_pnl, profit, bars_held,
-                        status, opened_at, closed_at, data_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    record.get("id"), deployment_id, strategy_id,
-                    record.get("symbol", ""), record.get("direction", ""),
-                    record.get("entry_price", 0), record.get("exit_price"),
-                    record.get("entry_bar"), record.get("exit_bar"),
-                    record.get("entry_time"), record.get("exit_time"),
-                    record.get("exit_reason"), record.get("sl_level"),
-                    record.get("tp_level"), record.get("lot_size", 0.01),
-                    record.get("ticket"), record.get("points_pnl", 0),
-                    record.get("profit", 0), record.get("bars_held", 0),
-                    "closed", now, now,
-                    json.dumps(record, default=str),
-                ))
-                conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
-
-    def record_equity_snapshot(self, balance: float, equity: float,
-                               floating_pnl: float, open_positions: int):
-        """Periodic equity snapshot for curve building."""
-        now = datetime.now(timezone.utc).isoformat()
-        cum = self._get_cumulative_pnl()
-        with self._lock:
-            conn = self._get_conn()
-            try:
-                conn.execute("""
-                    INSERT INTO equity_snapshots (timestamp, balance, equity,
-                        floating_pnl, open_positions, cumulative_pnl)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (now, balance, equity, floating_pnl, open_positions, cum))
-                conn.commit()
-            finally:
-                conn.close()
-
-    def _get_cumulative_pnl(self) -> float:
-        conn = self._get_conn()
-        try:
-            row = conn.execute(
-                "SELECT COALESCE(SUM(profit), 0.0) as total FROM trades WHERE status='closed'"
-            ).fetchone()
-            return float(row["total"]) if row else 0.0
-        finally:
-            conn.close()
-
-    # ── Queries ─────────────────────────────────────────────
-
-    def get_all_trades(self, limit: int = 500, symbol: str = None,
-                       strategy_id: str = None) -> List[dict]:
-        conn = self._get_conn()
-        try:
-            query = "SELECT * FROM trades WHERE status='closed'"
-            params = []
-            if symbol:
-                query += " AND symbol = ?"
-                params.append(symbol)
-            if strategy_id:
-                query += " AND strategy_id = ?"
-                params.append(strategy_id)
-            query += " ORDER BY id DESC LIMIT ?"
-            params.append(limit)
-            rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-
-    def get_open_trades(self) -> List[dict]:
-        conn = self._get_conn()
-        try:
-            rows = conn.execute(
-                "SELECT * FROM trades WHERE status='open' ORDER BY id DESC"
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
-
-    def get_equity_curve(self, limit: int = 1000) -> List[dict]:
-        conn = self._get_conn()
-        try:
-            rows = conn.execute(
-                "SELECT * FROM equity_snapshots ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
-            return [dict(r) for r in reversed(rows)]
-        finally:
-            conn.close()
-
-    def get_summary(self) -> dict:
-        """Compute rolling stats from closed trades."""
-        conn = self._get_conn()
-        try:
-            trades = conn.execute(
-                "SELECT direction, profit, points_pnl, bars_held, exit_reason "
-                "FROM trades WHERE status='closed' ORDER BY id"
-            ).fetchall()
-
-            if not trades:
-                return {
-                    "total_trades": 0, "wins": 0, "losses": 0,
-                    "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0,
-                    "avg_winner": 0.0, "avg_loser": 0.0,
-                    "best_trade": 0.0, "worst_trade": 0.0,
-                    "avg_bars_held": 0.0, "longs": 0, "shorts": 0,
-                    "avg_r": 0.0, "profit_factor": 0.0,
-                }
-
-            profits = [float(t["profit"]) for t in trades]
-            wins = [p for p in profits if p > 0]
-            losses = [p for p in profits if p <= 0]
-            bars_list = [int(t["bars_held"]) for t in trades]
-            longs = sum(1 for t in trades if t["direction"] == "long")
-            shorts = sum(1 for t in trades if t["direction"] == "short")
-
-            gross_profit = sum(wins) if wins else 0.0
-            gross_loss = abs(sum(losses)) if losses else 0.0
-
-            return {
-                "total_trades": len(trades),
-                "wins": len(wins),
-                "losses": len(losses),
-                "win_rate": round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
-                "total_pnl": round(sum(profits), 2),
-                "avg_pnl": round(sum(profits) / len(trades), 2) if trades else 0.0,
-                "avg_winner": round(sum(wins) / len(wins), 2) if wins else 0.0,
-                "avg_loser": round(sum(losses) / len(losses), 2) if losses else 0.0,
-                "best_trade": round(max(profits), 2) if profits else 0.0,
-                "worst_trade": round(min(profits), 2) if profits else 0.0,
-                "avg_bars_held": round(sum(bars_list) / len(bars_list), 1) if bars_list else 0.0,
-                "longs": longs,
-                "shorts": shorts,
-                "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0.0,
-            }
-        finally:
-            conn.close()
-
-    def export_summary(self) -> dict:
-        """Full export for API/UI consumption."""
-        return {
-            "worker_id": self.worker_id,
-            "stats": self.get_summary(),
-            "recent_trades": self.get_all_trades(limit=50),
-            "equity_curve": self.get_equity_curve(limit=500),
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+    def format(self, record):
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
         }
+        if record.exc_info and record.exc_info[0]:
+            entry["exception"] = self.formatException(record.exc_info)
+        if hasattr(record, "event_data"):
+            entry["data"] = record.event_data
+        return json.dumps(entry, default=str)
+
+
+class ReadableFormatter(logging.Formatter):
+    """Console-friendly format."""
+
+    def format(self, record):
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        cat = record.name.replace("jinni.", "").upper()
+        return f"[{ts}] [{cat}] {record.levelname[0]} | {record.getMessage()}"
+
+
+def setup_logging(console_level=logging.INFO, file_level=logging.DEBUG):
+    """Initialize all JINNI loggers. Call once at startup."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    # Console handler (shared)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(console_level)
+    console_handler.setFormatter(ReadableFormatter())
+
+    for cat in CATEGORIES:
+        logger = logging.getLogger(cat)
+        logger.setLevel(file_level)
+        logger.propagate = False
+
+        # Remove existing handlers (safe for re-init)
+        logger.handlers.clear()
+
+        # File handler per category
+        log_file = os.path.join(LOG_DIR, f"{cat.replace('.', '_')}.log")
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=10 * 1024 * 1024, backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(file_level)
+        file_handler.setFormatter(JsonLineFormatter())
+
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
+    # Also capture root-level warnings
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    if not root.handlers:
+        root.addHandler(console_handler)
+
+    logging.getLogger("jinni.system").info("Logging initialized")
+
+
+def get_logger(category: str) -> logging.Logger:
+    """Get a category logger. Category must be one of CATEGORIES."""
+    name = category if category.startswith("jinni.") else f"jinni.{category}"
+    return logging.getLogger(name)
+
+
+def log_event(category: str, level: int, message: str, **data):
+    """Log a structured event with optional data payload."""
+    logger = get_logger(category)
+    record = logger.makeRecord(
+        logger.name, level, "(event)", 0, message, (), None,
+    )
+    if data:
+        record.event_data = data
+    logger.handle(record)
+```
+
+---
+
+## `app/__init__.py`
+
+```python
+"""
+JINNI Grid Mother Server - Application Factory
+app/__init__.py
+"""
+
+import os
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
+from starlette.responses import FileResponse
+
+from app.config import Config
+from app.routes.mainRoutes import router as main_routes_router
+
+
+def create_app() -> FastAPI:
+    app_config = Config.get_app_config()
+    cors_origins = Config.get_cors_origins()
+
+    app = FastAPI(
+        title=app_config["name"],
+        version=app_config["version"],
+        description="JINNI Grid Mother Server - Integrated Dashboard + Fleet API",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(main_routes_router)
+
+    ui_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "ui")
+    )
+
+    css_dir = os.path.join(ui_dir, "css")
+    js_dir = os.path.join(ui_dir, "js")
+    index_path = os.path.join(ui_dir, "index.html")
+
+    if os.path.isdir(css_dir):
+        app.mount("/css", StaticFiles(directory=css_dir), name="css")
+    if os.path.isdir(js_dir):
+        app.mount("/js", StaticFiles(directory=js_dir), name="js")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_dashboard():
+        return FileResponse(index_path)
+
+    # ── Initialize persistence ───────────────────────────────
+    from app.persistence import init_db
+    init_db()
+
+    # ── Restore strategies from disk ─────────────────────────
+    from app.services.strategy_registry import load_strategies_from_disk
+    load_strategies_from_disk()
+
+    # ── Load workers from DB into memory cache ───────────────
+    from app.services.mainServices import _load_workers_from_db
+    _load_workers_from_db()
+
+    return app
+```
+
+---
+
+## `config.yaml`
+
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 5100
+  debug: true
+  cors_origins:
+    - "*"
+
+app:
+  name: "JINNI Grid Mother Server"
+  version: "0.2.0"
+
+fleet:
+  stale_threshold_seconds: 30
+  offline_threshold_seconds: 90
+```
+
+---
+
+## `vm/config.yaml`
+
+```yaml
+worker:
+  worker_id: "vm-worker-01"
+  worker_name: "Worker 01"
+
+mother_server:
+  url: "http://192.168.3.232:5100"
+
+heartbeat:
+  interval_seconds: 10
+
+agent:
+  version: "0.2.0"
+```
+
+---
+
+## `vm/requirements.txt`
+
+```text
+pyyaml>=6.0
+requests>=2.31.0
+MetaTrader5>=5.0.45
 ```

@@ -966,3 +966,110 @@ def delete_validation_job(job_id: str) -> bool:
     conn.execute("DELETE FROM validation_jobs WHERE job_id=?", (job_id,))
     conn.commit()
     return True
+
+# ══════════════════════════════════════════════════════════════
+# CHART DATA (bars + markers persisted per deployment)
+# ══════════════════════════════════════════════════════════════
+
+def _ensure_chart_tables():
+    """Create chart tables if missing. Safe to call multiple times."""
+    conn = _get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS chart_bars (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deployment_id TEXT NOT NULL,
+            bar_index INTEGER NOT NULL,
+            time INTEGER NOT NULL,
+            open REAL NOT NULL,
+            high REAL NOT NULL,
+            low REAL NOT NULL,
+            close REAL NOT NULL,
+            volume REAL DEFAULT 0,
+            UNIQUE(deployment_id, bar_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cb_dep ON chart_bars(deployment_id);
+        CREATE INDEX IF NOT EXISTS idx_cb_dep_idx ON chart_bars(deployment_id, bar_index);
+
+        CREATE TABLE IF NOT EXISTS chart_markers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deployment_id TEXT NOT NULL,
+            marker_type TEXT NOT NULL,
+            time INTEGER NOT NULL,
+            price REAL,
+            bar_index INTEGER,
+            side TEXT,
+            label TEXT,
+            metadata_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cm_dep ON chart_markers(deployment_id);
+    """)
+    conn.commit()
+
+
+def save_chart_bars_bulk(deployment_id: str, bars: list):
+    """Upsert a batch of bars. Each bar: {bar_index, time, open, high, low, close, volume}."""
+    _ensure_chart_tables()
+    conn = _get_conn()
+    for b in bars:
+        conn.execute("""
+            INSERT INTO chart_bars (deployment_id, bar_index, time, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(deployment_id, bar_index) DO UPDATE SET
+                time=excluded.time, open=excluded.open, high=excluded.high,
+                low=excluded.low, close=excluded.close, volume=excluded.volume
+        """, (
+            deployment_id, int(b["bar_index"]), int(b["time"]),
+            float(b["open"]), float(b["high"]), float(b["low"]),
+            float(b["close"]), float(b.get("volume", 0)),
+        ))
+    conn.commit()
+
+
+def get_chart_bars(deployment_id: str, since_index: int = 0,
+                    limit: int = 10000) -> list:
+    """Get bars for a deployment, optionally from a given bar_index onwards."""
+    _ensure_chart_tables()
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT bar_index, time, open, high, low, close, volume "
+        "FROM chart_bars WHERE deployment_id=? AND bar_index>=? "
+        "ORDER BY bar_index ASC LIMIT ?",
+        (deployment_id, since_index, limit)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_chart_markers_bulk(deployment_id: str, markers: list):
+    """Save a batch of markers. Each: {marker_type, time, price, bar_index, side, label, metadata}."""
+    _ensure_chart_tables()
+    conn = _get_conn()
+    for m in markers:
+        meta = m.get("metadata")
+        meta_json = json.dumps(meta, default=str) if meta else None
+        conn.execute("""
+            INSERT INTO chart_markers (deployment_id, marker_type, time, price,
+                bar_index, side, label, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            deployment_id, m["marker_type"], int(m["time"]),
+            float(m.get("price", 0) or 0),
+            int(m.get("bar_index", 0) or 0),
+            m.get("side"), m.get("label"),
+            meta_json,
+        ))
+    conn.commit()
+
+
+def get_chart_markers(deployment_id: str, since_id: int = 0,
+                       limit: int = 5000) -> list:
+    """Get markers for a deployment, optionally since a given id."""
+    _ensure_chart_tables()
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, marker_type, time, price, bar_index, side, label, metadata_json "
+        "FROM chart_markers WHERE deployment_id=? AND id>? "
+        "ORDER BY id ASC LIMIT ?",
+        (deployment_id, since_id, limit)
+    ).fetchall()
+    return [dict(r) for r in rows]

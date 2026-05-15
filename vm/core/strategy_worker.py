@@ -810,6 +810,12 @@ class StrategyRunner:
         self._current_price: Optional[float] = None
         self._trade_counter: int = 0
 
+        # ★ CHART: data buffers (flushed by worker_agent)
+        self._chart_bar_buffer: list = []
+        self._chart_marker_buffer: list = []
+        self._chart_bar_lock = threading.Lock()
+        self._chart_marker_lock = threading.Lock()
+
         # Backtester-aligned execution state
         self._absolute_bar_counter: int = -1
         self._prev_indicators: dict = {}
@@ -1172,6 +1178,23 @@ class StrategyRunner:
                           f"swap={mt5_record['swap']:.2f} "
                           f"net={mt5_record['net_pnl']:.2f} "
                           f"reason={reason}")
+                    self._ctx._trades.append(record)
+                    self._report_trade(record)
+
+                    # ★ CHART: Buffer exit marker (MT5 branch)
+                    _exit_mt = "exit_tp" if "TP" in reason else (
+                               "exit_sl" if "SL" in reason else (
+                               "exit_ma" if "MA" in reason else "exit_strategy"))
+                    with self._chart_marker_lock:
+                        self._chart_marker_buffer.append({
+                            "marker_type": _exit_mt,
+                            "time": int(bar.get("time", 0)),
+                            "price": record.get("exit_price", 0),
+                            "bar_index": self._bar_index,
+                            "side": record.get("direction"),
+                            "label": reason,
+                        })
+
                 else:
                     # ★ Build record manually with correct field names
                     exit_profit = r.get("profit", 0)
@@ -1215,8 +1238,23 @@ class StrategyRunner:
                           f"entry={entry_price} exit={exit_price} "
                           f"sl={sl_val} tp={tp_val} "
                           f"reason={reason} profit={exit_profit:.2f}")
-                self._ctx._trades.append(record)
-                self._report_trade(record)
+                    self._ctx._trades.append(record)
+                    self._report_trade(record)
+
+                    # ★ CHART: Buffer exit marker (fallback branch)
+                    _exit_mt = "exit_tp" if "TP" in reason else (
+                               "exit_sl" if "SL" in reason else (
+                               "exit_ma" if "MA" in reason else "exit_strategy"))
+                    with self._chart_marker_lock:
+                        self._chart_marker_buffer.append({
+                            "marker_type": _exit_mt,
+                            "time": int(bar.get("time", 0)),
+                            "price": record.get("exit_price", 0),
+                            "bar_index": self._bar_index,
+                            "side": record.get("direction"),
+                            "label": reason,
+                        })
+
         self._active_trade_meta = None
         self._refresh_position()
 
@@ -1257,6 +1295,18 @@ class StrategyRunner:
             }
             self._ctx._trades.append(record)
             self._report_trade(record)
+
+            # ★ CHART: Buffer exit marker (no-ticket broker close)
+            with self._chart_marker_lock:
+                self._chart_marker_buffer.append({
+                    "marker_type": "exit_sl",
+                    "time": int(bar.get("time", 0)),
+                    "price": record["exit_price"],
+                    "bar_index": self._bar_index,
+                    "side": record["direction"],
+                    "label": "BROKER_CLOSE_NO_TICKET",
+                })
+
             self._active_trade_meta = None
             self._exec_log.closes_filled += 1
             return
@@ -1323,6 +1373,20 @@ class StrategyRunner:
 
             self._ctx._trades.append(record)
             self._report_trade(record)
+
+            # ★ CHART: Buffer exit marker (sim broker close)
+            _exit_mt = "exit_tp" if "TP" in exit_reason else (
+                       "exit_sl" if "SL" in exit_reason else "exit_strategy")
+            with self._chart_marker_lock:
+                self._chart_marker_buffer.append({
+                    "marker_type": _exit_mt,
+                    "time": int(bar.get("time", 0)),
+                    "price": exit_price,
+                    "bar_index": self._bar_index,
+                    "side": direction,
+                    "label": exit_reason,
+                })
+
             self._active_trade_meta = None
             self._exec_log.closes_filled += 1
             return
@@ -1381,6 +1445,18 @@ class StrategyRunner:
             }
             self._ctx._trades.append(record)
             self._report_trade(record)
+
+            # ★ CHART: Buffer exit marker (live estimated)
+            with self._chart_marker_lock:
+                self._chart_marker_buffer.append({
+                    "marker_type": "exit_sl",
+                    "time": int(bar.get("time", 0)),
+                    "price": exit_price,
+                    "bar_index": self._bar_index,
+                    "side": direction,
+                    "label": "BROKER_CLOSE_ESTIMATED",
+                })
+
             print(f"[TRADE #{self._trade_counter}] ESTIMATED | "
                   f"ticket={ticket} {direction.upper()} "
                   f"entry={entry_price:.5f} exit={exit_price:.5f} "
@@ -1420,6 +1496,20 @@ class StrategyRunner:
         }
         self._ctx._trades.append(record)
         self._report_trade(record)
+
+        # ★ CHART: Buffer exit marker (live MT5 confirmed)
+        _exit_mt = "exit_tp" if "TP" in mt5_record["exit_reason"] else (
+                   "exit_sl" if "SL" in mt5_record["exit_reason"] else "exit_strategy")
+        with self._chart_marker_lock:
+            self._chart_marker_buffer.append({
+                "marker_type": _exit_mt,
+                "time": int(bar.get("time", 0)),
+                "price": mt5_record["exit_price"],
+                "bar_index": self._bar_index,
+                "side": mt5_record["direction"],
+                "label": mt5_record["exit_reason"],
+            })
+
         print(f"[TRADE #{self._trade_counter}] MT5 CONFIRMED | "
               f"ticket={ticket} {mt5_record['direction'].upper()} "
               f"entry={mt5_record['entry_price']:.5f} "
@@ -1494,7 +1584,6 @@ class StrategyRunner:
 
         # ★ VALIDATION: If strategy requires SL (has sl field) but SL
         # is invalid at fill price, skip the entire entry.
-        # This prevents naked positions that never close.
         if self._validation_mode and pending.get("sl") is not None and initial_sl is None:
             print(f"[EXEC] Pending SKIPPED: SL invalid at bar open "
                   f"{entry_estimate:.5f} — no entry")
@@ -1603,6 +1692,19 @@ class StrategyRunner:
         }
 
         self._just_entered_this_bar = True
+
+        # ★ CHART: Buffer entry marker
+        with self._chart_marker_lock:
+            self._chart_marker_buffer.append({
+                "marker_type": "entry_long" if direction == "long" else "entry_short",
+                "time": int(bar.get("time", 0)),
+                "price": fill_price,
+                "bar_index": self._bar_index,
+                "side": direction,
+                "label": f"{'BUY' if direction == 'long' else 'SELL'} {fill_price:.5f}",
+                "metadata": {"sl": sl_level, "tp": tp_level, "ticket": ticket},
+            })
+
         self._signal_count += 1
         self._refresh_position()
         self._report_status()
@@ -1648,6 +1750,17 @@ class StrategyRunner:
               f"SL={action.get('sl')} tp_mode={action.get('tp_mode')} "
               f"tp_r={action.get('tp_r')} (execute next bar)")
 
+        # ★ CHART: Buffer signal marker
+        with self._chart_marker_lock:
+            self._chart_marker_buffer.append({
+                "marker_type": "signal_buy" if direction == "long" else "signal_sell",
+                "time": int(bar.get("time", 0)),
+                "price": float(bar.get("close", 0)),
+                "bar_index": self._bar_index,
+                "side": direction,
+                "label": sig,
+            })
+
     # =================================================================
     # _on_new_bar — Backtester 8-Step Loop
     # USED BY BOTH LIVE AND VALIDATION — ZERO LOGIC CHANGES
@@ -1656,6 +1769,19 @@ class StrategyRunner:
     def _on_new_bar(self, bar: dict):
         self._total_bars_produced += 1
         self._last_bar_time = bar.get("time")
+
+        # ★ CHART: Buffer bar for chart persistence
+        with self._chart_bar_lock:
+            self._chart_bar_buffer.append({
+                "bar_index": self._total_bars_produced - 1,
+                "time": int(bar.get("time", 0)),
+                "open": float(bar.get("open", 0)),
+                "high": float(bar.get("high", 0)),
+                "low": float(bar.get("low", 0)),
+                "close": float(bar.get("close", 0)),
+                "volume": float(bar.get("volume", 0)),
+            })
+
         self._just_entered_this_bar = False
 
         if self._stop_event.is_set():
@@ -1713,7 +1839,6 @@ class StrategyRunner:
 
         action = validate_signal(raw_signal, self._bar_index)
         # ★ FIX: Preserve strategy's extra fields (sl, tp, tp_mode, tp_r, etc.)
-        # validate_signal() only keeps known keys — merge originals back
         if raw_signal and isinstance(raw_signal, dict):
             for k, v in raw_signal.items():
                 if k not in action:
@@ -1817,6 +1942,24 @@ class StrategyRunner:
         self._exec_log.log_modify(result, sl=new_sl, tp=new_tp)
         self._refresh_position()
 
+    # ─────────────────────────────────────────────────────────
+    # ★ CHART: Drain methods (called by worker_agent)
+    # ─────────────────────────────────────────────────────────
+
+    def drain_chart_bars(self) -> list:
+        """Return and clear buffered bars. Thread-safe."""
+        with self._chart_bar_lock:
+            bars = list(self._chart_bar_buffer)
+            self._chart_bar_buffer.clear()
+        return bars
+
+    def drain_chart_markers(self) -> list:
+        """Return and clear buffered markers. Thread-safe."""
+        with self._chart_marker_lock:
+            markers = list(self._chart_marker_buffer)
+            self._chart_marker_buffer.clear()
+        return markers
+
     # =================================================================
     # ★ VALIDATION MODE: run_validation()
     #
@@ -1894,8 +2037,6 @@ class StrategyRunner:
             self._current_price = price
 
             # ★ Set price on executor BEFORE bar engine processes
-            # This way broker SL/TP checks fire on every tick,
-            # not just on bar completion
             executor.set_current_price(price)
 
             self._total_ticks_ingested += 1
@@ -1905,9 +2046,7 @@ class StrategyRunner:
             )
 
             # ★ Check if broker closed position between ticks
-            # (SL/TP hit detected by set_current_price above)
             if self._active_trade_meta and executor.get_open_count() == 0:
-                # Position vanished — broker SL/TP triggered
                 if self._ctx and self._bar_engine.bars:
                     fake_bar = {"time": tick["ts"], "open": price,
                                 "high": price, "low": price,

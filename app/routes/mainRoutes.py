@@ -665,6 +665,105 @@ async def emergency_stop():
     """Stop all strategies + close all positions across all workers."""
     result = emergency_stop_all()
     return result
+
+# =============================================================================
+# Charts — Live Bar + Marker Data
+# =============================================================================
+
+from app.persistence import (
+    save_chart_bars_bulk, get_chart_bars,
+    save_chart_markers_bulk, get_chart_markers,
+)
+
+
+@router.get("/api/charts/bars", tags=["Charts"])
+async def get_chart_bars_endpoint(
+    deployment_id: str = Query(...),
+    since_index: int = Query(0),
+    limit: int = Query(10000),
+):
+    bars = get_chart_bars(deployment_id, since_index=since_index, limit=limit)
+    return {"ok": True, "bars": bars, "count": len(bars)}
+
+
+@router.get("/api/charts/markers", tags=["Charts"])
+async def get_chart_markers_endpoint(
+    deployment_id: str = Query(...),
+    since_id: int = Query(0),
+    limit: int = Query(5000),
+):
+    markers = get_chart_markers(deployment_id, since_id=since_id, limit=limit)
+    return {"ok": True, "markers": markers, "count": len(markers)}
+
+
+@router.post("/api/charts/bars", tags=["Charts"])
+async def push_chart_bars(payload: dict = Body(...)):
+    deployment_id = payload.get("deployment_id")
+    bars = payload.get("bars", [])
+    if not deployment_id or not bars:
+        raise HTTPException(status_code=400, detail="deployment_id and bars required")
+    save_chart_bars_bulk(deployment_id, bars)
+    return {"ok": True, "saved": len(bars)}
+
+
+@router.post("/api/charts/markers", tags=["Charts"])
+async def push_chart_markers(payload: dict = Body(...)):
+    deployment_id = payload.get("deployment_id")
+    markers = payload.get("markers", [])
+    if not deployment_id or not markers:
+        raise HTTPException(status_code=400, detail="deployment_id and markers required")
+    save_chart_markers_bulk(deployment_id, markers)
+    return {"ok": True, "saved": len(markers)}
+
+# =============================================================================
+# Charts — Live Bar + Marker Data
+# =============================================================================
+
+from app.persistence import (
+    save_chart_bars_bulk, get_chart_bars,
+    save_chart_markers_bulk, get_chart_markers,
+)
+
+
+@router.get("/api/charts/bars", tags=["Charts"])
+async def get_chart_bars_endpoint(
+    deployment_id: str = Query(...),
+    since_index: int = Query(0),
+    limit: int = Query(10000),
+):
+    bars = get_chart_bars(deployment_id, since_index=since_index, limit=limit)
+    return {"ok": True, "bars": bars, "count": len(bars)}
+
+
+@router.get("/api/charts/markers", tags=["Charts"])
+async def get_chart_markers_endpoint(
+    deployment_id: str = Query(...),
+    since_id: int = Query(0),
+    limit: int = Query(5000),
+):
+    markers = get_chart_markers(deployment_id, since_id=since_id, limit=limit)
+    return {"ok": True, "markers": markers, "count": len(markers)}
+
+
+@router.post("/api/charts/bars", tags=["Charts"])
+async def push_chart_bars(payload: dict = Body(...)):
+    deployment_id = payload.get("deployment_id")
+    bars = payload.get("bars", [])
+    if not deployment_id or not bars:
+        raise HTTPException(status_code=400, detail="deployment_id and bars required")
+    save_chart_bars_bulk(deployment_id, bars)
+    return {"ok": True, "saved": len(bars)}
+
+
+@router.post("/api/charts/markers", tags=["Charts"])
+async def push_chart_markers(payload: dict = Body(...)):
+    deployment_id = payload.get("deployment_id")
+    markers = payload.get("markers", [])
+    if not deployment_id or not markers:
+        raise HTTPException(status_code=400, detail="deployment_id and markers required")
+    save_chart_markers_bulk(deployment_id, markers)
+    return {"ok": True, "saved": len(markers)}
+
 # =============================================================================
 # Validation Jobs
 # =============================================================================
