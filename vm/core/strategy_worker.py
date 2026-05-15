@@ -1584,20 +1584,44 @@ class StrategyRunner:
 
         # ★ VALIDATION: If strategy requires SL (has sl field) but SL
         # is invalid at fill price, skip the entire entry.
+        # This prevents naked positions that never close.
         if self._validation_mode and pending.get("sl") is not None and initial_sl is None:
             print(f"[EXEC] Pending SKIPPED: SL invalid at bar open "
                   f"{entry_estimate:.5f} — no entry")
             return False
 
-        # ── Place order ─────────────────────────────────────
+        # ── Compute initial TP estimate for order placement ─
+        initial_tp = None
+        _tp_mode_pre = pending.get("tp_mode")
+
+        if _tp_mode_pre == "r_multiple":
+            _r_pre = float(pending.get("tp_r", 1.0) or 1.0)
+            if initial_sl is not None:
+                _risk_pre = abs(entry_estimate - initial_sl)
+                if _risk_pre > 0:
+                    if direction == "long":
+                        initial_tp = round(entry_estimate + _risk_pre * _r_pre, 5)
+                    else:
+                        initial_tp = round(entry_estimate - _risk_pre * _r_pre, 5)
+        elif pending.get("tp") is not None:
+            initial_tp = round(float(pending["tp"]), 5)
+
+        # Validate initial TP direction
+        if initial_tp is not None:
+            if direction == "long" and initial_tp <= entry_estimate:
+                initial_tp = None
+            elif direction == "short" and initial_tp >= entry_estimate:
+                initial_tp = None
+
+        # ── Place order WITH both SL and TP ─────────────────
         comment = pending.get("comment", f"JG_{sig}")
 
         if sig == SIGNAL_BUY:
             result = self._executor.open_buy(
-                sl=initial_sl, tp=None, comment=comment)
+                sl=initial_sl, tp=initial_tp, comment=comment)
         else:
             result = self._executor.open_sell(
-                sl=initial_sl, tp=None, comment=comment)
+                sl=initial_sl, tp=initial_tp, comment=comment)
 
         self._exec_log.log_open(sig, result, initial_sl, None)
 
@@ -1666,16 +1690,39 @@ class StrategyRunner:
             elif direction == "short" and tp_level >= fill_price:
                 tp_level = None
 
-        # ── Modify position with final SL/TP ────────────────
+        # ── Modify position with final SL/TP (from actual fill) ──
         ticket = result.get("ticket")
-        if ticket and (sl_level != initial_sl or tp_level is not None):
+        _needs_modify = False
+        if ticket:
+            if sl_level != initial_sl:
+                _needs_modify = True
+            if tp_level != initial_tp:
+                _needs_modify = True
+        if _needs_modify:
             mod_result = self._executor.modify_sl_tp(
                 ticket, sl=sl_level, tp=tp_level)
             self._exec_log.log_modify(
                 mod_result, sl=sl_level, tp=tp_level)
+        elif ticket and (sl_level is not None or tp_level is not None):
+            # Ensure SL/TP are set even if they match initial estimates
+            # (covers edge case where initial order didn't set them)
+            _pos_check = self._executor.get_position_state()
+            if _pos_check.has_position:
+                _cur_sl = _pos_check.sl or 0
+                _cur_tp = _pos_check.tp or 0
+                _want_sl = sl_level or 0
+                _want_tp = tp_level or 0
+                if (abs(_cur_sl - _want_sl) > 1e-6 or
+                        abs(_cur_tp - _want_tp) > 1e-6):
+                    mod_result = self._executor.modify_sl_tp(
+                        ticket, sl=sl_level, tp=tp_level)
+                    self._exec_log.log_modify(
+                        mod_result, sl=sl_level, tp=tp_level)
 
         print(f"[EXEC] PENDING EXECUTED: {direction.upper()} "
-              f"fill={fill_price:.5f} SL={sl_level} TP={tp_level} "
+              f"fill={fill_price:.5f} "
+              f"initSL={initial_sl} initTP={initial_tp} "
+              f"finalSL={sl_level} finalTP={tp_level} "
               f"risk={risk_pts} R={pending.get('tp_r')}")
 
         # ── Store active trade metadata ─────────────────────
