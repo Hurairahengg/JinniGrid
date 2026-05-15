@@ -82,9 +82,16 @@ var WorkerDetailRenderer = (function () {
     _selectedStrategy = null;
     _deployments = [];
 
-    var defaults = DeploymentConfig.runtimeDefaults;
-    _runtimeConfig = {};
-    for (var k in defaults) _runtimeConfig[k] = defaults[k];
+    /* ★ Pull defaults from GlobalSettings (wired to Settings page) */
+    var defaults = GlobalSettings.getDeploymentDefaults();
+    _runtimeConfig = {
+      symbol: defaults.symbol,
+      lot_size: defaults.lot_size,
+      bar_size_points: defaults.bar_size_points,
+      max_bars_memory: defaults.max_bars_memory,
+      tick_lookback_value: defaults.tick_lookback_value,
+      tick_lookback_unit: defaults.tick_lookback_unit,
+    };
 
     _parameterValues = {};
     _parameterDefaults = {};

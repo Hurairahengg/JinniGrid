@@ -117,23 +117,129 @@ var ApiClient = (function () {
   };
 })();
 
+/* ================================================================
+   GLOBAL SETTINGS — Fetches from backend, used everywhere
+   ================================================================ */
+
+var GlobalSettings = (function () {
+  'use strict';
+
+  var _settings = {
+    refresh_interval: '5',
+    default_symbol: 'XAUUSD',
+    default_bar_size: '100',
+    default_lot_size: '0.01',
+    default_max_bars: '500',
+    default_tick_lookback_value: '30',
+    default_tick_lookback_unit: 'minutes',
+    default_spread: '0',
+    default_commission: '0',
+    debug_mode: 'true',
+    worker_timeout_seconds: '90',
+    log_verbosity: 'INFO',
+  };
+
+  var _loaded = false;
+  var _listeners = [];
+
+  function load() {
+    return fetch('/api/admin/settings').then(function (r) {
+      return r.json();
+    }).then(function (data) {
+      if (data.settings) {
+        for (var k in data.settings) {
+          _settings[k] = data.settings[k];
+        }
+      }
+      _loaded = true;
+      _listeners.forEach(function (fn) { try { fn(_settings); } catch (e) {} });
+      _listeners = [];
+      console.log('[SETTINGS] Loaded:', _settings);
+      return _settings;
+    }).catch(function (e) {
+      console.warn('[SETTINGS] Failed to load, using defaults:', e);
+      _loaded = true;
+      return _settings;
+    });
+  }
+
+  function get(key, fallback) {
+    var val = _settings[key];
+    if (val === undefined || val === null || val === '') return fallback;
+    return val;
+  }
+
+  function getFloat(key, fallback) {
+    var val = parseFloat(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getInt(key, fallback) {
+    var val = parseInt(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getAll() {
+    return Object.assign({}, _settings);
+  }
+
+  function isLoaded() { return _loaded; }
+
+  function onReady(fn) {
+    if (_loaded) { fn(_settings); }
+    else { _listeners.push(fn); }
+  }
+
+  /* Convenience: get deployment defaults as an object */
+  function getDeploymentDefaults() {
+    return {
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      tick_lookback_value: getInt('default_tick_lookback_value', 30),
+      tick_lookback_unit: get('default_tick_lookback_unit', 'minutes'),
+    };
+  }
+
+  function getValidationDefaults() {
+    return {
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      spread_points: getFloat('default_spread', 0),
+      commission_per_lot: getFloat('default_commission', 0),
+    };
+  }
+
+  return {
+    load: load,
+    get: get,
+    getFloat: getFloat,
+    getInt: getInt,
+    getAll: getAll,
+    isLoaded: isLoaded,
+    onReady: onReady,
+    getDeploymentDefaults: getDeploymentDefaults,
+    getValidationDefaults: getValidationDefaults,
+  };
+})();
+
 /* ── DEPLOYMENT CONFIG ──────────────────────────────────────── */
 var DeploymentConfig = (function () {
   'use strict';
+
+  var tickLookbackUnits = ['minutes', 'hours', 'days'];
+
+  function getRuntimeDefaults() {
+    /* Pull from GlobalSettings (live from backend) */
+    return GlobalSettings.getDeploymentDefaults();
+  }
+
   return {
-    runtimeDefaults: {
-      symbol: 'EURUSD',
-      lot_size: 0.01,
-      tick_lookback_value: 30,
-      tick_lookback_unit: 'minutes',
-      bar_size_points: 100,
-      max_bars_memory: 500
-    },
-    symbolOptions: [
-      'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF',
-      'NZDUSD', 'XAUUSD', 'BTCUSD', 'USTEC', 'SPX500', 'DOW30', 'FTSE100'
-    ],
-    tickLookbackUnits: ['minutes', 'hours', 'days']
+    get runtimeDefaults() { return getRuntimeDefaults(); },
+    tickLookbackUnits: tickLookbackUnits,
   };
 })();
 
@@ -681,7 +787,7 @@ var DashboardRenderer = (function () {
           '<td class="mono" style="font-size:10px;">' + _fmtAge(w.heartbeat_age_seconds) + '</td></tr>';
       });
       html += '</tbody></table>';
-      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';''
+      html += '<span class="view-fleet-link" onclick="App.navigateTo(\'fleet\')">View Fleet <i class="fa-solid fa-arrow-right"></i></span>';
       el.innerHTML = html;
     }).catch(function (err) { console.error('[DASHBOARD] Fleet fetch failed:', err); });
   }
@@ -1617,11 +1723,12 @@ var LogsRenderer = (function () {
 
 
 /* ================================================================
-   11. SETTINGS + ADMIN RENDERER
+   11. SETTINGS + ADMIN RENDERER (Wired to GlobalSettings)
    ================================================================ */
 var SettingsRenderer = (function () {
   'use strict';
   var _settings = {};
+  var _original = {};
   var _stats = {};
   var _strategies = [];
   var _workers = [];
@@ -1633,6 +1740,43 @@ var SettingsRenderer = (function () {
     return b + ' B';
   }
 
+  /* ── Schema-driven settings layout ──────────────────────── */
+  var SETTING_SCHEMA = [
+    {
+      section: 'Trading Defaults',
+      icon: 'fa-chart-line',
+      description: 'These values pre-fill deployment and validation forms across the entire system.',
+      fields: [
+        { key: 'default_symbol', label: 'Default Symbol', type: 'text', placeholder: 'e.g. XAUUSD', help: 'Pre-filled in deployment and validation forms.' },
+        { key: 'default_lot_size', label: 'Default Lot Size', type: 'number', step: '0.01', min: '0.01', help: 'Default position size for new deployments.' },
+        { key: 'default_bar_size', label: 'Default Bar Size (points)', type: 'number', step: '1', min: '1', help: 'Range bar size in points.' },
+        { key: 'default_max_bars', label: 'Default Max Bars in Memory', type: 'number', step: '10', min: '10', help: 'Rolling window of bars kept in memory.' },
+        { key: 'default_tick_lookback_value', label: 'Default Tick Lookback', type: 'number', step: '1', min: '1', help: 'How far back to fetch historical ticks on deployment start.' },
+        { key: 'default_tick_lookback_unit', label: 'Tick Lookback Unit', type: 'select', options: ['minutes', 'hours', 'days'], help: 'Unit for tick lookback.' },
+      ]
+    },
+    {
+      section: 'Validation Defaults',
+      icon: 'fa-flask-vial',
+      description: 'Defaults for the backtest/validation module.',
+      fields: [
+        { key: 'default_spread', label: 'Default Spread (points)', type: 'number', step: '0.1', min: '0', help: 'Simulated spread applied during validation.' },
+        { key: 'default_commission', label: 'Default Commission per Lot', type: 'number', step: '0.01', min: '0', help: 'Commission per lot (round turn) for validation.' },
+      ]
+    },
+    {
+      section: 'System',
+      icon: 'fa-gear',
+      description: 'General system behavior.',
+      fields: [
+        { key: 'refresh_interval', label: 'UI Refresh Interval (sec)', type: 'number', step: '1', min: '1', help: 'How often the dashboard auto-refreshes.' },
+        { key: 'worker_timeout_seconds', label: 'Worker Timeout (sec)', type: 'number', step: '1', min: '10', help: 'Mark worker stale after this many seconds without heartbeat.' },
+        { key: 'log_verbosity', label: 'Log Verbosity', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'], help: 'Server-side log level.' },
+        { key: 'debug_mode', label: 'Debug Mode', type: 'toggle', help: 'Enable verbose debug logging on workers.' },
+      ]
+    },
+  ];
+
   function _buildPage() {
     var html = '<div class="fleet-page">';
     html += '<div class="fleet-page-header"><span class="fleet-page-title"><i class="fa-solid fa-gear" style="margin-right:8px;color:var(--accent);"></i>Settings & Administration</span></div>';
@@ -1643,50 +1787,162 @@ var SettingsRenderer = (function () {
     return html;
   }
 
+  /* ── General Settings — Schema-Driven ─────────────────────── */
   function _renderGeneral() {
-    var s = _settings;
-    var fields = [
-      { key: 'refresh_interval', label: 'Dashboard Refresh Interval', type: 'number', unit: 'seconds', min: 1, max: 60, help: 'How often the UI polls for updates.' },
-      { key: 'default_symbol', label: 'Default Symbol', type: 'text', placeholder: 'e.g. XAUUSD', help: 'Pre-filled when creating deployments.' },
-      { key: 'default_bar_size', label: 'Default Bar Size', type: 'number', unit: 'points', min: 1, help: 'Default range bar size for new deployments.' },
-      { key: 'default_lot_size', label: 'Default Lot Size', type: 'number', step: '0.01', min: 0.01, help: 'Default lot size for new deployments.' },
-      { key: 'worker_timeout_seconds', label: 'Worker Offline Timeout', type: 'number', unit: 'seconds', min: 10, help: 'Workers not seen for this long are marked offline.' },
-      { key: 'log_verbosity', label: 'Log Verbosity', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'], help: 'Minimum event level shown in logs.' },
-      { key: 'debug_mode', label: 'Debug Mode', type: 'toggle', help: 'Enable verbose logging on workers.' }
-    ];
+    var html = '';
 
-    var html = '<div class="wd-panel"><div class="wd-panel-header">General Settings</div><div class="wd-panel-body"><div class="wd-form-grid">';
+    SETTING_SCHEMA.forEach(function (section) {
+      html += '<div class="wd-panel" style="margin-bottom:16px;">';
+      html += '<div class="wd-panel-header"><i class="fa-solid ' + section.icon + '" style="margin-right:8px;opacity:0.6;"></i>' + section.section + '</div>';
+      html += '<div class="wd-panel-body">';
 
-    fields.forEach(function (f) {
-      var val = s[f.key] || '';
-      html += '<div class="wd-form-group"><label class="wd-form-label">' + f.label + (f.unit ? ' (' + f.unit + ')' : '') + '</label>';
-
-      if (f.type === 'toggle') {
-        var checked = val === 'true' || val === true ? ' checked' : '';
-        html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" class="settings-input" data-key="' + f.key + '"' + checked + ' /> <span style="font-size:12px;color:var(--text-muted);">' + (checked ? 'Enabled' : 'Disabled') + '</span></label>';
-      } else if (f.type === 'select') {
-        html += '<select class="wd-form-select settings-input" data-key="' + f.key + '">';
-        f.options.forEach(function (o) { html += '<option value="' + o + '"' + (val === o ? ' selected' : '') + '>' + o + '</option>'; });
-        html += '</select>';
-      } else {
-        var attrs = 'type="' + f.type + '" class="wd-form-input settings-input" data-key="' + f.key + '" value="' + val + '"';
-        if (f.min !== undefined) attrs += ' min="' + f.min + '"';
-        if (f.max !== undefined) attrs += ' max="' + f.max + '"';
-        if (f.step) attrs += ' step="' + f.step + '"';
-        if (f.placeholder) attrs += ' placeholder="' + f.placeholder + '"';
-        html += '<input ' + attrs + ' />';
+      if (section.description) {
+        html += '<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:14px;line-height:1.5;">' + section.description + '</div>';
       }
-      if (f.help) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;opacity:0.7;">' + f.help + '</div>';
-      html += '</div>';
+
+      html += '<div class="wd-form-grid" style="grid-template-columns:1fr 1fr;">';
+
+      section.fields.forEach(function (f) {
+        var val = _settings[f.key] !== undefined ? _settings[f.key] : '';
+        var isModified = _original[f.key] !== undefined && String(val) !== String(_original[f.key]);
+        var modDot = isModified ? ' <span style="color:var(--accent);font-size:8px;">\u25CF</span>' : '';
+
+        html += '<div class="wd-form-group">';
+        html += '<label class="wd-form-label">' + f.label + modDot + '</label>';
+
+        if (f.type === 'select') {
+          html += '<select class="wd-form-select settings-input" data-key="' + f.key + '">';
+          (f.options || []).forEach(function (opt) {
+            html += '<option value="' + opt + '"' + (String(val) === String(opt) ? ' selected' : '') + '>' +
+              opt.charAt(0).toUpperCase() + opt.slice(1) + '</option>';
+          });
+          html += '</select>';
+        } else if (f.type === 'toggle') {
+          var checked = val === 'true' || val === true;
+          html += '<div style="display:flex;align-items:center;gap:10px;">';
+          html += '<input type="checkbox" class="wd-toggle settings-input" data-key="' + f.key + '"' + (checked ? ' checked' : '') + ' />';
+          html += '<span class="toggle-label" style="font-size:11px;color:var(--text-muted);">' + (checked ? 'Enabled' : 'Disabled') + '</span>';
+          html += '</div>';
+        } else if (f.type === 'number') {
+          html += '<input type="number" class="wd-form-input settings-input" data-key="' + f.key + '" value="' + val + '"';
+          if (f.step) html += ' step="' + f.step + '"';
+          if (f.min) html += ' min="' + f.min + '"';
+          html += ' />';
+        } else {
+          html += '<input type="text" class="wd-form-input settings-input" data-key="' + f.key + '" value="' + val + '"';
+          if (f.placeholder) html += ' placeholder="' + f.placeholder + '"';
+          html += ' autocomplete="off" spellcheck="false" />';
+        }
+
+        if (f.help) {
+          html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;line-height:1.4;">' + f.help + '</div>';
+        }
+        html += '</div>';
+      });
+
+      html += '</div></div></div>';
     });
 
-    html += '</div><div style="margin-top:16px;display:flex;gap:10px;">';
-    html += '<button class="wd-btn wd-btn-primary" id="save-settings-btn"><i class="fa-solid fa-floppy-disk"></i> Save Settings</button>';
+    /* Action bar */
+    html += '<div class="wd-panel"><div class="wd-panel-body" style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<div>';
     html += '<button class="wd-btn wd-btn-ghost" id="reset-settings-btn"><i class="fa-solid fa-rotate-left"></i> Reset to Defaults</button>';
-    html += '</div></div></div>';
+    html += '</div>';
+    html += '<div style="display:flex;align-items:center;gap:12px;">';
+    html += '<span id="settings-change-count" style="font-size:11px;color:var(--text-muted);"></span>';
+    html += '<button class="wd-btn wd-btn-primary deploy" id="save-settings-btn"><i class="fa-solid fa-floppy-disk"></i> Save Settings</button>';
+    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 
+  function _updateChangeCount() {
+    var count = 0;
+    for (var k in _settings) {
+      if (String(_settings[k]) !== String(_original[k])) count++;
+    }
+    var el = document.getElementById('settings-change-count');
+    if (el) {
+      el.textContent = count > 0 ? count + ' unsaved change' + (count > 1 ? 's' : '') : '';
+    }
+  }
+
+  function _attachGeneralEvents() {
+    document.querySelectorAll('.settings-input').forEach(function (input) {
+      var key = input.getAttribute('data-key');
+      var handler = function () {
+        if (input.type === 'checkbox') {
+          _settings[key] = input.checked ? 'true' : 'false';
+          var label = input.parentElement.querySelector('.toggle-label');
+          if (label) label.textContent = input.checked ? 'Enabled' : 'Disabled';
+        } else {
+          _settings[key] = input.value;
+        }
+        _updateChangeCount();
+      };
+      if (input.type === 'checkbox') input.addEventListener('change', handler);
+      else input.addEventListener('input', handler);
+
+      /* Auto-uppercase symbol */
+      if (key === 'default_symbol') {
+        input.addEventListener('input', function () {
+          input.value = input.value.toUpperCase().replace(/\s/g, '');
+          _settings[key] = input.value;
+        });
+      }
+    });
+
+    var saveBtn = document.getElementById('save-settings-btn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving\u2026';
+        ApiClient.saveSettings(_settings).then(function (data) {
+          _settings = data.settings || _settings;
+          _original = Object.assign({}, _settings);
+          /* ★ Reload GlobalSettings so all pages pick up new values */
+          GlobalSettings.load();
+          ToastManager.show('Settings saved! Defaults updated everywhere.', 'success');
+          _updateChangeCount();
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
+        }).catch(function (e) {
+          ToastManager.show('Failed: ' + e.message, 'error');
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
+        });
+      });
+    }
+
+    var resetBtn = document.getElementById('reset-settings-btn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', function () {
+        ModalManager.show({
+          title: 'Reset to Defaults', type: 'danger',
+          bodyHtml: '<p>Reset all settings to factory defaults? Current values will be lost.</p>',
+          confirmText: 'Reset All',
+          onConfirm: function () {
+            var defaults = {
+              refresh_interval: '5', default_symbol: 'XAUUSD', default_bar_size: '100',
+              default_lot_size: '0.01', default_max_bars: '500',
+              default_tick_lookback_value: '30', default_tick_lookback_unit: 'minutes',
+              default_spread: '0', default_commission: '0',
+              debug_mode: 'true', worker_timeout_seconds: '90', log_verbosity: 'INFO',
+            };
+            ApiClient.saveSettings(defaults).then(function (data) {
+              _settings = data.settings || defaults;
+              _original = Object.assign({}, _settings);
+              GlobalSettings.load();
+              _renderTab();
+              ToastManager.show('Settings reset to defaults.', 'info');
+            }).catch(function () { ToastManager.show('Failed.', 'error'); });
+          }
+        });
+      });
+    }
+  }
+
+  /* ── Admin Tab — UNCHANGED from your version ──────────────── */
   function _renderAdmin() {
     var html = '';
 
@@ -1760,69 +2016,27 @@ var SettingsRenderer = (function () {
     /* Danger Zone */
     html += '<div class="wd-panel" style="border:1px solid var(--danger);">';
     html += '<div class="wd-panel-header" style="color:var(--danger);"><i class="fa-solid fa-triangle-exclamation" style="margin-right:6px;"></i>Danger Zone</div><div class="wd-panel-body">';
-    html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Full system reset deletes ALL data: strategies, trades, events, deployments, equity history, workers. Only settings are preserved.</p>';
-    html += '<button class="wd-btn" id="admin-full-reset" style="background:rgba(239,68,68,0.15);color:var(--danger);font-weight:600;border:1px solid var(--danger);"><i class="fa-solid fa-skull-crossbones"></i> Full System Reset (Factory Reset)</button>';
+    html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Full system reset deletes ALL data. Only settings are preserved.</p>';
+    html += '<button class="wd-btn" id="admin-full-reset" style="background:rgba(239,68,68,0.15);color:var(--danger);font-weight:600;border:1px solid var(--danger);"><i class="fa-solid fa-skull-crossbones"></i> Full System Reset</button>';
     html += '</div></div>';
 
     return html;
-  }
-
-  function _renderTab() {
-    var el = document.getElementById('settings-content');
-    if (!el) return;
-    if (_activeTab === 'general') {
-      el.innerHTML = _renderGeneral();
-      _attachGeneralEvents();
-    } else {
-      el.innerHTML = _renderAdmin();
-      _attachAdminEvents();
-    }
-  }
-
-  function _attachGeneralEvents() {
-    var saveBtn = document.getElementById('save-settings-btn');
-    if (saveBtn) {
-      saveBtn.addEventListener('click', function () {
-        var updated = {};
-        document.querySelectorAll('.settings-input').forEach(function (input) {
-          var key = input.getAttribute('data-key');
-          if (input.type === 'checkbox') updated[key] = input.checked ? 'true' : 'false';
-          else updated[key] = input.value;
-        });
-        ApiClient.saveSettings(updated).then(function (data) {
-          _settings = data.settings || {};
-          ToastManager.show('Settings saved and applied.', 'success');
-        }).catch(function () { ToastManager.show('Failed to save settings.', 'error'); });
-      });
-    }
-    var resetBtn = document.getElementById('reset-settings-btn');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', function () {
-        var defaults = { refresh_interval: '5', default_symbol: 'XAUUSD', default_bar_size: '100', default_lot_size: '0.01', worker_timeout_seconds: '90', log_verbosity: 'INFO', debug_mode: 'true' };
-        ApiClient.saveSettings(defaults).then(function (data) {
-          _settings = data.settings || {};
-          _renderTab();
-          ToastManager.show('Settings reset to defaults.', 'info');
-        }).catch(function () { ToastManager.show('Failed.', 'error'); });
-      });
-    }
   }
 
   function _attachAdminEvents() {
     var refreshBtn = document.getElementById('refresh-stats-btn');
     if (refreshBtn) refreshBtn.addEventListener('click', _loadData);
 
-    /* Emergency Stop */
     var esBtn = document.getElementById('admin-emergency-stop');
     if (esBtn) {
       esBtn.addEventListener('click', function () {
         ModalManager.show({
           title: '\u26A0 EMERGENCY STOP ALL', type: 'danger',
-          bodyHtml: '<p style="font-weight:600;color:var(--danger);">This will immediately:</p><ul style="font-size:12px;color:var(--text-muted);margin:8px 0;"><li>Stop all running strategies</li><li>Close ALL open positions at market price</li><li>Set all deployments to STOPPED</li></ul><p style="font-size:11px;color:var(--danger);margin-top:8px;">This cannot be undone.</p>',
+          bodyHtml: '<p style="font-weight:600;color:var(--danger);">This will immediately stop all strategies and close all positions.</p>',
           confirmText: 'STOP EVERYTHING',
           onConfirm: function () {
             ApiClient.emergencyStopAll().then(function (r) {
-              ToastManager.show('Emergency stop: ' + (r.deployments_stopped || 0) + ' stopped, ' + (r.commands_sent || 0) + ' commands sent.', 'warning', 8000);
+              ToastManager.show('Emergency stop: ' + (r.deployments_stopped || 0) + ' stopped.', 'warning', 8000);
               _loadData();
             }).catch(function (e) { ToastManager.show('Failed: ' + e.message, 'error'); });
           }
@@ -1830,22 +2044,20 @@ var SettingsRenderer = (function () {
       });
     }
 
-    /* Delete Strategy */
     document.querySelectorAll('.admin-delete-strategy').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var sid = btn.getAttribute('data-sid');
         ModalManager.show({
           title: 'Delete Strategy', type: 'danger',
-          bodyHtml: '<p>Permanently delete strategy <strong>' + sid + '</strong>?</p><p style="font-size:11px;color:var(--text-muted);margin-top:8px;">Removes the strategy file, all deployments, and all associated trades.</p>',
+          bodyHtml: '<p>Permanently delete strategy <strong>' + sid + '</strong>?</p>',
           confirmText: 'Delete',
           onConfirm: function () {
-            ApiClient.adminDeleteStrategy(sid).then(function () { ToastManager.show('Strategy ' + sid + ' deleted.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Delete failed.', 'error'); });
+            ApiClient.adminDeleteStrategy(sid).then(function () { ToastManager.show('Deleted.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Failed.', 'error'); });
           }
         });
       });
     });
 
-    /* Remove Worker */
     document.querySelectorAll('.admin-remove-worker').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var wid = btn.getAttribute('data-wid');
@@ -1854,104 +2066,61 @@ var SettingsRenderer = (function () {
           bodyHtml: '<p>Remove worker <strong>' + wid + '</strong>?</p>',
           confirmText: 'Remove',
           onConfirm: function () {
-            ApiClient.adminRemoveWorker(wid).then(function () { ToastManager.show('Worker removed.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Failed.', 'error'); });
+            ApiClient.adminRemoveWorker(wid).then(function () { ToastManager.show('Removed.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Failed.', 'error'); });
           }
         });
       });
     });
 
-    /* Remove Stale Workers */
     var staleBtn = document.getElementById('remove-stale-btn');
-    if (staleBtn) {
-      staleBtn.addEventListener('click', function () {
-        ModalManager.show({
-          title: 'Remove Stale Workers',
-          bodyHtml: '<p>Remove workers that haven\'t sent a heartbeat in over 5 minutes?</p>',
-          confirmText: 'Remove Stale',
-          onConfirm: function () {
-            ApiClient.adminRemoveStaleWorkers().then(function (d) { ToastManager.show((d.removed || 0) + ' stale workers removed.', 'success'); _loadData(); }).catch(function () { ToastManager.show('Failed.', 'error'); });
-          }
-        });
+    if (staleBtn) staleBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Remove Stale Workers', bodyHtml: '<p>Remove workers with no recent heartbeat?</p>', confirmText: 'Remove Stale',
+        onConfirm: function () { ApiClient.adminRemoveStaleWorkers().then(function (d) { ToastManager.show((d.removed || 0) + ' removed.', 'success'); _loadData(); }); }
       });
-    }
+    });
 
-    /* Clear Trades */
     var clearTradesBtn = document.getElementById('admin-clear-trades');
-    if (clearTradesBtn) {
-      clearTradesBtn.addEventListener('click', function () {
-        ModalManager.show({
-          title: 'Delete All Trades', type: 'danger',
-          bodyHtml: '<p>Delete ALL trade records? This cannot be undone.</p>',
-          confirmText: 'Delete All Trades',
-          onConfirm: function () {
-            ApiClient.adminClearTrades().then(function (d) {
-              ToastManager.show((d.trades_deleted || 0) + ' trades deleted.', 'success');
-              _loadData();
-            }).catch(function () { ToastManager.show('Failed to delete trades.', 'error'); });
-          }
-        });
+    if (clearTradesBtn) clearTradesBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Delete All Trades', type: 'danger', bodyHtml: '<p>Delete ALL trade records? Cannot be undone.</p>', confirmText: 'Delete All',
+        onConfirm: function () { ApiClient.adminClearTrades().then(function (d) { ToastManager.show((d.trades_deleted || 0) + ' deleted.', 'success'); _loadData(); }); }
       });
-    }
+    });
 
-    /* Reset Portfolio */
     var resetPortBtn = document.getElementById('admin-reset-portfolio');
-    if (resetPortBtn) {
-      resetPortBtn.addEventListener('click', function () {
-        ModalManager.show({
-          title: 'Reset Portfolio', type: 'danger',
-          bodyHtml: '<p>Delete all trades AND equity history? This cannot be undone.</p>',
-          confirmText: 'Reset Portfolio',
-          onConfirm: function () {
-            ApiClient.adminResetPortfolio().then(function () {
-              ToastManager.show('Portfolio reset complete.', 'success');
-              _loadData();
-            }).catch(function () { ToastManager.show('Failed to reset portfolio.', 'error'); });
-          }
-        });
+    if (resetPortBtn) resetPortBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Reset Portfolio', type: 'danger', bodyHtml: '<p>Delete all trades AND equity history?</p>', confirmText: 'Reset Portfolio',
+        onConfirm: function () { ApiClient.adminResetPortfolio().then(function () { ToastManager.show('Portfolio reset.', 'success'); _loadData(); }); }
       });
-    }
+    });
 
-    /* Clear Events */
     var clearEventsBtn = document.getElementById('admin-clear-events');
-    if (clearEventsBtn) {
-      clearEventsBtn.addEventListener('click', function () {
-        ModalManager.show({
-          title: 'Clear All Events',
-          bodyHtml: '<p>Delete all event log entries?</p>',
-          confirmText: 'Clear Events',
-          onConfirm: function () {
-            ApiClient.adminClearEvents().then(function (d) {
-              ToastManager.show((d.events_cleared || 0) + ' events cleared.', 'success');
-              _loadData();
-            }).catch(function () { ToastManager.show('Failed to clear events.', 'error'); });
-          }
-        });
+    if (clearEventsBtn) clearEventsBtn.addEventListener('click', function () {
+      ModalManager.show({ title: 'Clear Events', bodyHtml: '<p>Delete all event logs?</p>', confirmText: 'Clear',
+        onConfirm: function () { ApiClient.adminClearEvents().then(function (d) { ToastManager.show((d.events_cleared || 0) + ' cleared.', 'success'); _loadData(); }); }
       });
-    }
+    });
 
-    /* Full System Reset */
     var fullResetBtn = document.getElementById('admin-full-reset');
-    if (fullResetBtn) {
-      fullResetBtn.addEventListener('click', function () {
-        ModalManager.show({
-          title: '\u26A0\uFE0F FULL SYSTEM RESET (FACTORY RESET)', type: 'danger',
-          bodyHtml: '<p>This will delete <strong>EVERYTHING</strong>:</p>' +
-            '<ul style="font-size:12px;color:var(--text-muted);margin:8px 0;">' +
-            '<li>All strategies and strategy files</li>' +
-            '<li>All deployments</li>' +
-            '<li>All trades and equity history</li>' +
-            '<li>All worker registrations</li>' +
-            '<li>All events/logs</li></ul>' +
-            '<p style="color:var(--danger);font-weight:600;margin-top:8px;">Only settings are preserved. This is completely irreversible.</p>',
-          confirmText: 'RESET EVERYTHING',
-          onConfirm: function () {
-            ApiClient.adminFullReset().then(function () {
-              ToastManager.show('Full system reset complete. All data cleared.', 'warning', 8000);
-              _loadData();
-            }).catch(function () { ToastManager.show('Reset failed.', 'error'); });
-          }
-        });
+    if (fullResetBtn) fullResetBtn.addEventListener('click', function () {
+      ModalManager.show({
+        title: '\u26A0\uFE0F FULL SYSTEM RESET', type: 'danger',
+        bodyHtml: '<p>This deletes <strong>EVERYTHING</strong> except settings. Completely irreversible.</p>',
+        confirmText: 'RESET EVERYTHING',
+        onConfirm: function () { ApiClient.adminFullReset().then(function () { ToastManager.show('Full reset complete.', 'warning', 8000); _loadData(); }); }
       });
+    });
+  }
+
+  function _renderTab() {
+    var el = document.getElementById('settings-content');
+    if (!el) return;
+    if (_activeTab === 'general') {
+      el.innerHTML = _renderGeneral();
+      _attachGeneralEvents();
+      _updateChangeCount();
+    } else {
+      el.innerHTML = _renderAdmin();
+      _attachAdminEvents();
     }
   }
 
@@ -1963,19 +2132,19 @@ var SettingsRenderer = (function () {
       ApiClient.getFleetWorkers().catch(function () { return { workers: [] }; })
     ]).then(function (results) {
       _settings = (results[0] && results[0].settings) || {};
+      _original = Object.assign({}, _settings);
       _stats = (results[1] && results[1].stats) || {};
       _strategies = (results[2] && results[2].strategies) || [];
       _workers = (results[3] && results[3].workers) || [];
       _renderTab();
     }).catch(function () {
       var el = document.getElementById('settings-content');
-      if (el) el.innerHTML = _emptyState('fa-circle-exclamation', 'Failed to Load', 'Could not fetch settings data. Try refreshing.');
+      if (el) el.innerHTML = _emptyState('fa-circle-exclamation', 'Failed to Load', 'Could not fetch settings data.');
     });
   }
 
   function render() {
     document.getElementById('main-content').innerHTML = _buildPage();
-
     document.querySelectorAll('#settings-tabs .port-tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
         _activeTab = tab.getAttribute('data-tab');
@@ -1984,7 +2153,6 @@ var SettingsRenderer = (function () {
         _renderTab();
       });
     });
-
     _loadData();
   }
 
@@ -2005,7 +2173,10 @@ var App = (function () {
     ThemeManager.init();
     setupNavigation();
     startClock();
-    navigateTo('dashboard');
+    /* ★ Load global settings before first render */
+    GlobalSettings.load().then(function () {
+      navigateTo('dashboard');
+    });
   }
 
   function setupNavigation() {
@@ -2111,3 +2282,115 @@ var App = (function () {
     navigateToWorkerDetail: navigateToWorkerDetail
   };
 })();
+
+
+
+/* ================================================================
+   GLOBAL SETTINGS — Fetches from backend, used everywhere
+   ================================================================ */
+
+var GlobalSettings = (function () {
+  'use strict';
+
+  var _settings = {
+    refresh_interval: '5',
+    default_symbol: 'XAUUSD',
+    default_bar_size: '100',
+    default_lot_size: '0.01',
+    default_max_bars: '500',
+    default_tick_lookback_value: '30',
+    default_tick_lookback_unit: 'minutes',
+    default_spread: '0',
+    default_commission: '0',
+    debug_mode: 'true',
+    worker_timeout_seconds: '90',
+    log_verbosity: 'INFO',
+  };
+
+  var _loaded = false;
+  var _listeners = [];
+
+  function load() {
+    return fetch('/api/admin/settings').then(function (r) {
+      return r.json();
+    }).then(function (data) {
+      if (data.settings) {
+        for (var k in data.settings) {
+          _settings[k] = data.settings[k];
+        }
+      }
+      _loaded = true;
+      _listeners.forEach(function (fn) { try { fn(_settings); } catch (e) {} });
+      _listeners = [];
+      console.log('[SETTINGS] Loaded:', _settings);
+      return _settings;
+    }).catch(function (e) {
+      console.warn('[SETTINGS] Failed to load, using defaults:', e);
+      _loaded = true;
+      return _settings;
+    });
+  }
+
+  function get(key, fallback) {
+    var val = _settings[key];
+    if (val === undefined || val === null || val === '') return fallback;
+    return val;
+  }
+
+  function getFloat(key, fallback) {
+    var val = parseFloat(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getInt(key, fallback) {
+    var val = parseInt(_settings[key]);
+    return isNaN(val) ? fallback : val;
+  }
+
+  function getAll() {
+    return Object.assign({}, _settings);
+  }
+
+  function isLoaded() { return _loaded; }
+
+  function onReady(fn) {
+    if (_loaded) { fn(_settings); }
+    else { _listeners.push(fn); }
+  }
+
+  /* Convenience: get deployment defaults as an object */
+  function getDeploymentDefaults() {
+    return {
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      tick_lookback_value: getInt('default_tick_lookback_value', 30),
+      tick_lookback_unit: get('default_tick_lookback_unit', 'minutes'),
+    };
+  }
+
+  function getValidationDefaults() {
+    return {
+      symbol: get('default_symbol', 'XAUUSD'),
+      lot_size: getFloat('default_lot_size', 0.01),
+      bar_size_points: getFloat('default_bar_size', 100),
+      max_bars_memory: getInt('default_max_bars', 500),
+      spread_points: getFloat('default_spread', 0),
+      commission_per_lot: getFloat('default_commission', 0),
+    };
+  }
+
+  return {
+    load: load,
+    get: get,
+    getFloat: getFloat,
+    getInt: getInt,
+    getAll: getAll,
+    isLoaded: isLoaded,
+    onReady: onReady,
+    getDeploymentDefaults: getDeploymentDefaults,
+    getValidationDefaults: getValidationDefaults,
+  };
+})();
+

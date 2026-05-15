@@ -96,6 +96,10 @@ var ValidationRenderer = (function () {
     var curYear = now.getFullYear();
     var curMonth = now.getMonth();
 
+    /* ★ Pull defaults from GlobalSettings */
+    var vd = GlobalSettings.getValidationDefaults();
+    var dd = GlobalSettings.getDeploymentDefaults();
+
     var html = '<div class="wd-form-grid" style="grid-template-columns:1fr 1fr 1fr;">';
 
     /* Strategy */
@@ -107,9 +111,9 @@ var ValidationRenderer = (function () {
     });
     html += '</select></div>';
 
-    /* Symbol */
+    /* Symbol — from settings */
     html += '<div class="wd-form-group"><label class="wd-form-label">Symbol</label>';
-    html += '<input type="text" class="wd-form-input" id="val-symbol" value="XAUUSD" placeholder="e.g. XAUUSD" autocomplete="off" spellcheck="false" /></div>';
+    html += '<input type="text" class="wd-form-input" id="val-symbol" value="' + vd.symbol + '" placeholder="e.g. XAUUSD" autocomplete="off" spellcheck="false" /></div>';
 
     /* Worker VM */
     html += '<div class="wd-form-group"><label class="wd-form-label">Worker VM</label>';
@@ -139,25 +143,25 @@ var ValidationRenderer = (function () {
     }
     html += '</select></div>';
 
-    /* Lot Size */
+    /* Lot Size — from settings */
     html += '<div class="wd-form-group"><label class="wd-form-label">Lot Size</label>';
-    html += '<input type="number" class="wd-form-input" id="val-lot" value="0.01" step="0.01" min="0.01" /></div>';
+    html += '<input type="number" class="wd-form-input" id="val-lot" value="' + vd.lot_size + '" step="0.01" min="0.01" /></div>';
 
-    /* Bar Size Points */
+    /* Bar Size Points — from settings */
     html += '<div class="wd-form-group"><label class="wd-form-label">Bar Size Points</label>';
-    html += '<input type="number" class="wd-form-input" id="val-barsize" value="100" step="1" min="1" /></div>';
+    html += '<input type="number" class="wd-form-input" id="val-barsize" value="' + vd.bar_size_points + '" step="1" min="1" /></div>';
 
-    /* Max Bars */
+    /* Max Bars — from settings */
     html += '<div class="wd-form-group"><label class="wd-form-label">Max Bars Memory</label>';
-    html += '<input type="number" class="wd-form-input" id="val-maxbars" value="500" step="10" min="10" /></div>';
+    html += '<input type="number" class="wd-form-input" id="val-maxbars" value="' + vd.max_bars_memory + '" step="10" min="10" /></div>';
 
-    /* Spread */
+    /* Spread — from settings */
     html += '<div class="wd-form-group"><label class="wd-form-label">Spread (points)</label>';
-    html += '<input type="number" class="wd-form-input" id="val-spread" value="0" step="0.1" min="0" /></div>';
+    html += '<input type="number" class="wd-form-input" id="val-spread" value="' + vd.spread_points + '" step="0.1" min="0" /></div>';
 
-    /* Commission */
+    /* Commission — from settings */
     html += '<div class="wd-form-group"><label class="wd-form-label">Commission / Lot</label>';
-    html += '<input type="number" class="wd-form-input" id="val-comm" value="0" step="0.01" min="0" /></div>';
+    html += '<input type="number" class="wd-form-input" id="val-comm" value="' + vd.commission_per_lot + '" step="0.01" min="0" /></div>';
 
     html += '</div>';
 
@@ -176,7 +180,6 @@ var ValidationRenderer = (function () {
       symInput.value = symInput.value.toUpperCase().replace(/\s/g, '');
     });
 
-    /* Strategy change → load parameters */
     document.getElementById('val-strategy').addEventListener('change', _onStrategyChange);
   }
 

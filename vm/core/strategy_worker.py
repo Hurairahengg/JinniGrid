@@ -1712,6 +1712,12 @@ class StrategyRunner:
             return
 
         action = validate_signal(raw_signal, self._bar_index)
+        # ★ FIX: Preserve strategy's extra fields (sl, tp, tp_mode, tp_r, etc.)
+        # validate_signal() only keeps known keys — merge originals back
+        if raw_signal and isinstance(raw_signal, dict):
+            for k, v in raw_signal.items():
+                if k not in action:
+                    action[k] = v
         sig = action.get("signal")
 
         # STEP 5: Handle CLOSE
@@ -1752,6 +1758,11 @@ class StrategyRunner:
                 try:
                     raw2 = self._strategy.on_bar(self._ctx)
                     action2 = validate_signal(raw2, self._bar_index)
+                    # ★ FIX: Preserve strategy's extra fields for flip signal
+                    if raw2 and isinstance(raw2, dict):
+                        for k, v in raw2.items():
+                            if k not in action2:
+                                action2[k] = v
                     sig2 = action2.get("signal")
                     if sig2 in (SIGNAL_BUY, SIGNAL_SELL):
                         print(f"[RUNNER] Post-CLOSE re-call: {sig2} → "
